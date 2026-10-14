@@ -28,6 +28,9 @@
         <!-- 编译基线（AI-RULES：JDK 17，不许擅自变更） -->
         <java.version>17</java.version>
         <maven.compiler.release>17</maven.compiler.release>
+        <!-- 保留方法参数名（Spring MVC 的 @RequestParam/@PathVariable 无显式名时依赖它，
+             spring-boot-starter-parent 默认开启，自定义父 POM 需显式配置） -->
+        <maven.compiler.parameters>true</maven.compiler.parameters>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
         <!-- 框架版本（与 02 文档 8.1 一致） -->
