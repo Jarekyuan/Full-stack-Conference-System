@@ -1,6 +1,7 @@
 package com.smt.meeting.mapper;
 
 import com.smt.meeting.entity.MeetingRoom;
+import com.smt.meeting.vo.RoomVO;
 import org.apache.ibatis.annotations.Param;
 
 import java.util.List;
@@ -15,4 +16,12 @@ public interface MeetingRoomMapper {
 
     /** 按主键查询 */
     MeetingRoom selectById(@Param("id") Long id);
+
+    /** 列表联查（含分组名与策略；动态筛选：groupId 精确 / capacity 下限 / status 精确） */
+    List<RoomVO> selectList(@Param("groupId") Long groupId,
+                            @Param("capacity") Integer capacity,
+                            @Param("status") Integer status);
+
+    /** 详情联查（含分组名与策略） */
+    RoomVO selectDetailById(@Param("id") Long id);
 }

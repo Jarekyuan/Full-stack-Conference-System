@@ -34,4 +34,55 @@
         WHERE id = #{id}
     </select>
 
+    <!-- 联查 VO（列表/详情共用）：会议室 + 分组名 + 策略，一次查询避免 N+1 -->
+    <resultMap id="RoomVOMap" type="com.smt.meeting.vo.RoomVO">
+        <id column="id" property="id"/>
+        <result column="name" property="name"/>
+        <result column="group_id" property="groupId"/>
+        <result column="group_name" property="groupName"/>
+        <result column="capacity" property="capacity"/>
+        <result column="location" property="location"/>
+        <result column="images" property="images"
+                typeHandler="com.smt.meeting.handler.JsonTypeHandler"/>
+        <result column="device_tags" property="deviceTags"
+                typeHandler="com.smt.meeting.handler.JsonTypeHandler"/>
+        <result column="status" property="status"/>
+        <result column="need_approval" property="needApproval"/>
+        <result column="advance_days" property="advanceDays"/>
+        <result column="max_duration_minutes" property="maxDurationMinutes"/>
+        <result column="cancel_deadline_minutes" property="cancelDeadlineMinutes"/>
+        <result column="buffer_minutes" property="bufferMinutes"/>
+        <result column="allow_recurring" property="allowRecurring"/>
+    </resultMap>
+
+    <sql id="RoomVOColumns">
+        r.id, r.name, r.group_id, g.name AS group_name, r.capacity, r.location,
+        r.images, r.device_tags, r.status,
+        s.need_approval, s.advance_days, s.max_duration_minutes,
+        s.cancel_deadline_minutes, s.buffer_minutes, s.allow_recurring
+    </sql>
+
+    <!-- 列表：动态筛选（capacity 为下限语义，走 idx 全表小数据直接排序） -->
+    <select id="selectList" resultMap="RoomVOMap">
+        SELECT <include refid="RoomVOColumns"/>
+        FROM meeting_room r
+        LEFT JOIN room_group g ON g.id = r.group_id
+        LEFT JOIN room_strategy s ON s.room_id = r.id
+        <where>
+            <if test="groupId != null">AND r.group_id = #{groupId}</if>
+            <if test="capacity != null">AND r.capacity &gt;= #{capacity}</if>
+            <if test="status != null">AND r.status = #{status}</if>
+        </where>
+        ORDER BY r.group_id, r.id
+    </select>
+
+    <!-- 详情：同联查，命中主键 -->
+    <select id="selectDetailById" resultMap="RoomVOMap">
+        SELECT <include refid="RoomVOColumns"/>
+        FROM meeting_room r
+        LEFT JOIN room_group g ON g.id = r.group_id
+        LEFT JOIN room_strategy s ON s.room_id = r.id
+        WHERE r.id = #{id}
+    </select>
+
 </mapper>
