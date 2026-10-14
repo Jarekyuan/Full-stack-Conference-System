@@ -34,4 +34,39 @@
         WHERE id = #{id}
     </select>
 
+    <!-- 用户名/姓名模糊搜索（选参会人场景，最多 20 条；左模糊无法走索引，用户量小可接受） -->
+    <select id="searchByKeyword" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM sys_user
+        WHERE username LIKE CONCAT('%', #{keyword}, '%')
+           OR real_name LIKE CONCAT('%', #{keyword}, '%')
+        ORDER BY id
+        LIMIT 20
+    </select>
+
+    <select id="countAll" resultType="long">
+        SELECT COUNT(*) FROM sys_user
+    </select>
+
+    <!-- 分页（手写 LIMIT；offset/size 由 Service 层规范化） -->
+    <select id="selectPage" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM sys_user
+        ORDER BY id
+        LIMIT #{offset}, #{size}
+    </select>
+
+    <!-- 创建用户：自增主键回填 id（created_at/updated_at 走数据库默认值） -->
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO sys_user (username, password, real_name, email, avatar, role, status)
+        VALUES (#{username}, #{password}, #{realName}, #{email}, #{avatar}, #{role}, #{status})
+    </insert>
+
+    <!-- 更新状态（updated_at 走 ON UPDATE CURRENT_TIMESTAMP） -->
+    <update id="updateStatus">
+        UPDATE sys_user
+        SET status = #{status}
+        WHERE id = #{id}
+    </update>
+
 </mapper>
