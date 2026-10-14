@@ -8,6 +8,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.stream.Collectors;
 
@@ -32,6 +33,14 @@ public class GlobalExceptionHandler {
                 .collect(Collectors.joining("; "));
         log.warn("参数校验失败: {}", detail);
         return Result.error(ErrorCode.PARAM_ERROR.getCode(), detail.isEmpty() ? ErrorCode.PARAM_ERROR.getMsg() : detail);
+    }
+
+    /** 路径/静态资源不存在：框架级 404 语义，不能被下方兜底误伤成 500 */
+    @ExceptionHandler(NoResourceFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public Result<Void> handleNoResourceFound(NoResourceFoundException e) {
+        log.warn("路径不存在: {}", e.getResourcePath());
+        return Result.error(ErrorCode.NOT_FOUND);
     }
 
     @ExceptionHandler(Exception.class)

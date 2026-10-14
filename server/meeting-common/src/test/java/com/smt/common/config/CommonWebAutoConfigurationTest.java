@@ -6,7 +6,9 @@ import com.smt.common.exception.GlobalExceptionHandler;
 import com.smt.common.result.ErrorCode;
 import com.smt.common.result.Result;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.time.LocalDateTime;
 
@@ -30,6 +32,14 @@ class CommonWebAutoConfigurationTest {
         Result<Void> result = handler.handleException(new RuntimeException("boom"));
         assertEquals(10000, result.getCode());
         assertEquals("系统内部错误", result.getMsg());
+    }
+
+    @Test
+    void noResourceFoundShouldMapTo404NotInternalError() {
+        NoResourceFoundException e = new NoResourceFoundException(HttpMethod.POST, "auth/login");
+        Result<Void> result = handler.handleNoResourceFound(e);
+        assertEquals(10004, result.getCode());
+        assertEquals("资源不存在", result.getMsg());
     }
 
     @Test
