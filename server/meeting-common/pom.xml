@@ -35,11 +35,10 @@
             <optional>true</optional>
         </dependency>
 
-        <!-- Spring Security 核心（用户上下文桥接 SecurityContext 用） -->
+        <!-- Spring Security 核心：UserHeaderFilter 桥接 SecurityContext + 方法级鉴权依赖 -->
         <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-core</artifactId>
-            <optional>true</optional>
         </dependency>
 
         <!-- 工具库 -->

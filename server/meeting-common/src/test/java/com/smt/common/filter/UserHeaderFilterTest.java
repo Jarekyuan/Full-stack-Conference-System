@@ -1,0 +1,63 @@
+package com.smt.common.filter;
+
+import com.smt.common.context.UserContext;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.security.core.context.SecurityContextHolder;
+
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class UserHeaderFilterTest {
+
+    private final UserHeaderFilter filter = new UserHeaderFilter();
+
+    @AfterEach
+    void cleanup() {
+        UserContext.clear();
+        SecurityContextHolder.clearContext();
+    }
+
+    @Test
+    void shouldPopulateContextWithinRequestAndClearAfter() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader(UserHeaderFilter.HEADER_USER_ID, "4");
+        request.addHeader(UserHeaderFilter.HEADER_USER_ROLE, "USER");
+        AtomicBoolean asserted = new AtomicBoolean(false);
+
+        filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> {
+            assertEquals(4L, UserContext.getUserId());
+            assertEquals("USER", UserContext.getRole());
+            var authentication = SecurityContextHolder.getContext().getAuthentication();
+            assertNotNull(authentication);
+            assertEquals("ROLE_USER", authentication.getAuthorities().iterator().next().getAuthority());
+            asserted.set(true);
+        });
+
+        assertTrue(asserted.get());
+        // 请求结束后必须清理（防线程池复用串数据）
+        assertNull(UserContext.get());
+        assertNull(SecurityContextHolder.getContext().getAuthentication());
+    }
+
+    @Test
+    void withoutHeadersContextShouldStayEmpty() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+
+        filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> assertNull(UserContext.get()));
+    }
+
+    @Test
+    void invalidUserIdHeaderShouldBeIgnored() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader(UserHeaderFilter.HEADER_USER_ID, "not-a-number");
+
+        filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> assertNull(UserContext.get()));
+    }
+}
