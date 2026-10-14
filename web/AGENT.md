@@ -50,11 +50,17 @@ web/src/
 
 ```bash
 cd web
-pnpm install          # 安装依赖（项目统一用 pnpm，不用 npm/yarn）
-pnpm dev              # 开发服务 :5173（已配置代理 /api → :8080）
-pnpm build            # 生产构建
-pnpm tsc              # 类型检查（tsc --noEmit）
+npm install           # 安装依赖（仓库规范是 pnpm，但本机 pnpm 建 node_modules 会失败，见下）
+npm run dev           # 开发服务 :5173（已配置代理 /api → :8080）
+npm run build         # 生产构建（tsc --noEmit + vite build）
+npm run tsc           # 类型检查
 ```
+
+> ⚠️ **包管理器现状（2026-10-14）**：规范仍是 pnpm、不用 npm/yarn，但本机在 WorkBuddy
+> 的文件系统代理层下，pnpm 的 `symlinkAllModules` / `importPackage` 会随机报
+> `ENOENT`/`EEXIST`（并发 symlink 与 tmp+rename 竞态），实测连续 5 次都装不完。
+> 因此本轮改用 npm 安装（依赖清单与脚本不变，仅换包管理器），现状记录在 `web/.npmrc`。
+> 如果你在自己的终端里 `pnpm install` 能成功，用 pnpm 即可——**但不要同时提交两份 lockfile**。
 
 ---
 
