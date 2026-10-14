@@ -17,9 +17,10 @@ import java.time.format.DateTimeFormatter;
 /**
  * common 模块 Web 自动配置（经 AutoConfiguration.imports 注册，各服务引入即生效）：
  * ① 全局异常处理 ② Jackson 时间格式统一 yyyy-MM-dd HH:mm:ss ③ 用户上下文过滤器
+ * 限定 SERVLET 应用：WebFlux 应用（如 gateway）不会激活 Servlet 组件
  */
 @AutoConfiguration
-@ConditionalOnWebApplication
+@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 @Import(GlobalExceptionHandler.class)
 public class CommonWebAutoConfiguration {
 

@@ -1,0 +1,46 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: gateway
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 127.0.0.1:8848
+    gateway:
+      # 路由表（对照 docs/04 接口设计 1.1）：/api 前缀统一 StripPrefix=1 剥离后转发
+      routes:
+        - id: auth-service
+          uri: lb://auth-service
+          predicates:
+            - Path=/api/auth/**,/api/users/**
+          filters:
+            - StripPrefix=1
+        - id: meeting-service
+          uri: lb://meeting-service
+          predicates:
+            - Path=/api/rooms/**,/api/room-groups/**,/api/meetings/**,/api/approvals/**,/api/files/**,/api/stats/**
+          filters:
+            - StripPrefix=1
+        - id: notification-service
+          uri: lb://notification-service
+          predicates:
+            - Path=/api/notifications/**
+          filters:
+            - StripPrefix=1
+        # WebSocket 路由（端点在 T4.6 实现）：保留 /ws 前缀原样转发
+        - id: notification-ws
+          uri: lb:ws://notification-service
+          predicates:
+            - Path=/ws/**
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    com.smt: debug

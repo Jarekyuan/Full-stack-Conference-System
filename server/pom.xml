@@ -19,7 +19,8 @@
 
     <modules>
         <module>meeting-common</module>
-        <!-- 后续追加：gateway / auth-service / meeting-service / notification-service -->
+        <module>gateway</module>
+        <!-- 后续追加：auth-service / meeting-service / notification-service -->
     </modules>
 
     <properties>
@@ -127,7 +128,9 @@
     <build>
         <pluginManagement>
             <plugins>
-                <!-- 可执行 jar 打包（各可部署服务使用） -->
+                <!-- 可执行 jar 打包（各可部署服务使用）
+                     注意：自定义父 POM（非 spring-boot-starter-parent）需显式绑定 repackage goal，
+                     否则打出的 jar 无主清单属性、不可执行 -->
                 <plugin>
                     <groupId>org.springframework.boot</groupId>
                     <artifactId>spring-boot-maven-plugin</artifactId>
@@ -140,6 +143,13 @@
                             </exclude>
                         </excludes>
                     </configuration>
+                    <executions>
+                        <execution>
+                            <goals>
+                                <goal>repackage</goal>
+                            </goals>
+                        </execution>
+                    </executions>
                 </plugin>
             </plugins>
         </pluginManagement>
