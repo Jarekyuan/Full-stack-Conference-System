@@ -33,6 +33,12 @@ management:
       exposure:
         include: health,info
 
+# 认证配置（secret 必须与 gateway 保持一致，否则签发的 token 过不了网关验签）
+security:
+  jwt:
+    secret: ${JWT_SECRET:smt-dev-secret-0123456789-abcdefghijklmnopqrstuv}
+    access-token-ttl: 30m
+
 logging:
   level:
     com.smt: debug
