@@ -85,4 +85,40 @@
         WHERE r.id = #{id}
     </select>
 
+    <!-- 新增（JSON 列经 typeHandler 写入；created_at/updated_at 走数据库默认值） -->
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO meeting_room (name, group_id, capacity, location, images, device_tags, status)
+        VALUES (#{name}, #{groupId}, #{capacity}, #{location},
+                #{images, typeHandler=com.smt.meeting.handler.JsonTypeHandler},
+                #{deviceTags, typeHandler=com.smt.meeting.handler.JsonTypeHandler},
+                #{status})
+    </insert>
+
+    <!-- 更新（动态 set：仅更新非空字段） -->
+    <update id="update">
+        UPDATE meeting_room
+        <set>
+            <if test="name != null">name = #{name},</if>
+            <if test="groupId != null">group_id = #{groupId},</if>
+            <if test="capacity != null">capacity = #{capacity},</if>
+            <if test="location != null">location = #{location},</if>
+            <if test="images != null">images = #{images, typeHandler=com.smt.meeting.handler.JsonTypeHandler},</if>
+            <if test="deviceTags != null">device_tags = #{deviceTags, typeHandler=com.smt.meeting.handler.JsonTypeHandler},</if>
+            <if test="status != null">status = #{status},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM meeting_room WHERE id = #{id}
+    </delete>
+
+    <!-- 未结束会议统计：10 待审批/20 已预约/30 进行中 均视为占用（40/50/60 为终态） -->
+    <select id="countActiveMeetingsByRoom" resultType="long">
+        SELECT COUNT(*)
+        FROM meeting
+        WHERE room_id = #{roomId}
+          AND status IN (10, 20, 30)
+    </select>
+
 </mapper>

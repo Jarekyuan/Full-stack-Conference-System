@@ -24,4 +24,29 @@
         WHERE room_id = #{roomId}
     </select>
 
+    <!-- 新增（新会议室默认策略；created_at/updated_at 走数据库默认值） -->
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO room_strategy (room_id, need_approval, advance_days, max_duration_minutes,
+                                   cancel_deadline_minutes, buffer_minutes, allow_recurring)
+        VALUES (#{roomId}, #{needApproval}, #{advanceDays}, #{maxDurationMinutes},
+                #{cancelDeadlineMinutes}, #{bufferMinutes}, #{allowRecurring})
+    </insert>
+
+    <!-- 按会议室全量更新（命中 uk_room） -->
+    <update id="updateByRoomId">
+        UPDATE room_strategy
+        SET need_approval = #{needApproval},
+            advance_days = #{advanceDays},
+            max_duration_minutes = #{maxDurationMinutes},
+            cancel_deadline_minutes = #{cancelDeadlineMinutes},
+            buffer_minutes = #{bufferMinutes},
+            allow_recurring = #{allowRecurring}
+        WHERE room_id = #{roomId}
+    </update>
+
+    <!-- 删除会议室时级联清理（无数据库外键，应用层保证） -->
+    <delete id="deleteByRoomId">
+        DELETE FROM room_strategy WHERE room_id = #{roomId}
+    </delete>
+
 </mapper>

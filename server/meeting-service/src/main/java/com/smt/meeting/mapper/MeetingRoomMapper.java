@@ -24,4 +24,16 @@ public interface MeetingRoomMapper {
 
     /** 详情联查（含分组名与策略） */
     RoomVO selectDetailById(@Param("id") Long id);
+
+    /** 新增会议室（自增回填 id） */
+    int insert(MeetingRoom room);
+
+    /** 更新（动态：仅更新非空字段；status 提供才修改） */
+    int update(MeetingRoom room);
+
+    /** 物理删除 */
+    int deleteById(@Param("id") Long id);
+
+    /** 统计该会议室未结束的会议数（10 待审批/20 已预约/30 进行中）——删除前校验 */
+    long countActiveMeetingsByRoom(@Param("roomId") Long roomId);
 }

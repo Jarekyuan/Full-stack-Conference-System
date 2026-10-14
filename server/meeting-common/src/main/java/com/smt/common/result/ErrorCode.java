@@ -32,6 +32,7 @@ public enum ErrorCode {
     OUT_OF_RESERVE_WINDOW(30003, "超出可预约时间范围"),
     DURATION_LIMIT_EXCEEDED(30004, "超出单场时长上限"),
     CANCEL_DEADLINE_PASSED(30005, "距会议开始不足可取消时限"),
+    ROOM_HAS_ACTIVE_MEETINGS(30006, "该会议室存在未结束的会议，请先处理"),
 
     // ---- 4xxxx 预约 ----
     TIME_CONFLICT(40001, "所选时段与已有会议冲突"),
