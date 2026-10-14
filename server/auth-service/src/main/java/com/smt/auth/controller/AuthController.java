@@ -1,11 +1,14 @@
 package com.smt.auth.controller;
 
 import com.smt.auth.dto.LoginRequest;
+import com.smt.auth.dto.RefreshTokenRequest;
 import com.smt.auth.service.AuthService;
 import com.smt.auth.vo.LoginResponse;
+import com.smt.common.context.UserContext;
 import com.smt.common.result.Result;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -13,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 认证接口（对外路径 /api/auth/**，网关 StripPrefix 后 → /auth/**）
+ * login/refresh 网关白名单；logout/me 需携带 accessToken（网关验签后注入身份头）
  */
 @RestController
 @RequestMapping("/auth")
@@ -24,5 +28,21 @@ public class AuthController {
     @PostMapping("/login")
     public Result<LoginResponse> login(@Valid @RequestBody LoginRequest request) {
         return Result.success(authService.login(request));
+    }
+
+    @PostMapping("/refresh")
+    public Result<LoginResponse> refresh(@Valid @RequestBody RefreshTokenRequest request) {
+        return Result.success(authService.refresh(request.getRefreshToken()));
+    }
+
+    @PostMapping("/logout")
+    public Result<Void> logout() {
+        authService.logout(UserContext.getUserId());
+        return Result.success();
+    }
+
+    @GetMapping("/me")
+    public Result<LoginResponse.User> me() {
+        return Result.success(authService.currentUser());
     }
 }

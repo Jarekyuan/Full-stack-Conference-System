@@ -27,4 +27,11 @@
         WHERE username = #{username}
     </select>
 
+    <!-- 按主键查询（命中主键索引） -->
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM sys_user
+        WHERE id = #{id}
+    </select>
+
 </mapper>

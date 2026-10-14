@@ -10,4 +10,7 @@ public interface SysUserMapper {
 
     /** 按用户名查询（登录用，命中唯一索引 uk_username） */
     SysUser selectByUsername(@Param("username") String username);
+
+    /** 按主键查询（refresh/me 用） */
+    SysUser selectById(@Param("id") Long id);
 }

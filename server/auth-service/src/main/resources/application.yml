@@ -38,6 +38,7 @@ security:
   jwt:
     secret: ${JWT_SECRET:smt-dev-secret-0123456789-abcdefghijklmnopqrstuv}
     access-token-ttl: 30m
+    refresh-token-ttl: 7d
 
 logging:
   level:
