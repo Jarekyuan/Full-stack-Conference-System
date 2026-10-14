@@ -50,17 +50,27 @@ public class AuthService {
         return issueTokens(user);
     }
 
-    /** 刷新：校验 refreshToken → 滚动更新双 token（旧 refreshToken 即刻失效） */
+    /**
+     * 刷新：原子轮换双 token（校验旧 refreshToken 与写入新 token 在同一段 Lua 内完成，旧 token 即刻失效）。
+     * 并发持同一旧 token 刷新时只有一个请求成功，另一个按 20003 处理——修复评审 P0 的竞态。
+     */
     public LoginResponse refresh(String refreshToken) {
-        Long userId = refreshTokenStore.findUserIdByToken(refreshToken);
-        if (userId == null || !refreshTokenStore.isValid(userId, refreshToken)) {
+        RefreshTokenStore.Rotated rotated = refreshTokenStore.rotate(refreshToken);
+        if (rotated == null) {
             throw new BusinessException(ErrorCode.REFRESH_TOKEN_INVALID);
         }
-        SysUser user = sysUserMapper.selectById(userId);
+        SysUser user = sysUserMapper.selectById(rotated.userId());
         if (user == null || user.getStatus() == 0) {
+            // 用户已被删除/禁用：作废刚轮换出的 token，避免残留有效凭证
+            refreshTokenStore.removeByUser(rotated.userId());
             throw new BusinessException(ErrorCode.REFRESH_TOKEN_INVALID);
         }
-        return issueTokens(user);
+        LoginResponse response = new LoginResponse();
+        response.setAccessToken(jwtUtil.generate(user.getId(), user.getRole(), accessTokenTtl));
+        response.setRefreshToken(rotated.newToken());
+        response.setExpiresIn(accessTokenTtl.toSeconds());
+        response.setUser(toUser(user));
+        return response;
     }
 
     /** 登出：作废 refreshToken（accessToken 短效，自然过期） */

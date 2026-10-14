@@ -1,9 +1,7 @@
 package com.smt.auth.controller;
 
-import com.smt.auth.dto.UserBatchDTO;
 import com.smt.auth.dto.UserCreateDTO;
 import com.smt.auth.service.UserService;
-import com.smt.auth.vo.UserBriefVO;
 import com.smt.auth.vo.UserVO;
 import com.smt.common.result.PageResult;
 import com.smt.common.result.Result;
@@ -36,12 +34,6 @@ public class UserController {
     @GetMapping("/search")
     public Result<List<UserVO>> search(@RequestParam String keyword) {
         return Result.success(userService.search(keyword));
-    }
-
-    /** 服务间内部接口：批量查询用户精简信息（供 meeting-service Feign 直连调用） */
-    @PostMapping("/batch")
-    public Result<List<UserBriefVO>> batch(@Valid @RequestBody UserBatchDTO dto) {
-        return Result.success(userService.batchByIds(dto.getIds()));
     }
 
     @GetMapping

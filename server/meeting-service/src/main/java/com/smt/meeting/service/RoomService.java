@@ -69,7 +69,8 @@ public class RoomService {
         strategy.setNeedApproval(0);
         strategy.setAdvanceDays(30);
         strategy.setMaxDurationMinutes(240);
-        strategy.setCancelDeadlineMinutes(30);
+        // 与 db/01-schema.sql 默认值、种子数据（青竹厅）保持一致：评审 P1 修复（原为 30）
+        strategy.setCancelDeadlineMinutes(0);
         strategy.setBufferMinutes(0);
         strategy.setAllowRecurring(1);
         roomStrategyMapper.insert(strategy);
@@ -103,7 +104,7 @@ public class RoomService {
         roomStrategyMapper.deleteByRoomId(id);
     }
 
-    /** 策略全量更新（历史数据缺失策略时兜底创建） */
+    /** 策略全量更新（原子 upsert：历史数据缺失策略时由 ON DUPLICATE KEY 兜底创建） */
     @Transactional
     public void updateStrategy(Long id, StrategyDTO dto) {
         ensureRoomExists(id);
@@ -115,9 +116,7 @@ public class RoomService {
         strategy.setCancelDeadlineMinutes(dto.getCancelDeadlineMinutes());
         strategy.setBufferMinutes(dto.getBufferMinutes());
         strategy.setAllowRecurring(dto.getAllowRecurring());
-        if (roomStrategyMapper.updateByRoomId(strategy) == 0) {
-            roomStrategyMapper.insert(strategy);
-        }
+        roomStrategyMapper.upsertByRoomId(strategy);
     }
 
     private void ensureRoomExists(Long id) {
