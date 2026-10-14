@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 会议室分组 SQL（手写 XML：显式 resultMap + #{} 参数化） -->
+<mapper namespace="com.smt.meeting.mapper.RoomGroupMapper">
+
+    <resultMap id="BaseResultMap" type="com.smt.meeting.entity.RoomGroup">
+        <id column="id" property="id"/>
+        <result column="name" property="name"/>
+        <result column="sort_order" property="sortOrder"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <!-- 全部分组：sort_order 上有天然小数据集，直接全量排序返回 -->
+    <select id="selectAll" resultMap="BaseResultMap">
+        SELECT id, name, sort_order, created_at
+        FROM room_group
+        ORDER BY sort_order, id
+    </select>
+
+</mapper>

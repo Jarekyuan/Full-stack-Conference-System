@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 会议室 SQL（手写 XML；JSON 列 images/device_tags 经自定义 JsonTypeHandler 解析） -->
+<mapper namespace="com.smt.meeting.mapper.MeetingRoomMapper">
+
+    <resultMap id="BaseResultMap" type="com.smt.meeting.entity.MeetingRoom">
+        <id column="id" property="id"/>
+        <result column="name" property="name"/>
+        <result column="group_id" property="groupId"/>
+        <result column="capacity" property="capacity"/>
+        <result column="location" property="location"/>
+        <result column="images" property="images"
+                typeHandler="com.smt.meeting.handler.JsonTypeHandler"/>
+        <result column="device_tags" property="deviceTags"
+                typeHandler="com.smt.meeting.handler.JsonTypeHandler"/>
+        <result column="status" property="status"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="BaseColumns">
+        id, name, group_id, capacity, location, images, device_tags, status, created_at, updated_at
+    </sql>
+
+    <select id="selectAll" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM meeting_room
+        ORDER BY group_id, id
+    </select>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM meeting_room
+        WHERE id = #{id}
+    </select>
+
+</mapper>

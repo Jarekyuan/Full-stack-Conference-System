@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 会议室策略 SQL（手写 XML） -->
+<mapper namespace="com.smt.meeting.mapper.RoomStrategyMapper">
+
+    <resultMap id="BaseResultMap" type="com.smt.meeting.entity.RoomStrategy">
+        <id column="id" property="id"/>
+        <result column="room_id" property="roomId"/>
+        <result column="need_approval" property="needApproval"/>
+        <result column="advance_days" property="advanceDays"/>
+        <result column="max_duration_minutes" property="maxDurationMinutes"/>
+        <result column="cancel_deadline_minutes" property="cancelDeadlineMinutes"/>
+        <result column="buffer_minutes" property="bufferMinutes"/>
+        <result column="allow_recurring" property="allowRecurring"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <!-- 按会议室查询策略：命中唯一索引 uk_room -->
+    <select id="selectByRoomId" resultMap="BaseResultMap">
+        SELECT id, room_id, need_approval, advance_days, max_duration_minutes,
+               cancel_deadline_minutes, buffer_minutes, allow_recurring, created_at, updated_at
+        FROM room_strategy
+        WHERE room_id = #{roomId}
+    </select>
+
+</mapper>
