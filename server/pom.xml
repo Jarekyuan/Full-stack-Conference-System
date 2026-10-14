@@ -20,7 +20,8 @@
     <modules>
         <module>meeting-common</module>
         <module>gateway</module>
-        <!-- 后续追加：auth-service / meeting-service / notification-service -->
+        <module>auth-service</module>
+        <!-- 后续追加：meeting-service / notification-service -->
     </modules>
 
     <properties>
