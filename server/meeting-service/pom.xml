@@ -45,6 +45,22 @@
             <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
         </dependency>
 
+        <!-- OpenFeign（服务间调用）+ Resilience4j（fallback/circuitbreaker 支撑） -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-openfeign</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-circuitbreaker-resilience4j</artifactId>
+        </dependency>
+
+        <!-- 客户端负载均衡（Feign lb:// 服务发现调用必须） -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-loadbalancer</artifactId>
+        </dependency>
+
         <!-- 数据访问：MyBatis-Plus starter（含 MyBatis 核心；SQL 手写 XML 为主） -->
         <dependency>
             <groupId>com.baomidou</groupId>

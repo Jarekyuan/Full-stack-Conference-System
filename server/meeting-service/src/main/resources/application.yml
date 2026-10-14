@@ -17,6 +17,10 @@ spring:
     nacos:
       discovery:
         server-addr: 127.0.0.1:8848
+    openfeign:
+      # 开启后 @FeignClient 的 fallbackFactory 才生效（依赖 Resilience4j）
+      circuitbreaker:
+        enabled: true
 
 mybatis-plus:
   # SQL 手写 XML 为主（规范见 server/AI-RULES.md 第十一章），XML 扫描路径：
