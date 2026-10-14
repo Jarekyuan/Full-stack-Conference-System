@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 用户表 SQL（手写：显式 resultMap + #{} 参数化，规范见 server/AI-RULES.md 第十一章） -->
+<mapper namespace="com.smt.auth.mapper.SysUserMapper">
+
+    <resultMap id="BaseResultMap" type="com.smt.auth.entity.SysUser">
+        <id column="id" property="id"/>
+        <result column="username" property="username"/>
+        <result column="password" property="password"/>
+        <result column="real_name" property="realName"/>
+        <result column="email" property="email"/>
+        <result column="avatar" property="avatar"/>
+        <result column="role" property="role"/>
+        <result column="status" property="status"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="BaseColumns">
+        id, username, password, real_name, email, avatar, role, status, created_at, updated_at
+    </sql>
+
+    <!-- 按用户名查询：命中唯一索引 uk_username -->
+    <select id="selectByUsername" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM sys_user
+        WHERE username = #{username}
+    </select>
+
+</mapper>
