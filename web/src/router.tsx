@@ -11,6 +11,7 @@ import { getAccessToken } from '@/api/token'
 import Placeholder from '@/components/Placeholder'
 import MainLayout from '@/layouts/MainLayout'
 import Login from '@/pages/Login'
+import RoomManage from '@/pages/admin/RoomManage'
 import { useUserStore } from '@/stores/userStore'
 
 /** 鉴权守卫：未登录（无 accessToken）一律重定向登录页 */
@@ -56,7 +57,7 @@ export const router = createBrowserRouter([
             path: 'admin/rooms',
             element: (
               <RequireRole roles={['ADMIN']}>
-                <Placeholder title="会议室管理" />
+                <RoomManage />
               </RequireRole>
             ),
           },
