@@ -1,0 +1,91 @@
+# ============================================================================
+# 会议室预约系统 · 基础设施编排（T0.1）
+# 内容：MySQL 8 / Redis 7 / RabbitMQ 3.13(管理台) / Nacos 2.3
+# 用法：
+#   cd deploy && docker compose -f docker-compose.infra.yml up -d     # 启动
+#   docker compose -f docker-compose.infra.yml ps                     # 状态
+#   docker compose -f docker-compose.infra.yml down                   # 停止（保留数据卷）
+# 说明：
+#   - MySQL 首次启动会自动执行 ../db/01-schema.sql + 02-seed.sql（建库建表+种子）
+#   - 数据持久化在命名卷中；如需彻底重置：down -v
+# ============================================================================
+name: smt-infra
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: smt-mysql
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      TZ: Asia/Shanghai
+    command: >-
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_0900_ai_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ../db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot123"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [smt-net]
+
+  redis:
+    image: redis:7-alpine
+    container_name: smt-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [smt-net]
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: smt-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"      # AMQP
+      - "15672:15672"    # 管理台（guest/guest）
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+      TZ: Asia/Shanghai
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks: [smt-net]
+
+  nacos:
+    image: nacos/nacos-server:v2.4.2
+    container_name: smt-nacos
+    restart: unless-stopped
+    ports:
+      - "8848:8848"      # 控制台 / HTTP
+      - "9848:9848"      # 客户端 gRPC（2.x 必需）
+    environment:
+      MODE: standalone
+      TZ: Asia/Shanghai
+    volumes:
+      - nacos-data:/home/nacos/data
+    networks: [smt-net]
+
+volumes:
+  mysql-data:
+  redis-data:
+  rabbitmq-data:
+  nacos-data:
+
+networks:
+  smt-net:
+    name: smt-net

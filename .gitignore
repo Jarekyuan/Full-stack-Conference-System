@@ -1,0 +1,36 @@
+# ============================================================
+# 会议室预约系统 · .gitignore（T0.3 的前置防线，2026-10-14 建）
+# 原则：密钥与本地配置绝不进仓库；构建产物与 IDE 文件不进仓库
+# ============================================================
+
+# ---- 敏感配置（最高优先级）----
+*.local.md
+*.local.yml
+*.local.yaml
+server/**/src/main/resources/application-local.yml
+*.env
+.env.*
+
+# ---- Java / Maven ----
+target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+logs/
+*.log
+hs_err_pid*
+
+# ---- Node / 前端 ----
+node_modules/
+dist/
+.pnpm-store/
+.vite/
+
+# ---- IDE / 系统 ----
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# ---- 运行时数据（Docker 卷挂载等）----
+deploy/data/
