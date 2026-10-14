@@ -17,6 +17,8 @@ spring:
     nacos:
       discovery:
         server-addr: 127.0.0.1:8848
+        # 本地开发固定回环注册：休眠/换网后局域网 IP 会变，否则 Feign/网关按旧 IP 连不上
+        ip: 127.0.0.1
     openfeign:
       # 开启后 @FeignClient 的 fallbackFactory 才生效（依赖 Resilience4j）
       circuitbreaker:

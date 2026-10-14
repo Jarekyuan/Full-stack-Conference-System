@@ -18,6 +18,8 @@ spring:
     nacos:
       discovery:
         server-addr: 127.0.0.1:8848
+        # 本地开发固定回环注册：休眠/换网后局域网 IP 会变，否则网关按旧 IP 连不上（踩坑见 2026-10-14 记忆）
+        ip: 127.0.0.1
 
 mybatis-plus:
   # SQL 手写 XML 为主（规范见 server/AI-RULES.md 第十一章），XML 扫描路径：
