@@ -34,6 +34,16 @@
         WHERE id = #{id}
     </select>
 
+    <!-- 批量按主键查询（IN + foreach；id 数量由上层限制 ≤100） -->
+    <select id="selectByIds" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM sys_user
+        WHERE id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </select>
+
     <!-- 用户名/姓名模糊搜索（选参会人场景，最多 20 条；左模糊无法走索引，用户量小可接受） -->
     <select id="searchByKeyword" resultMap="BaseResultMap">
         SELECT <include refid="BaseColumns"/>

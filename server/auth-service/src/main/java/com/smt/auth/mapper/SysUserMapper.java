@@ -16,6 +16,9 @@ public interface SysUserMapper {
     /** 按主键查询（refresh/me 用） */
     SysUser selectById(@Param("id") Long id);
 
+    /** 批量按主键查询（IN + foreach；内部接口最多 100 个 id） */
+    List<SysUser> selectByIds(@Param("ids") List<Long> ids);
+
     /** 用户名/姓名模糊搜索（选参会人场景，最多 20 条） */
     List<SysUser> searchByKeyword(@Param("keyword") String keyword);
 

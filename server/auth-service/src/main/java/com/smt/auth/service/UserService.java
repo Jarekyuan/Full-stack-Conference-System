@@ -4,6 +4,7 @@ import cn.hutool.core.util.StrUtil;
 import com.smt.auth.dto.UserCreateDTO;
 import com.smt.auth.entity.SysUser;
 import com.smt.auth.mapper.SysUserMapper;
+import com.smt.auth.vo.UserBriefVO;
 import com.smt.auth.vo.UserVO;
 import com.smt.common.exception.BusinessException;
 import com.smt.common.result.ErrorCode;
@@ -30,6 +31,13 @@ public class UserService {
             return List.of();
         }
         return sysUserMapper.searchByKeyword(keyword.trim()).stream().map(UserService::toVO).toList();
+    }
+
+    /** 批量查询用户精简信息（服务间内部接口：id → {id, realName, email}） */
+    public List<UserBriefVO> batchByIds(List<Long> ids) {
+        return sysUserMapper.selectByIds(ids).stream()
+                .map(user -> new UserBriefVO(user.getId(), user.getRealName(), user.getEmail()))
+                .toList();
     }
 
     public PageResult<UserVO> page(int page, int size) {
