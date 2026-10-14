@@ -11,16 +11,18 @@ import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.core.Ordered;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 
 import java.time.format.DateTimeFormatter;
 
 /**
  * common 模块 Web 自动配置（经 AutoConfiguration.imports 注册，各服务引入即生效）：
- * ① 全局异常处理 ② Jackson 时间格式统一 yyyy-MM-dd HH:mm:ss ③ 用户上下文过滤器
+ * ① 全局异常处理 ② Jackson 时间格式统一 yyyy-MM-dd HH:mm:ss ③ 用户上下文过滤器 ④ 方法级鉴权
  * 限定 SERVLET 应用：WebFlux 应用（如 gateway）不会激活 Servlet 组件
  */
 @AutoConfiguration
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
+@EnableMethodSecurity
 @Import(GlobalExceptionHandler.class)
 public class CommonWebAutoConfiguration {
 

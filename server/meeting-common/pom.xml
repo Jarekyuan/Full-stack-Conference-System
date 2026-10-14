@@ -41,6 +41,12 @@
             <artifactId>spring-security-core</artifactId>
         </dependency>
 
+        <!-- Spring Security 配置：@EnableMethodSecurity / @PreAuthorize 支持 -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-config</artifactId>
+        </dependency>
+
         <!-- 工具库 -->
         <dependency>
             <groupId>cn.hutool</groupId>

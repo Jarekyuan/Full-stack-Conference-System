@@ -8,6 +8,7 @@ import com.smt.common.result.Result;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.time.LocalDateTime;
@@ -40,6 +41,13 @@ class CommonWebAutoConfigurationTest {
         Result<Void> result = handler.handleNoResourceFound(e);
         assertEquals(10004, result.getCode());
         assertEquals("资源不存在", result.getMsg());
+    }
+
+    @Test
+    void accessDeniedShouldMapTo10003NotInternalError() {
+        Result<Void> result = handler.handleAccessDenied(new AccessDeniedException("denied"));
+        assertEquals(10003, result.getCode());
+        assertEquals("无权限执行此操作", result.getMsg());
     }
 
     @Test

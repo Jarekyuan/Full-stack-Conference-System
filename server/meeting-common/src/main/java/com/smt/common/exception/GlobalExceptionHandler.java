@@ -4,6 +4,8 @@ import com.smt.common.result.ErrorCode;
 import com.smt.common.result.Result;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -41,6 +43,22 @@ public class GlobalExceptionHandler {
     public Result<Void> handleNoResourceFound(NoResourceFoundException e) {
         log.warn("路径不存在: {}", e.getResourcePath());
         return Result.error(ErrorCode.NOT_FOUND);
+    }
+
+    /** 方法级鉴权失败（@PreAuthorize 不通过）：映射为框架级 403，不能被兜底误伤成 500 */
+    @ExceptionHandler(AccessDeniedException.class)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    public Result<Void> handleAccessDenied(AccessDeniedException e) {
+        log.warn("无权限访问: {}", e.getMessage());
+        return Result.error(ErrorCode.NO_PERMISSION);
+    }
+
+    /** 未认证（无身份上下文时触发方法鉴权）：映射为框架级 401 */
+    @ExceptionHandler(AuthenticationException.class)
+    @ResponseStatus(HttpStatus.UNAUTHORIZED)
+    public Result<Void> handleAuthentication(AuthenticationException e) {
+        log.warn("未认证: {}", e.getMessage());
+        return Result.error(ErrorCode.UNAUTHORIZED);
     }
 
     @ExceptionHandler(Exception.class)
