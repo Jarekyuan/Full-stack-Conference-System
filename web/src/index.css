@@ -1,0 +1,28 @@
+/*
+ * 全局样式入口：Tailwind 三段指令 + 少量全局基线
+ *
+ * antd 5 共存说明（重要）：
+ * - antd 5 是 CSS-in-JS，样式在运行时注入 <style>，位置晚于本文件 → 优先级更高，
+ *   因此保留 Tailwind 的 preflight（浏览器样式归一化）不会覆盖 antd 组件外观。
+ * - 分工：Tailwind 只管布局/间距/响应式；组件外观交给 antd（02 文档 3.3 #7）。
+ * - 若后续发现个别 antd 组件被 preflight 影响，优先用 @layer base 局部修正，
+ *   而不是全局关掉 preflight（关掉会失去 normalize，自定义区域要自己兜样式）。
+ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+      'PingFang SC', 'Microsoft YaHei', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+}
