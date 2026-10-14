@@ -66,10 +66,14 @@ export default function StrategyDrawer({ open, room, onClose, onSaved }: Strateg
 
   const onSubmit = async (values: StrategyForm) => {
     if (!room) return
-    const input: StrategyInput = { ...values }
-    await save(room.id, input)
-    onSaved()
-    onClose()
+    try {
+      const input: StrategyInput = { ...values }
+      await save(room.id, input)
+      onSaved()
+      onClose()
+    } catch {
+      // 失败已由 useAppRequest 统一 toast；此处收敛 reject，避免 Uncaught (in promise)
+    }
   }
 
   return (

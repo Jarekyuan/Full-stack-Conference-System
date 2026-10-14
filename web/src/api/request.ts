@@ -67,9 +67,10 @@ async function doRefresh(): Promise<string> {
 // ———————————————————— 跳登录（登录态彻底失效）————————————————————
 function redirectToLogin(): void {
   clearTokens()
-  // T1.F3 接入 react-router 后可改为 navigate('/login')；当前阶段用硬跳转兜底
+  // T1.F3 接入 react-router 后可改为 navigate；当前用硬跳转兜底，并带上原路径供登录后跳回
   if (window.location.pathname !== '/login') {
-    window.location.replace('/login')
+    const redirect = encodeURIComponent(window.location.pathname + window.location.search)
+    window.location.replace(`/login?redirect=${redirect}`)
   }
 }
 

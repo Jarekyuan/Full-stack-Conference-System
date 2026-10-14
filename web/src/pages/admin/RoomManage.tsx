@@ -58,6 +58,8 @@ export default function RoomManage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Room | null>(null)
   const [strategyRoom, setStrategyRoom] = useState<Room | null>(null)
+  /** 正在删除的行 id：让 loading 精确到行，而不是全场按钮转圈 */
+  const [deletingId, setDeletingId] = useState<number | null>(null)
 
   // 分组列表：挂载即加载一次
   const { data: groups } = useAppRequest(listRoomGroups, { manual: false })
@@ -68,7 +70,7 @@ export default function RoomManage() {
     run(filter)
   }, [filter.groupId, filter.status, run])
 
-  const { runAsync: doDelete, loading: deleting } = useAppRequest(deleteRoom)
+  const { runAsync: doDelete } = useAppRequest(deleteRoom)
   const { runAsync: doCreate, loading: creating } = useAppRequest(createRoom)
   const { runAsync: doUpdate, loading: updating } = useAppRequest(updateRoom)
 
@@ -104,26 +106,37 @@ export default function RoomManage() {
   }
 
   const onSubmit = async (values: RoomForm) => {
-    const input: RoomSaveInput = {
-      name: values.name,
-      groupId: values.groupId,
-      capacity: values.capacity,
-      location: values.location || undefined,
-      deviceTags: values.deviceTags ?? [],
-      status: values.status,
+    try {
+      const input: RoomSaveInput = {
+        name: values.name,
+        groupId: values.groupId,
+        capacity: values.capacity,
+        location: values.location || undefined,
+        deviceTags: values.deviceTags ?? [],
+        status: values.status,
+      }
+      if (editing) {
+        await doUpdate(editing.id, input)
+      } else {
+        await doCreate(input)
+      }
+      setModalOpen(false)
+      refresh()
+    } catch {
+      // 失败已由 useAppRequest 统一 toast；此处收敛 reject，避免 Uncaught (in promise)
     }
-    if (editing) {
-      await doUpdate(editing.id, input)
-    } else {
-      await doCreate(input)
-    }
-    setModalOpen(false)
-    refresh()
   }
 
   const handleDelete = async (id: number) => {
-    await doDelete(id)
-    refresh()
+    setDeletingId(id)
+    try {
+      await doDelete(id)
+      refresh()
+    } catch {
+      // 已 toast（如 30006：该会议室存在未结束的会议）
+    } finally {
+      setDeletingId(null)
+    }
   }
 
   const groupOptions = (groups ?? []).map((g) => ({ label: g.name, value: g.id }))
@@ -172,7 +185,7 @@ export default function RoomManage() {
             okText="删除"
             cancelText="取消"
           >
-            <Button type="link" size="small" danger loading={deleting}>
+            <Button type="link" size="small" danger loading={deletingId === room.id}>
               删除
             </Button>
           </Popconfirm>

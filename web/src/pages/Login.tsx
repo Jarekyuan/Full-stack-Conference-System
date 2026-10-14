@@ -21,6 +21,14 @@ const loginSchema = z.object({
 
 type LoginForm = z.infer<typeof loginSchema>
 
+/** 解析 redirect 参数：仅接受站内绝对路径（防开放重定向），否则回落日历页 */
+function resolveRedirect(raw: string | null): string {
+  if (raw && raw.startsWith('/') && !raw.startsWith('//')) {
+    return raw
+  }
+  return '/calendar'
+}
+
 export default function Login() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -38,10 +46,13 @@ export default function Login() {
   const { runAsync: doLogin, loading } = useAppRequest(login)
 
   const onSubmit = async (values: LoginForm) => {
-    const token = await doLogin(values.username, values.password)
-    loginStore(token)
-    const redirect = searchParams.get('redirect') || '/'
-    navigate(redirect, { replace: true })
+    try {
+      const token = await doLogin(values.username, values.password)
+      loginStore(token)
+      navigate(resolveRedirect(searchParams.get('redirect')), { replace: true })
+    } catch {
+      // 失败已由 useAppRequest 统一 toast；此处收敛 reject，避免 Uncaught (in promise)
+    }
   }
 
   return (

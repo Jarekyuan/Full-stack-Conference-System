@@ -6,7 +6,7 @@
  * 页面地图见 02 文档 4.1；T1.F3 阶段各业务页用 Placeholder 占位，后续任务逐个替换。
  */
 import type { ReactNode } from 'react'
-import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom'
+import { createBrowserRouter, Navigate, Outlet, useLocation } from 'react-router-dom'
 import { getAccessToken } from '@/api/token'
 import Placeholder from '@/components/Placeholder'
 import MainLayout from '@/layouts/MainLayout'
@@ -14,10 +14,12 @@ import Login from '@/pages/Login'
 import RoomManage from '@/pages/admin/RoomManage'
 import { useUserStore } from '@/stores/userStore'
 
-/** 鉴权守卫：未登录（无 accessToken）一律重定向登录页 */
+/** 鉴权守卫：未登录（无 accessToken）重定向登录页，并带上原目标路径（登录后跳回） */
 function RequireAuth() {
+  const location = useLocation()
   if (!getAccessToken()) {
-    return <Navigate to="/login" replace />
+    const redirect = encodeURIComponent(location.pathname + location.search)
+    return <Navigate to={`/login?redirect=${redirect}`} replace />
   }
   return <Outlet />
 }
