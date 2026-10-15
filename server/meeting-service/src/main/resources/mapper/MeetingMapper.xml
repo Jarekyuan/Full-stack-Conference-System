@@ -80,4 +80,32 @@
         ORDER BY m.start_time
     </select>
 
+    <!-- 日历条目（含 status 供前端按状态配色） -->
+    <resultMap id="CalendarVOMap" type="com.smt.meeting.vo.CalendarMeetingVO">
+        <id column="meeting_id" property="meetingId"/>
+        <result column="title" property="title"/>
+        <result column="start_time" property="startTime"/>
+        <result column="end_time" property="endTime"/>
+        <result column="status" property="status"/>
+        <result column="organiser_id" property="organiserId"/>
+        <result column="organiser_name" property="organiserName"/>
+    </resultMap>
+
+    <!--
+      日历查询：按"开始时间落在本周"归属（跨天会议归到开始那天，前端无需处理跨天拆分）。
+      范围条件 start_time >= ? AND start_time < ? 命中 idx_room_time 的 start_time 范围扫描。
+      只取 10/20/30：日历展示有效日程，40/50/60 是历史态。
+    -->
+    <select id="selectByRoomAndRange" resultMap="CalendarVOMap">
+        SELECT m.id AS meeting_id, m.title, m.start_time, m.end_time, m.status,
+               m.organiser_id, u.real_name AS organiser_name
+        FROM meeting m
+        LEFT JOIN sys_user u ON u.id = m.organiser_id
+        WHERE m.room_id = #{roomId}
+          AND m.start_time &gt;= #{rangeStart}
+          AND m.start_time &lt; #{rangeEnd}
+          AND m.status IN (10, 20, 30)
+        ORDER BY m.start_time
+    </select>
+
 </mapper>

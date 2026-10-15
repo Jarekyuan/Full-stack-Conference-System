@@ -1,6 +1,7 @@
 package com.smt.meeting.mapper;
 
 import com.smt.meeting.entity.Meeting;
+import com.smt.meeting.vo.CalendarMeetingVO;
 import com.smt.meeting.vo.MeetingConflictVO;
 import org.apache.ibatis.annotations.Param;
 
@@ -35,4 +36,12 @@ public interface MeetingMapper {
                                             @Param("scanStart") LocalDateTime scanStart,
                                             @Param("scanEnd") LocalDateTime scanEnd,
                                             @Param("excludeMeetingId") Long excludeMeetingId);
+
+    /**
+     * 某会议室在 [rangeStart, rangeEnd) 内开始的会议（日历视图，T2.3）。
+     * 只取有效状态 10/20/30（40/50/60 为历史态不展示）；按开始时间归属日期。
+     */
+    List<CalendarMeetingVO> selectByRoomAndRange(@Param("roomId") Long roomId,
+                                                 @Param("rangeStart") LocalDateTime rangeStart,
+                                                 @Param("rangeEnd") LocalDateTime rangeEnd);
 }
