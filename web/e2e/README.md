@@ -20,7 +20,12 @@ cd web
 node e2e/e2e-calendar.cjs       # T2.F1：切周加载 / 会议落格 / 点空格带出预填时间
 node e2e/e2e-booking.cjs        # T2.F2：创建+刷新日历 / 冲突提示与弹窗 / 幂等只落一场
 node e2e/e2e-meeting-list.cjs   # T2.F3：筛选分页 / 状态时间线 / 取消 → 50 / 取消按钮仅组织人
+node e2e/e2e-approval.cjs       # T3.F1+F2：审批中心（待办→通过→已办）+ 详情页延长/提前结束
 ```
+
+> ⚠️ `e2e-approval.cjs` 比前三个慢（约 4 分钟）：它的后半段要等一场会议**真的到点**，
+> 由定时任务推进到"进行中"，才能验证延长/提前结束——所以跑它时**定时任务必须开着**
+> （`meeting.task.status.enabled` 默认 true；跑完 `verify-m3-scheduler.sh` 后记得把服务按默认间隔重启）。
 
 退出码 `0` = 全部断言通过，非 0 = 有失败（可直接接 CI）。
 

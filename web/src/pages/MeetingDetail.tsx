@@ -1,16 +1,27 @@
 /**
  * src/pages/MeetingDetail.tsx
- * 会议详情（docs/02 4.1 /meetings/:id）：基本信息 + 参会人 + **状态时间线** + 取消操作。
- * 取消按钮的显示条件：**仅组织人**（数据权限，后端还会再校验归属 40004），
- * 且状态处于可取消区间（状态机只允许 10/20 → CANCEL，30 进行中禁止）——
- * 前端只是"不给无意义的入口"，真正的裁决在状态机与 R-6 取消截止（超时回 30005）。
- * 取消原因可选（docs/04：POST /meetings/{id}/cancel，body 可空）。
+ * 会议详情（docs/02 4.1 /meetings/:id）：基本信息 + 参会人 + **状态时间线** + 随状态变化的操作区。
+ *
+ * 操作按钮的显示条件（**仅组织人** + 状态门槛），前端只是"不给无意义的入口"：
+ *   · 取消会议：10/20（状态机只允许这两态；30 进行中禁止）＋ R-6 取消截止（超时回 30005）
+ *   · 延长会议 / 提前结束（T3.F2）：**仅进行中（30）**
+ * 真正的裁决都在服务端（40004 归属 / 40002 状态 / 40006 超上限 / 40001 冲突）。
+ *
+ * 延长的上限由**服务端**算（R-15：min(下一场开始 − 缓冲, 当日 24:00)），前端只负责展示——
+ * 这条规则涉及三个量的取小，前端再算一遍就是重写一遍规则，迟早不一致。
  */
 import { useCallback, useState } from 'react'
-import { App, Button, Card, Descriptions, Input, Modal, Space, Spin, Timeline, Typography } from 'antd'
+import { App, Button, Card, Descriptions, Input, InputNumber, Modal, Space, Spin, Timeline, Typography } from 'antd'
 import dayjs from 'dayjs'
 import { useNavigate, useParams } from 'react-router-dom'
-import { cancelMeeting, getMeeting } from '@/api/meeting'
+import {
+  cancelMeeting,
+  extendMeeting,
+  finishMeeting,
+  getExtendLimit,
+  getMeeting,
+  type ExtendLimit,
+} from '@/api/meeting'
 import MeetingStatusTag, { meetingEventText, meetingStatusText } from '@/components/MeetingStatusTag'
 import { useAppRequest } from '@/hooks/useAppRequest'
 import { useUserStore } from '@/stores/userStore'
@@ -18,6 +29,8 @@ import { ApiError } from '@/api/types'
 
 /** 状态机允许取消的状态（10 待审批 / 20 已预约；30 进行中禁止，见 docs/01 迁移矩阵） */
 const CANCELLABLE_STATUS = [10, 20]
+/** 进行中：延长/提前结束的唯一入口状态 */
+const ONGOING_STATUS = 30
 
 export default function MeetingDetail() {
   const { id } = useParams<{ id: string }>()
@@ -27,6 +40,11 @@ export default function MeetingDetail() {
   const currentUser = useUserStore((s) => s.user)
   const [cancelOpen, setCancelOpen] = useState(false)
   const [reason, setReason] = useState('')
+  // 延长/提前结束（T3.F2）：上限先向服务端要，再让用户在其中选
+  const [extendOpen, setExtendOpen] = useState(false)
+  const [limit, setLimit] = useState<ExtendLimit | null>(null)
+  const [extendMinutes, setExtendMinutes] = useState(30)
+  const [finishOpen, setFinishOpen] = useState(false)
 
   const { data, loading, refresh } = useAppRequest(() => getMeeting(meetingId), {
     manual: false,
@@ -39,6 +57,10 @@ export default function MeetingDetail() {
   const detail = data && data.id === meetingId ? data : undefined
 
   const { runAsync: doCancel, loading: cancelling } = useAppRequest(cancelMeeting, { toastError: false })
+  // 延长/结束的三个请求：toastError 关掉——错误由调用点按场景给文案（40006/40002 的含义各不相同）
+  const { runAsync: fetchLimit, loading: limitLoading } = useAppRequest(getExtendLimit, { toastError: true })
+  const { runAsync: doExtend, loading: extending } = useAppRequest(extendMeeting, { toastError: false })
+  const { runAsync: doFinish, loading: finishing } = useAppRequest(finishMeeting, { toastError: false })
 
   const handleCancel = useCallback(async () => {
     try {
@@ -51,6 +73,42 @@ export default function MeetingDetail() {
       message.error(e instanceof ApiError ? e.message : '取消失败，请稍后重试')
     }
   }, [doCancel, meetingId, reason, message, refresh])
+
+  /** 打开延长弹窗：先取上限（服务端算的 R-15），拿到再展示——避免让用户在"不知道能延多久"时填数字 */
+  const handleOpenExtend = useCallback(async () => {
+    setLimit(null)
+    setExtendOpen(true)
+    try {
+      const data = await fetchLimit(meetingId)
+      setLimit(data)
+      setExtendMinutes(Math.min(30, Math.max(data.maxDelayMinutes, 1)))
+    } catch {
+      // 上限取不到就别让用户白填：关掉弹窗（错误已由 useAppRequest 统一 toast）
+      setExtendOpen(false)
+    }
+  }, [fetchLimit, meetingId])
+
+  const handleExtend = useCallback(async () => {
+    try {
+      await doExtend(meetingId, extendMinutes)
+      message.success(`已延长 ${extendMinutes} 分钟`)
+      setExtendOpen(false)
+      refresh() // 延长后 end_time 与时间线都变了
+    } catch (e) {
+      message.error(e instanceof ApiError ? e.message : '延长失败，请稍后重试')
+    }
+  }, [doExtend, meetingId, extendMinutes, message, refresh])
+
+  const handleFinish = useCallback(async () => {
+    try {
+      await doFinish(meetingId)
+      message.success('会议已结束，剩余时段已释放')
+      setFinishOpen(false)
+      refresh()
+    } catch (e) {
+      message.error(e instanceof ApiError ? e.message : '操作失败，请稍后重试')
+    }
+  }, [doFinish, meetingId, message, refresh])
 
   if (loading && !detail) {
     return (
@@ -69,6 +127,8 @@ export default function MeetingDetail() {
 
   const isOrganiser = !!currentUser && currentUser.id === detail.organiserId
   const canCancel = isOrganiser && CANCELLABLE_STATUS.includes(detail.status)
+  /** 进行中 + 组织人 = 可延长/提前结束（30 是唯一入口，见 docs/01 迁移矩阵） */
+  const canOperate = isOrganiser && detail.status === ONGOING_STATUS
 
   return (
     <Card
@@ -121,11 +181,22 @@ export default function MeetingDetail() {
         }))}
       />
 
-      {canCancel && (
-        <Button danger onClick={() => setCancelOpen(true)}>
-          取消会议
-        </Button>
-      )}
+      <Space>
+        {canCancel && (
+          <Button danger onClick={() => setCancelOpen(true)}>
+            取消会议
+          </Button>
+        )}
+        {/* 进行中才有"延长/提前结束"（状态机只允许 30 出发，见 docs/01 迁移矩阵） */}
+        {canOperate && (
+          <>
+            <Button type="primary" onClick={handleOpenExtend} loading={limitLoading}>
+              延长会议
+            </Button>
+            <Button onClick={() => setFinishOpen(true)}>提前结束</Button>
+          </>
+        )}
+      </Space>
 
       <Modal
         title="取消会议"
@@ -144,6 +215,56 @@ export default function MeetingDetail() {
           onChange={(e) => setReason(e.target.value)}
           placeholder="如：议题变更，改期再约"
         />
+      </Modal>
+
+      {/* 延长：上限与理由都来自服务端（R-15 的 min(下一场−缓冲, 当日 24:00) 不在前端重算） */}
+      <Modal
+        title="延长会议"
+        open={extendOpen}
+        confirmLoading={extending}
+        onCancel={() => setExtendOpen(false)}
+        onOk={handleExtend}
+        okText="确认延长"
+        okButtonProps={{ disabled: !limit || limit.maxDelayMinutes < 1 }}
+      >
+        {limit ? (
+          <>
+            <p>
+              当前结束时间 <b>{dayjs(detail.endTime).format('HH:mm')}</b>，{limit.reason}。
+            </p>
+            <p className="mb-2">
+              最多可延长 <b>{limit.maxDelayMinutes}</b> 分钟
+              {limit.maxDelayMinutes < 1 && '——已无延长空间（下一场会议紧随其后或已到当日 24:00）'}
+            </p>
+            <Space>
+              <span>延长</span>
+              <InputNumber
+                min={1}
+                max={Math.max(limit.maxDelayMinutes, 1)}
+                step={5}
+                value={extendMinutes}
+                onChange={(v) => setExtendMinutes(v ?? 1)}
+                disabled={limit.maxDelayMinutes < 1}
+              />
+              <span>分钟</span>
+            </Space>
+          </>
+        ) : (
+          <Spin />
+        )}
+      </Modal>
+
+      <Modal
+        title="提前结束"
+        open={finishOpen}
+        confirmLoading={finishing}
+        onCancel={() => setFinishOpen(false)}
+        onOk={handleFinish}
+        okText="确认结束"
+      >
+        <p>
+          结束后会议进入「已结束」，剩余时段立即释放（别人可订）。此操作不可撤销。
+        </p>
       </Modal>
     </Card>
   )

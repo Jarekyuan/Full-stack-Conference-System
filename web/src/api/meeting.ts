@@ -198,3 +198,28 @@ export function getMeeting(id: number): Promise<MeetingDetail> {
 export function cancelMeeting(id: number, reason?: string): Promise<void> {
   return http.post<void>(`/meetings/${id}/cancel`, { reason })
 }
+
+// ———————————————————— 延长 / 提前结束（T3.F2）————————————————————
+// 状态要求：**仅进行中（30）**；权限：**仅组织人**。前端只负责"不给无意义的入口"，
+// 真正的裁决在服务端（40002 / 40004 / 40006 / 40001）。
+
+/** 可延长上限（后端 ExtendLimitVO）：R-15 的计算在服务端，reason 是给用户看的人话解释 */
+export interface ExtendLimit {
+  maxDelayMinutes: number
+  reason: string
+}
+
+/** 可延长上限；登录即可查（只读） */
+export function getExtendLimit(id: number): Promise<ExtendLimit> {
+  return http.get<ExtendLimit>(`/meetings/${id}/extend-limit`)
+}
+
+/** 延长会议（超上限 40006，data 带 maxDelayMinutes；与下一场冲突 40001） */
+export function extendMeeting(id: number, minutes: number): Promise<void> {
+  return http.post<void>(`/meetings/${id}/extend`, { minutes })
+}
+
+/** 提前结束（仅进行中，30 → 40） */
+export function finishMeeting(id: number): Promise<void> {
+  return http.post<void>(`/meetings/${id}/finish`)
+}

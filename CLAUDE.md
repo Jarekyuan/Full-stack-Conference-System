@@ -49,7 +49,7 @@
 | M1 骨架+认证+会议室 | ✅ | 23 任务：双 token 无感刷新、会议室 CRUD、策略、Feign、登录/布局 |
 | M2 后端（预约核心） | ✅ **10/10** | 状态机 → 冲突检测 → 可用性/日历 → 创建预约 → 幂等 → Redisson 锁 → 并发脚本 → 列表详情 → 取消 → 修改（乐观锁） |
 | M2 前端 | ✅ **3/3** | ✅ T2.F1 日历页（时间轴定位 + memo 行级组件化）｜✅ T2.F2 预约表单 Drawer（防抖冲突提示 + 幂等提交）｜✅ T2.F3 我的会议列表 + 详情（筛选分页 + 状态时间线 + 取消） |
-| M3 审批+生命周期 | ⬜ | 8 任务 |
+| M3 审批+生命周期 | 🔵 **进行中 6/8** | ✅ T3.1 待办/已办列表｜✅ T3.2 审批通过（复检+行锁）｜✅ T3.3 拒绝｜✅ T3.4 延长/提前结束｜✅ T3.5 定时流转｜✅ T3.6 对账补偿｜⬜ T3.F1 审批中心（前端）｜⬜ T3.F2 详情页延长/结束（前端） |
 | M4 通知+MQ+打磨 | ⬜ | 12 任务 |
 | M5 进阶+部署 | ⬜ | 7 任务 |
 
@@ -180,6 +180,9 @@ cd web && npm run dev    # http://localhost:5173
 bash scripts/concurrent-reserve.sh 5 --repeat 10   # 5 个客户端抢同一时段 → 恰好 1 成功（跑完自清理槽位）
 bash scripts/concurrent-modify.sh 10               # 改期 vs 新建抢同一时段 → 时段只落 1 场
 bash scripts/verify-review-batch4.sh               # 第 4 批修复的 33 条逐项断言（R7/R8/P1-*）
+bash scripts/verify-m3-approval.sh                # T3.1~T3.3：待办/已办、复检 50001、并发双人同审、拒绝
+bash scripts/verify-m3-extend.sh                  # T3.4：延长上限两场景、40006、复检兜底、提前结束
+bash scripts/verify-m3-scheduler.sh               # T3.5/T3.6：定时流转、多实例互斥、幂等、对账补偿（⚠️ 会接管 8082，跑完需自行重启服务）
 cd server && mvn -q test -Dtest='!AuthFeignClientTest#batchUsersShouldDegradeWhenAuthDown'  # 单测（那条降级用例需 auth 停机时单独跑）
 #   ⚠️ 别用 `mvn ... | tail`：管道会把退出码换成 tail 的（见踩坑 #10）
 

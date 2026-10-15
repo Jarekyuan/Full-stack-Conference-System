@@ -8,6 +8,7 @@ import { createBrowserRouter, Navigate } from 'react-router-dom'
 import Placeholder from '@/components/Placeholder'
 import { RequireAuth, RequireRole } from '@/components/RouteGuards'
 import MainLayout from '@/layouts/MainLayout'
+import ApprovalCenter from '@/pages/ApprovalCenter'
 import Calendar from '@/pages/Calendar'
 import Login from '@/pages/Login'
 import MeetingDetail from '@/pages/MeetingDetail'
@@ -32,7 +33,7 @@ export const router = createBrowserRouter([
             path: 'approvals',
             element: (
               <RequireRole roles={['ADMIN', 'APPROVER']}>
-                <Placeholder title="审批中心" />
+                <ApprovalCenter />
               </RequireRole>
             ),
           },
