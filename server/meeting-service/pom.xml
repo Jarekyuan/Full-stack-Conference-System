@@ -33,6 +33,16 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
+        <!--
+          RabbitMQ（T4.1：领域事件 → MQ）。
+          用 spring-boot-starter-amqp（Spring AMQP）而不是手撸 amqp-client：
+          连接管理/重连、消息转换器、@RabbitListener 都由 Boot 自动配置接管。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
+
         <!-- 参数校验（@Valid） -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

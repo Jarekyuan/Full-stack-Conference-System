@@ -9,6 +9,7 @@ import com.smt.meeting.entity.MeetingParticipant;
 import com.smt.meeting.entity.MeetingRoom;
 import com.smt.meeting.entity.RoomStrategy;
 import com.smt.meeting.enums.MeetingEventEnum;
+import com.smt.meeting.event.MeetingDomainEvent;
 import com.smt.meeting.enums.MeetingStatusEnum;
 import com.smt.meeting.lock.MeetingLockHelper;
 import com.smt.meeting.mapper.MeetingMapper;
@@ -20,6 +21,7 @@ import com.smt.meeting.vo.ExtendLimitVO;
 import com.smt.meeting.vo.MeetingConflictVO;
 import com.smt.meeting.vo.MeetingCreateVO;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -54,6 +56,8 @@ public class MeetingReserveService {
     private final MeetingStateMachine stateMachine;
     private final MeetingLockHelper lockHelper;
     private final TransactionTemplate transactionTemplate;
+    /** 领域事件发布（T4.1）：业务代码只发 Spring 事件，转投 MQ 的时机由 AFTER_COMMIT 监听器决定 */
+    private final ApplicationEventPublisher eventPublisher;
 
     public MeetingCreateVO create(MeetingCreateDTO dto, Long organiserId) {
         // ---------- 第一段：无锁前置校验（快速失败） ----------
@@ -75,6 +79,11 @@ public class MeetingReserveService {
                     saveParticipants(meeting.getId(), dto.getParticipants());
                     // 状态机补记初始日志（from_status = NULL）
                     stateMachine.logCreation(meeting.getId(), status, organiserId, null);
+                    // 领域事件在**事务内**发布，由 AFTER_COMMIT 监听器转投 MQ（T4.1）：
+                    // 这里的顺序很关键——事件注册在事务里，发送在提交后，回滚则不发
+                    eventPublisher.publishEvent(MeetingDomainEvent.created(
+                            meeting.getId(), meeting.getTitle(), meeting.getRoomId(), organiserId,
+                            meeting.getStartTime(), meeting.getEndTime()));
 
                     return new MeetingCreateVO(meeting.getId(), status, needApproval,
                             needApproval ? "预约已提交，等待审批" : "预约成功");
@@ -117,6 +126,9 @@ public class MeetingReserveService {
                     stateMachine.transition(meetingId, MeetingEventEnum.CANCEL, operatorId, reason);
                     // 取消上下文（原因 + 时间）
                     meetingMapper.updateCancelInfo(meetingId, reason);
+                    eventPublisher.publishEvent(MeetingDomainEvent.cancelled(
+                            meetingId, meeting.getTitle(), meeting.getRoomId(), meeting.getOrganiserId(),
+                            meeting.getStartTime(), meeting.getEndTime(), reason));
                     return null;
                 }));
     }
@@ -187,6 +199,10 @@ public class MeetingReserveService {
         if (backToApproval) {
             stateMachine.transition(meetingId, MeetingEventEnum.MODIFY, operatorId, "修改到需审批会议室，重新送审");
         }
+        // 修改事件（T4.1）：只改标题/备注也会走到这里，消费端按需决定要不要提醒参会人
+        eventPublisher.publishEvent(MeetingDomainEvent.updated(
+                meetingId, dto.getTitle(), dto.getRoomId(), operatorId,
+                dto.getStartTime(), dto.getEndTime(), operatorId));
     }
 
     // ---------- 延长 / 提前结束（T3.4） ----------

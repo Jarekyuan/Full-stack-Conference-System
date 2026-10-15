@@ -9,6 +9,7 @@ import com.smt.meeting.entity.Meeting;
 import com.smt.meeting.entity.MeetingApproval;
 import com.smt.meeting.enums.MeetingEventEnum;
 import com.smt.meeting.enums.MeetingStatusEnum;
+import com.smt.meeting.event.MeetingDomainEvent;
 import com.smt.meeting.lock.MeetingLockHelper;
 import com.smt.meeting.mapper.MeetingApprovalMapper;
 import com.smt.meeting.mapper.MeetingMapper;
@@ -19,6 +20,7 @@ import com.smt.meeting.vo.ApprovalResultVO;
 import com.smt.meeting.vo.ApprovalVO;
 import com.smt.meeting.vo.MeetingConflictVO;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -48,6 +50,8 @@ public class ApprovalService {
     private final MeetingStateMachine stateMachine;
     private final MeetingLockHelper lockHelper;
     private final TransactionTemplate transactionTemplate;
+    /** 领域事件发布（T4.1）：事务内发布，AFTER_COMMIT 监听器转投 MQ */
+    private final ApplicationEventPublisher eventPublisher;
 
     // ---------- T3.1 列表 ----------
 
@@ -107,6 +111,10 @@ public class ApprovalService {
 
                     stateMachine.transition(meetingId, MeetingEventEnum.APPROVE, approverId, comment);
                     insertApproval(meetingId, approverId, ACTION_PASS, comment);
+                    // 领域事件（T4.1）：通知申请人/参会人"通过了"，事务外由 AFTER_COMMIT 监听器转投 MQ
+                    eventPublisher.publishEvent(MeetingDomainEvent.approved(
+                            meetingId, locked.getTitle(), locked.getRoomId(), locked.getOrganiserId(),
+                            locked.getStartTime(), locked.getEndTime(), approverId, comment));
                     return new ApprovalResultVO(meetingId, MeetingStatusEnum.RESERVED.getCode());
                 }));
     }
@@ -138,6 +146,9 @@ public class ApprovalService {
 
             stateMachine.transition(meetingId, MeetingEventEnum.REJECT, approverId, comment);
             insertApproval(meetingId, approverId, ACTION_REJECT, comment);
+            eventPublisher.publishEvent(MeetingDomainEvent.rejected(
+                    meetingId, locked.getTitle(), locked.getRoomId(), locked.getOrganiserId(),
+                    locked.getStartTime(), locked.getEndTime(), approverId, comment));
             return new ApprovalResultVO(meetingId, MeetingStatusEnum.REJECTED.getCode());
         });
     }

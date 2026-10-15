@@ -19,6 +19,15 @@ spring:
       # 与 deploy/docker-compose.infra.yml 的 REDIS_PASSWORD 同源（评审 C1 改法①：Redis 不再免密）
       # 幂等（IdempotentAspect）与分布式锁（RedissonConfig）都连这个实例
       password: ${REDIS_PASSWORD:redis123}
+  # RabbitMQ（T4.1）：领域事件 → MQ。队列/交换机拓扑在 RabbitConfig 里声明式定义，
+  # 这里只放连接信息；容器里 guest/guest 只允许从 localhost 登录，正好与本机开发一致。
+  rabbitmq:
+    host: 127.0.0.1
+    port: 5672
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    # 发送失败要抛异常给 publisher（它自己 catch 后告警）——不能让它静默成功
+    publisher-confirm-type: correlated
   cloud:
     nacos:
       discovery:
