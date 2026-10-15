@@ -1,7 +1,11 @@
 package com.smt.meeting.mapper;
 
 import com.smt.meeting.entity.Meeting;
+import com.smt.meeting.vo.MeetingConflictVO;
 import org.apache.ibatis.annotations.Param;
+
+import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 会议主表 Mapper（SQL 手写 XML：resources/mapper/MeetingMapper.xml）
@@ -21,4 +25,14 @@ public interface MeetingMapper {
 
     /** 新增会议（T2.4 创建预约用；status 由状态机 initialStatus 决定后落库） */
     int insert(Meeting meeting);
+
+    /**
+     * 冲突检测核心查询（对照 docs/03 4.1）：扫描区间 [scanStart, scanEnd) 内该会议室的占用会议。
+     * 调用方（ConflictChecker）负责按锁定缓冲扩展扫描区间；此处只做纯区间判重。
+     * 占用状态：20 已预约 / 30 进行中（R-4：10 待审批不占用）。
+     */
+    List<MeetingConflictVO> selectConflicts(@Param("roomId") Long roomId,
+                                            @Param("scanStart") LocalDateTime scanStart,
+                                            @Param("scanEnd") LocalDateTime scanEnd,
+                                            @Param("excludeMeetingId") Long excludeMeetingId);
 }

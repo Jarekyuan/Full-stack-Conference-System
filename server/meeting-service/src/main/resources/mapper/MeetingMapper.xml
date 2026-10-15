@@ -48,4 +48,36 @@
         VALUES (#{title}, #{roomId}, #{organiserId}, #{startTime}, #{endTime}, #{status}, #{remark}, #{recurringId})
     </insert>
 
+    <!-- 冲突会议简报（JOIN sys_user 直出组织人名；同库只读展示字段） -->
+    <resultMap id="ConflictVOMap" type="com.smt.meeting.vo.MeetingConflictVO">
+        <id column="meeting_id" property="meetingId"/>
+        <result column="title" property="title"/>
+        <result column="start_time" property="startTime"/>
+        <result column="end_time" property="endTime"/>
+        <result column="organiser_id" property="organiserId"/>
+        <result column="organiser_name" property="organiserName"/>
+    </resultMap>
+
+    <!--
+      冲突检测核心查询（对照 docs/03 4.1）：
+        room_id 等值 + start_time 范围 → 命中 idx_room_time（type=range）；
+        半开区间判重：existing.start < scanEnd AND existing.end > scanStart
+        （相邻时段如 10:00-11:00 与 11:00-12:00 不冲突，因为 11:00 > 11:00 为假）
+      status IN (20,30)：占用时段的状态（R-4：10 待审批不占用）
+    -->
+    <select id="selectConflicts" resultMap="ConflictVOMap">
+        SELECT m.id AS meeting_id, m.title, m.start_time, m.end_time,
+               m.organiser_id, u.real_name AS organiser_name
+        FROM meeting m
+        LEFT JOIN sys_user u ON u.id = m.organiser_id
+        WHERE m.room_id = #{roomId}
+          AND m.status IN (20, 30)
+          AND m.start_time &lt; #{scanEnd}
+          AND m.end_time &gt; #{scanStart}
+        <if test="excludeMeetingId != null">
+            AND m.id != #{excludeMeetingId}
+        </if>
+        ORDER BY m.start_time
+    </select>
+
 </mapper>
