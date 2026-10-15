@@ -99,9 +99,11 @@
 4. **`docker exec` 进 mysql 必须加 `--default-character-set=utf8mb4`**，否则插入中文乱码
 5. **本地跑 jar 必须 `env -u SERVER__PORT`**（否则 Spring 读系统 `SERVER__PORT` 覆盖 yml 端口）
 6. **Nacos 注册 IP 已固化 `127.0.0.1`**（休眠/换网后局域网 IP 会变导致服务发现连不上）
-7. **改了后端代码，构建必须 `mvn clean package`（不能只 `package`）**：编辑器（VS Code Java 语言服务）会在后台把编译失败的文件写成 **ecj"错误桩"class 到 `target/classes`**。桩类时间戳比源码新 → Maven 增量编译**跳过**它、原样打进 jar → 启动即崩，报 `Unresolved compilation problems` 或 `ClassFormatError: Invalid method Code length 0`。
-   - 2026-10-14 日志里记为"依赖下载抖动"的那次 `MojoExecutionException`、以及 10-15 的 `MeetingUpdateDTO` ClassFormatError，根因都是它
-   - 判断法：报错信息里出现 `Unresolved compilation problems` / `ClassFormatError` / 方法名诡异的类，就是桩；`mvn clean` 即可清除
+7. **`redhat.java` 扩展锁定 1.56.0，不要升级**——升级会引发一串极难排查的编译/启动故障（已定位并修复，2026-10-15）
+   - **根因**：1.57.0 把内置 JDT core 升到 3.48、运行时 JDK 升到 25，引入了 JEP 513「Flexible Constructor Bodies」。**Lombok 生成的构造函数被它误判**成"super() 之前有语句"→ 每个 Lombok 类（`@RequiredArgsConstructor`/`@Data`…）都报 *"The Java feature 'Flexible Constructor Bodies' is only available with source level 25 and above"*。纯误报：javac 编译同一份代码完全正常。实测全工作区 241 处，且 22/22 个报错文件都是 Lombok 类（0 个非 Lombok）——这是确认误报的最快判据
+   - **危害**：语言服务认为项目编译不过 → 把 **ecj"错误桩"class 写进 `target/classes`** → 桩类时间戳比源码新 → Maven 增量编译**跳过**它、原样打进 jar → 服务启动即崩（`Unresolved compilation problems` / `ClassFormatError: Invalid method Code length 0`）。10-14 日志记为"依赖下载抖动"的 `MojoExecutionException`、10-15 的 `MeetingUpdateDTO` ClassFormatError 都是此因
+   - **处置**：已装回 1.56.0（JDT 3.47 + JDK 21，无该误报；实测报错 241 → 0）。⚠️ **在 VS Code 扩展面板对 redhat.java 点「忽略更新 / Ignore Updates」**，否则会被自动升回去、故障复现
+   - **兜底习惯**：改了后端代码一律 `mvn clean package`（`clean` 能清掉任何残留桩类）
 
 ---
 
