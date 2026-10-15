@@ -34,6 +34,13 @@
         WHERE id = #{id}
     </select>
 
+    <!-- 预约时段的数据库层兜底（docs/02 选型 #19 + docs/03 5.1）：锁住会议室行，同一会议室的
+         "判重 → 落库" 串行化；Redis 锁失效时这层仍拦得住双重预订。
+         WHERE 命中主键 → 只加行记录锁（非表锁/间隙锁），必须在事务内调用，锁随事务提交释放 -->
+    <select id="selectIdForUpdate" resultType="long">
+        SELECT id FROM meeting_room WHERE id = #{id} FOR UPDATE
+    </select>
+
     <!-- 联查 VO（列表/详情共用）：会议室 + 分组名 + 策略，一次查询避免 N+1 -->
     <resultMap id="RoomVOMap" type="com.smt.meeting.vo.RoomVO">
         <id column="id" property="id"/>

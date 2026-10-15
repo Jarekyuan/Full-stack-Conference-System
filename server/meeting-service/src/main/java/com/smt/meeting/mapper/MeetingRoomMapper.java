@@ -17,6 +17,12 @@ public interface MeetingRoomMapper {
     /** 按主键查询 */
     MeetingRoom selectById(@Param("id") Long id);
 
+    /**
+     * 事务内锁住会议室行（悲观锁，SQL 见 XML 注释）——预留时段的数据库层兜底。
+     * 调用方负责保证在事务内调用（否则锁随语句结束即释放，形同虚设）。
+     */
+    Long selectIdForUpdate(@Param("id") Long id);
+
     /** 列表联查（含分组名与策略；动态筛选：groupId 精确 / capacity 下限 / status 精确） */
     List<RoomVO> selectList(@Param("groupId") Long groupId,
                             @Param("capacity") Integer capacity,

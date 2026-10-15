@@ -54,6 +54,8 @@
 
 **当前聚焦：M2 前端三件套**。后端接口已全部就绪并通过实测（契约见 `docs/04`）。
 
+**M2 后端补强（2026-10-15）**：修掉一处双重预订竞态——`update()`（改期）原先不经过预约锁，与"新建"并发时能各自通过冲突检测、同一时段落下两场会议（**实测 10 轮 7 轮复现**）。修法：改期纳入同一把房间锁 + 事务内加会议室行锁兜底（`selectIdForUpdate`），并补齐"凡是改变时段占用状态的写路径都要取行锁"这条设计约束（审批 T3.2 同此理）。回归脚本 `scripts/concurrent-modify.sh` 修复后 10/10 通过。
+
 ---
 
 ## 4. 下一步：M2 前端三件套（详见 05 文档 T2.F1~F3）
@@ -84,6 +86,8 @@
 6. **参会人仅限系统用户**（v1.3 已砍外部参会人）：`meeting_participant` 有联合唯一键 `uk_meeting_user`
 7. **并发防护三层**：幂等（`@Idempotent` + SETNX）→ 分布式锁（`lock:meeting:{roomId}:{date}`，跨天逐日加锁）→ 乐观锁（修改会议用 `version`）
 8. **锁必须包住事务**：预约用 `TransactionTemplate`（锁外开、事务锁内提），别用 `@Transactional` 包住锁（会留"锁释放→事务提交"空窗）
+9. **凡是改变"某时段是否被占用"的写路径，都必须走同一把房间锁 + 会议室行锁**：创建（T2.4）、改期（T2.10）、审批通过（T3.2）。漏掉任何一条，那条路径就是双重预订的口子——T2.10 未加锁时实测 **10 轮里 7 轮双重预订**（乐观锁只管"同一行"，管不住跨行竞态）
+10. **数据库锁序固定「先会议室行 → 后会议行」**：审批要同时锁两把（防双人同审 + 防时段被抢），顺序反了会与改期交叉持锁死锁
 
 ---
 
@@ -95,6 +99,9 @@
 4. **`docker exec` 进 mysql 必须加 `--default-character-set=utf8mb4`**，否则插入中文乱码
 5. **本地跑 jar 必须 `env -u SERVER__PORT`**（否则 Spring 读系统 `SERVER__PORT` 覆盖 yml 端口）
 6. **Nacos 注册 IP 已固化 `127.0.0.1`**（休眠/换网后局域网 IP 会变导致服务发现连不上）
+7. **改了后端代码，构建必须 `mvn clean package`（不能只 `package`）**：编辑器（VS Code Java 语言服务）会在后台把编译失败的文件写成 **ecj"错误桩"class 到 `target/classes`**。桩类时间戳比源码新 → Maven 增量编译**跳过**它、原样打进 jar → 启动即崩，报 `Unresolved compilation problems` 或 `ClassFormatError: Invalid method Code length 0`。
+   - 2026-10-14 日志里记为"依赖下载抖动"的那次 `MojoExecutionException`、以及 10-15 的 `MeetingUpdateDTO` ClassFormatError，根因都是它
+   - 判断法：报错信息里出现 `Unresolved compilation problems` / `ClassFormatError` / 方法名诡异的类，就是桩；`mvn clean` 即可清除
 
 ---
 
@@ -112,6 +119,13 @@ cd server && env -u SERVER__PORT java -jar meeting-service/target/meeting-servic
 
 # 3. 前端
 cd web && npm run dev    # http://localhost:5173
+```
+
+**并发验证脚本**（需上面三个服务已启动；退出码非 0 = 断言失败，可用于 CI）：
+
+```bash
+bash scripts/concurrent-reserve.sh 5 --repeat 10   # 5 个客户端抢同一时段 → 恰好 1 成功
+bash scripts/concurrent-modify.sh 10               # 改期 vs 新建抢同一时段 → 时段只落 1 场
 ```
 
 **演示账号**（密码均为 `admin123`/`user123`）：

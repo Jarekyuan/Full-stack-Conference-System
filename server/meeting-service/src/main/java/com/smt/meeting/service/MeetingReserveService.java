@@ -66,6 +66,7 @@ public class MeetingReserveService {
         // ---------- 第二段：锁内复检 + 事务落库 ----------
         return lockHelper.executeWithLock(room.getId(), dto.getStartTime(), dto.getEndTime(), () ->
                 transactionTemplate.execute(txStatus -> {
+                    meetingRoomMapper.selectIdForUpdate(room.getId()); // 数据库兜底（Redis 锁失效仍拦得住）
                     // ★ 冲突检测必须在锁内：锁保证本时段串行，检测结果才可信
                     checkConflict(room.getId(), dto.getStartTime(), dto.getEndTime(), null);
 
@@ -116,8 +117,11 @@ public class MeetingReserveService {
      * 修改会议：归属校验 → 仅 RESERVED 可改（R-12）→ 改期时重跑校验链+冲突检测（排除自身）
      * → 乐观锁更新（version 校验并发）→ R-14 分流（改到需审批会议室 → 状态回 10）。
      * 只改 title/remark（不改时间/会议室）时不重跑冲突检测。
+     *
+     * 并发设计（同 create）：**改期必须与创建预约共用同一把房间锁**。
+     * 乐观锁只保护"同一行"的并发写，管不住"改到哪"与"谁能订哪"的跨行竞态——
+     * 不抢锁的话，改期与新建会各自读到旧快照、各自通过冲突检测，同一时段落下两场会议。
      */
-    @Transactional
     public void update(Long meetingId, MeetingUpdateDTO dto, Long operatorId) {
         Meeting meeting = meetingMapper.selectById(meetingId);
         if (meeting == null) {
@@ -136,23 +140,36 @@ public class MeetingReserveService {
                 || !dto.getStartTime().equals(meeting.getStartTime())
                 || !dto.getEndTime().equals(meeting.getEndTime());
 
-        boolean backToApproval = false;
-        if (scheduleChanged) {
-            MeetingRoom room = loadAvailableRoom(dto.getRoomId());
-            RoomStrategy strategy = roomStrategyMapper.selectByRoomId(room.getId());
-            validateTime(dto.getStartTime(), dto.getEndTime(), strategy);
-            checkConflict(room.getId(), dto.getStartTime(), dto.getEndTime(), meetingId); // 排除自身
-            backToApproval = isNeedApproval(strategy); // R-14：目标会议室需审批 → 回 10
+        // 只改 title/remark：占用时段没变，不涉及抢时段，无需抢锁
+        if (!scheduleChanged) {
+            transactionTemplate.executeWithoutResult(tx -> applyUpdate(meetingId, dto, operatorId, false));
+            return;
         }
 
-        // 乐观锁更新（只改非状态字段 + version 自增；version 不匹配 = 并发已改 → 40002）
+        // 改期：锁内复检 + 事务更新（校验链的无锁前置段同 create，快速失败避免无谓抢锁）
+        MeetingRoom room = loadAvailableRoom(dto.getRoomId());
+        RoomStrategy strategy = roomStrategyMapper.selectByRoomId(room.getId());
+        validateTime(dto.getStartTime(), dto.getEndTime(), strategy);
+        boolean backToApproval = isNeedApproval(strategy); // R-14：目标会议室需审批 → 回 10
+
+        lockHelper.executeWithLock(room.getId(), dto.getStartTime(), dto.getEndTime(), () ->
+                transactionTemplate.execute(tx -> {
+                    meetingRoomMapper.selectIdForUpdate(room.getId()); // 数据库兜底（Redis 锁失效仍拦得住）
+                    checkConflict(room.getId(), dto.getStartTime(), dto.getEndTime(), meetingId); // 排除自身
+                    applyUpdate(meetingId, dto, operatorId, backToApproval);
+                    return null;
+                }));
+    }
+
+    /** 乐观锁更新 + R-14 状态回退（必须在事务内调用） */
+    private void applyUpdate(Long meetingId, MeetingUpdateDTO dto, Long operatorId, boolean backToApproval) {
+        // 乐观锁（只改非状态字段 + version 自增；version 不匹配 = 并发已改 → 40002）
         int affected = meetingMapper.updateWithVersion(meetingId, dto.getTitle(), dto.getRoomId(),
                 dto.getStartTime(), dto.getEndTime(), dto.getRemark(), dto.getVersion());
         if (affected == 0) {
             throw new BusinessException(ErrorCode.MEETING_STATUS_NOT_ALLOWED.getCode(),
                     "会议已被他人修改，请刷新后重试");
         }
-
         // R-14 状态回退：20 → 10（走状态机唯一入口，保证日志一致）
         if (backToApproval) {
             stateMachine.transition(meetingId, MeetingEventEnum.MODIFY, operatorId, "修改到需审批会议室，重新送审");
