@@ -45,6 +45,23 @@ export default function ApprovalDrawer({ item, onClose, onDone, onConflict }: Ap
   const { runAsync: doPass, loading: passing } = useAppRequest(passApproval, { toastError: false })
   const { runAsync: doReject, loading: rejecting } = useAppRequest(rejectApproval, { toastError: false })
 
+  /**
+   * 审批失败的统一收尾。
+   * **50002（已被他人处理）必须走"关抽屉 + 刷新"**（docs/04 2.2 的建议）：这条待办在别人手里已经结掉了，
+   * 只弹个 toast 的话列表里那行还在，用户会反复点、反复吃同一个错。
+   */
+  const failWith = useCallback(
+    (e: unknown, fallback: string) => {
+      if (e instanceof ApiError && e.code === 50002) {
+        message.warning('该申请已被其他人处理，列表已刷新')
+        onDone()
+        return
+      }
+      message.error(e instanceof ApiError ? e.message : fallback)
+    },
+    [message, onDone],
+  )
+
   const handlePass = useCallback(async () => {
     if (!item) return
     try {
@@ -59,9 +76,9 @@ export default function ApprovalDrawer({ item, onClose, onDone, onConflict }: Ap
         onConflict(conflicts)
         return
       }
-      message.error(e instanceof ApiError ? e.message : '审批失败，请稍后重试')
+      failWith(e, '审批失败，请稍后重试')
     }
-  }, [item, comment, doPass, message, onDone, onConflict])
+  }, [item, comment, doPass, message, onDone, onConflict, failWith])
 
   const handleReject = useCallback(async () => {
     if (!item) return
@@ -75,9 +92,9 @@ export default function ApprovalDrawer({ item, onClose, onDone, onConflict }: Ap
       message.success('已拒绝该申请')
       onDone()
     } catch (e) {
-      message.error(e instanceof ApiError ? e.message : '操作失败，请稍后重试')
+      failWith(e, '操作失败，请稍后重试')
     }
-  }, [item, comment, doReject, message, onDone])
+  }, [item, comment, doReject, message, onDone, failWith])
 
   return (
     <Drawer
@@ -87,10 +104,11 @@ export default function ApprovalDrawer({ item, onClose, onDone, onConflict }: Ap
       width={460}
       extra={
         <Space>
-          <Button loading={rejecting} danger onClick={handleReject}>
+          {/* 两个按钮互相禁用：否则"通过"在飞的时候还能点"拒绝"，白吃一次 50002 */}
+          <Button loading={rejecting} disabled={passing} danger onClick={handleReject}>
             拒绝
           </Button>
-          <Button type="primary" loading={passing} onClick={handlePass}>
+          <Button type="primary" loading={passing} disabled={rejecting} onClick={handlePass}>
             通过
           </Button>
         </Space>

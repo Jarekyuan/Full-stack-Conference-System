@@ -64,9 +64,10 @@ cancel() {
     -H 'Content-Type: application/json' -d "$body"
 }
 # 找一个空闲时段且落在提前预约窗口内（默认 30 天）：从 tomorrow 起逐日试
-free_slot() { # free_slot <起始天数偏移>
-  local off d start end
-  for off in $(seq "$1" $(( $1 + 25 ))); do
+free_slot() { # free_slot <起始天数偏移>（偏移必须在提前预约窗口内：本会议室 30 天，留 2 天余量）
+  local off d start end last
+  last=$(( $1 + 25 )); [ "$last" -gt 28 ] && last=28
+  for off in $(seq "$1" "$last"); do
     d=$(date -v+"${off}"d +%Y-%m-%d)
     start="${d} 10:00:00"; end="${d} 11:00:00"
     if [ "$(availability "$U1" "$start" "$end")" = "True" ]; then echo "${start}|${end}"; return 0; fi
@@ -78,10 +79,24 @@ U1=$(login user1 user123); U2=$(login user2 user123)
 AP1=$(login approver1 user123); AP2=$(login approver2 user123)
 [ -n "$U1" ] && [ -n "$AP1" ] || { echo "登录失败，终止"; exit 1; }
 CREATED_U1=""   # user1 建的
-CREATED_U2=""   # user2 建的（**必须用 user2 自己取消**：归属校验只认组织人，用 user1 会 40004 静默失败）
+CREATED_U2=""   # user2 建的（取消必须用 user2 自己：归属校验只认组织人，用 user1 会 40004 静默失败）
+ALL_CREATED=""  # 上面两者的并集，清理时按 id 直删
+MYSQL='docker exec smt-mysql mysql --default-character-set=utf8mb4 -uroot -proot123 -N -e'
+sql() { eval "$MYSQL \"$1\"" 2>/dev/null | grep -v "Using a password"; }
+# 清理分两步：
+#   ① 走接口取消（能取消的都取消掉，顺便验证取消路径本身没问题）
+#   ② 按 id 直删（**必须**：被拒的会议是终态 60，迁移矩阵里没有 60→50 的出边，
+#      cancel 会以 40002 静默失败——只靠 ① 的话每跑一次就多留一条 60 和它的审批记录，
+#      而脚本自己还报"26/26 全过"，比不清理更隐蔽）
 cleanup() {
   for m in $CREATED_U1; do cancel "$U1" "$m"; done
   for m in $CREATED_U2; do cancel "$U2" "$m"; done
+  for m in $ALL_CREATED; do
+    sql "DELETE FROM smt_meeting.meeting_status_log WHERE meeting_id=$m;
+         DELETE FROM smt_meeting.meeting_participant WHERE meeting_id=$m;
+         DELETE FROM smt_meeting.meeting_approval WHERE meeting_id=$m;
+         DELETE FROM smt_meeting.meeting WHERE id=$m;" >/dev/null
+  done
 }
 trap cleanup EXIT
 
@@ -94,7 +109,7 @@ SLOT=$(free_slot 1) || exit 1
 S="${SLOT%%|*}"; E="${SLOT##*|}"
 echo "  （使用时段 ${S} ~ ${E}，红枫厅需审批）"
 
-M1=$(book "$U1" "M3审批-复检A" "$S" "$E") || exit 1; CREATED_U1="$CREATED_U1 $M1"
+M1=$(book "$U1" "M3审批-复检A" "$S" "$E") || exit 1; CREATED_U1="$CREATED_U1 $M1"; ALL_CREATED="$ALL_CREATED $M1"
 check "需审批会议室创建成功" "$([ -n "$M1" ] && echo ok)" "ok"
 check "创建后状态 = 10 待审批" "$(status_of "$U1" "$M1")" "10"
 check "待审批**不占用**时段（availability 仍可用）" "$(availability "$U1" "$S" "$E")" "True"
@@ -110,7 +125,7 @@ check "待办按会议开始时间升序" \
 
 echo
 echo "=== T3.2 复检：同一时段两场待审批，批掉一场后另一场必被拦 ==="
-M2=$(book "$U2" "M3审批-复检B" "$S" "$E") || exit 1; CREATED_U2="$CREATED_U2 $M2"
+M2=$(book "$U2" "M3审批-复检B" "$S" "$E") || exit 1; CREATED_U2="$CREATED_U2 $M2"; ALL_CREATED="$ALL_CREATED $M2"
 check "第二场同时段待审批也能提交（10 不占时段）" "$(status_of "$U2" "$M2")" "10"
 check "approver1 批准 M2 → 20" "$(pass_it "$AP1" "$M2" | j "d['data']['status']")" "20"
 check "批准后时段**变为占用**" "$(availability "$U1" "$S" "$E")" "False"
@@ -124,7 +139,7 @@ echo
 echo "=== T3.2 并发双人同审：恰好一个成功 ==="
 SLOT2=$(free_slot 3) || exit 1
 S2="${SLOT2%%|*}"; E2="${SLOT2##*|}"
-M3=$(book "$U1" "M3审批-并发" "$S2" "$E2") || exit 1; CREATED_U1="$CREATED_U1 $M3"
+M3=$(book "$U1" "M3审批-并发" "$S2" "$E2") || exit 1; CREATED_U1="$CREATED_U1 $M3"; ALL_CREATED="$ALL_CREATED $M3"
 R1=$(mktemp); R2=$(mktemp)
 ( pass_it "$AP1" "$M3" A | j "d['code']" > "$R1" ) &
 ( pass_it "$AP2" "$M3" B | j "d['code']" > "$R2" ) &
@@ -134,10 +149,45 @@ check "两人同时审 → 结果集 {0,50002}" "$(printf '%s\n%s\n' "$C1" "$C2"
 check "会议最终状态 20（只迁了一次）" "$(status_of "$U1" "$M3")" "20"
 
 echo
+echo "=== T3.2 并发抢占：两场同slot的待审批**同时**被批，只允许一场落地 ==="
+SLOT4=$(free_slot 8) || exit 1
+S4="${SLOT4%%|*}"; E4="${SLOT4##*|}"
+MA=$(book "$U1" "M3审批-抢占A" "$S4" "$E4") || exit 1; CREATED_U1="$CREATED_U1 $MA"; ALL_CREATED="$ALL_CREATED $MA"
+MB=$(book "$U2" "M3审批-抢占B" "$S4" "$E4") || exit 1; CREATED_U2="$CREATED_U2 $MB"; ALL_CREATED="$ALL_CREATED $MB"
+RA=$(mktemp); RB=$(mktemp)
+( pass_it "$AP1" "$MA" 同意 | j "d['code']" > "$RA" ) &
+( pass_it "$AP2" "$MB" 同意 | j "d['code']" > "$RB" ) &
+wait
+CA=$(cat "$RA"); CB=$(cat "$RB"); rm -f "$RA" "$RB"
+check "两人同时批两场同slot申请 → 结果集 {0, 50001}" \
+  "$(printf '%s\n%s\n' "$CA" "$CB" | sort | tr '\n' ',' | sed 's/,$//')" "0,50001"
+OCCUPIED=$(curl -s --noproxy '*' -X POST "$BASE/api/rooms/availability" -H "Authorization: Bearer $U1" \
+  -H 'Content-Type: application/json' \
+  -d "$(printf '{"roomIds":[%s],"startTime":"%s","endTime":"%s"}' "$ROOM" "$S4" "$E4")" \
+  | j "len(d['data']['items'][0]['conflicts'])")
+check "该时段最终只落 1 场占用（没双订）" "$OCCUPIED" "1"
+
+echo
+echo "=== 长度边界：250 字审批意见必须能通过（状态日志 remark 列宽 200 的截断回归）==="
+# 注意要用**全新的**待审批会议：上面那两场已经在并发抢占里被批过，拿它们测会得到 50002/50001
+SLOT5=$(free_slot 10) || exit 1
+S5="${SLOT5%%|*}"; E5="${SLOT5##*|}"
+ML=$(book "$U1" "M3审批-长意见" "$S5" "$E5") || exit 1; CREATED_U1="$CREATED_U1 $ML"; ALL_CREATED="$ALL_CREATED $ML"
+LONG_COMMENT=$(python3 -c "print('审' * 250)")
+check "250 字意见通过 → 0（列宽不一致时这里会 1406 → 500）" \
+  "$(pass_it "$AP1" "$ML" "$LONG_COMMENT" | j "d['code']")" "0"
+check "状态日志里的 remark 被截断到列宽 200" \
+  "$(sql "SELECT CHAR_LENGTH(remark) FROM smt_meeting.meeting_status_log WHERE meeting_id=$ML AND event='APPROVE';")" "200"
+# 用限定名 a.comment（MySQL 对限定名的保留字不必加反引号）——反引号要穿过 shell + eval 两层转义，
+# 写不对就静默返回空串，而空串断言失败时看不出是 SQL 挂了还是数据不对（这次就踩到了）
+check "审批记录里保留完整 250 字意见" \
+  "$(sql "SELECT CHAR_LENGTH(a.comment) FROM smt_meeting.meeting_approval a WHERE a.meeting_id=$ML;")" "250"
+
+echo
 echo "=== T3.3 拒绝 ==="
 SLOT3=$(free_slot 5) || exit 1
 S3="${SLOT3%%|*}"; E3="${SLOT3##*|}"
-M4=$(book "$U1" "M3审批-拒绝" "$S3" "$E3") || exit 1; CREATED_U1="$CREATED_U1 $M4"
+M4=$(book "$U1" "M3审批-拒绝" "$S3" "$E3") || exit 1; CREATED_U1="$CREATED_U1 $M4"; ALL_CREATED="$ALL_CREATED $M4"
 check "无 comment 拒绝 → 10001" "$(reject_it "$AP1" "$M4" | j "d['code']")" "10001"
 check "纯空白 comment 也拦（10001）" "$(reject_it "$AP1" "$M4" "   " | j "d['code']")" "10001"
 check "带理由拒绝 → 60" "$(reject_it "$AP1" "$M4" "该时段已安排客户接待，请改期" | j "d['data']['status']")" "60"
@@ -158,7 +208,12 @@ check "approver2 的已办箱看不到 approver1 的处理" \
 echo
 echo "=== 清理 ==="
 cleanup
-echo "  已取消本次创建的会议：user1 的 [$CREATED_U1] / user2 的 [$CREATED_U2]"
+echo "  已清理本次创建的会议：user1 的 [$CREATED_U1] / user2 的 [$CREATED_U2]"
+LEFTOVER=0
+for m in $ALL_CREATED; do
+  LEFTOVER=$(( LEFTOVER + $(sql "SELECT COUNT(*) FROM smt_meeting.meeting WHERE id=$m;") ))
+done
+check "库里已无本次数据（含被拒的终态会议）" "$LEFTOVER" "0"
 check "清理后待办不再含本次数据" \
   "$(curl -s --noproxy '*' "$BASE/api/approvals/pending?page=1&size=50" -H "Authorization: Bearer $AP1" \
      | j "any(str(x['meetingId']) in '$CREATED_U1 $CREATED_U2'.split() for x in d['data']['list'])")" "False"

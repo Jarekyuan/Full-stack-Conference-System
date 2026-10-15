@@ -162,8 +162,10 @@ const dayAfter = (n) => new Date(Date.now() + n * 86400000);
     await page.waitForTimeout(2000);
     const afterEnd = (await api(page, `/meetings/${mid2}`)).data?.endTime;
     check('延长 15 分钟后 end_time 真的变了', beforeEnd !== afterEnd, `${beforeEnd} → ${afterEnd}`);
-    check('时间线里出现「延长会议」事件',
-      (await page.getByText('延长会议').locator('..').first().isVisible().catch(() => false)) || (await page.content()).includes('延长会议'));
+    // 断言必须限定在时间线容器内：此时页面上还挂着「延长会议」**按钮**，
+    // 用整页文本包含会恒真（假保险），等于这条断言从来没验过东西
+    const timelineText = (await page.locator('.ant-timeline').first().textContent().catch(() => '')) || '';
+    check('时间线里出现「延长会议」事件', timelineText.includes('延长会议'));
 
     await page.getByRole('button', { name: '提前结束' }).click();
     await page.waitForTimeout(600);

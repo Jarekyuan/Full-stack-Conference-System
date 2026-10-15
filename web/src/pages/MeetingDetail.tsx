@@ -10,7 +10,7 @@
  * 延长的上限由**服务端**算（R-15：min(下一场开始 − 缓冲, 当日 24:00)），前端只负责展示——
  * 这条规则涉及三个量的取小，前端再算一遍就是重写一遍规则，迟早不一致。
  */
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { App, Button, Card, Descriptions, Input, InputNumber, Modal, Space, Spin, Timeline, Typography } from 'antd'
 import dayjs from 'dayjs'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -56,6 +56,16 @@ export default function MeetingDetail() {
   // 会在会议 1 的 URL 下完整显示会议 2 的标题/参会人/备注——比"空窗"更糟（评审 R10）。
   const detail = data && data.id === meetingId ? data : undefined
 
+  // 换会议（含浏览器后退切换同一路由的不同 id）时，把所有弹窗状态清掉：
+  // 否则上一场的"上限/取消原因"会留在新会议的弹窗里（同一路由元素复用、组件不重挂载）
+  useEffect(() => {
+    setCancelOpen(false)
+    setExtendOpen(false)
+    setFinishOpen(false)
+    setLimit(null)
+    setReason('')
+  }, [meetingId])
+
   const { runAsync: doCancel, loading: cancelling } = useAppRequest(cancelMeeting, { toastError: false })
   // 延长/结束的三个请求：toastError 关掉——错误由调用点按场景给文案（40006/40002 的含义各不相同）
   const { runAsync: fetchLimit, loading: limitLoading } = useAppRequest(getExtendLimit, { toastError: true })
@@ -95,6 +105,17 @@ export default function MeetingDetail() {
       setExtendOpen(false)
       refresh() // 延长后 end_time 与时间线都变了
     } catch (e) {
+      if (e instanceof ApiError && e.code === 40006) {
+        // 上限在我打开弹窗之后变了（有人订了紧随其后的时段）——docs/04 2.2 要求"更新弹窗上限"，
+        // 否则用户只能关掉重开；后端 40006 的 data 里带的就是**锁内刚算出来**的新上限，直接用
+        const max = (e.data as { maxDelayMinutes?: number } | null)?.maxDelayMinutes
+        if (typeof max === 'number') {
+          setLimit({ maxDelayMinutes: max, reason: '刚有人订了紧随其后的时段，上限已更新' })
+          setExtendMinutes((m) => Math.min(Math.max(max, 1), m))
+        }
+        message.warning(e.message)
+        return
+      }
       message.error(e instanceof ApiError ? e.message : '延长失败，请稍后重试')
     }
   }, [doExtend, meetingId, extendMinutes, message, refresh])

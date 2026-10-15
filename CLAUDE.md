@@ -154,7 +154,20 @@
      **单测红了先查库，别先怀疑代码**：`SELECT id,title FROM meeting WHERE status IN (10,20,30) AND start_time >= '...'`。
    - 判断"是不是自己造的"最省事的办法：看 `created_at` 是不是刚才、标题是不是 `并发验证-*` / `E2E*` / `C4验证-*`。
 
-10. **跑 Maven 别被管道吞掉退出码**（2026-10-15 踩到，白跑两次）：
+10. **用户可控字符串的长度上限必须与目标列宽对齐**（2026-10-15 M3 评审抓到，差点漏网）：
+    - 审批意见 DTO 允许 500 字（`meeting_approval.comment` 也是 500），但它同时被写进
+      `meeting_status_log.remark`（**VARCHAR(200)**）→ 写 250 字意见时严格模式（`STRICT_TRANS_TABLES`）
+      直接 `1406 Data too long` → **审批 500 失败、整笔业务回滚**（会议停在待审批）。
+    - **修法**：在**列宽的所有者**那里截断（`MeetingStateMachine.insertLog` 统一截断到列宽），
+      而不是逐个改调用方——调用方还会增加，列宽不会。全文留在业务表，日志是摘要。
+    - ⚠️ 截断本身也有坑：hutool 的 `StrUtil.maxLength(s, 200)` 会**额外追加 `"..."`**，
+      得到 203 字符照样超宽。传参要把省略号算进预算（`200 - 3`）。
+    - **自查方式**：新增/修改 DTO 时，对着 `db/01-schema.sql` 核一遍每个字符串字段的列宽；
+      同型问题本次还查出 `sys_user.email`（列宽 100，DTO 只校验了 `@Email` 没限长）。
+    - **教训**：修复必须配一条**写得进**的验收用例——这条 bug 是靠"250 字意见必须通过"的断言
+      才在修复后又被抓出一次（第一次的修复就是错的）。
+
+11. **跑 Maven 别被管道吞掉退出码**（2026-10-15 踩到，白跑两次）：
     `mvn ... | tail -20` 的 `$?` 是 `tail` 的退出码，**永远 0**；而 `-DskipTests` 只跳过"执行"、**仍然编译测试类**，
     测试编译失败一样算构建失败。写法：`mvn ... > /tmp/build.log 2>&1; echo $?`（或 `set -o pipefail`）。
     本次教训：`GlobalExceptionHandler.handleAccessDenied` 签名从 `Result` 改成 `ResponseEntity` 后，
@@ -190,7 +203,7 @@ bash scripts/verify-m3-approval.sh                # T3.1~T3.3：待办/已办、
 bash scripts/verify-m3-extend.sh                  # T3.4：延长上限两场景、40006、复检兜底、提前结束
 bash scripts/verify-m3-scheduler.sh               # T3.5/T3.6：定时流转、多实例互斥、幂等、对账补偿（⚠️ 会接管 8082，跑完需自行重启服务）
 cd server && mvn -q test -Dtest='!AuthFeignClientTest#batchUsersShouldDegradeWhenAuthDown'  # 单测（那条降级用例需 auth 停机时单独跑）
-#   ⚠️ 别用 `mvn ... | tail`：管道会把退出码换成 tail 的（见踩坑 #10）
+#   ⚠️ 别用 `mvn ... | tail`：管道会把退出码换成 tail 的（见踩坑 #11）
 
 # 前端
 cd web && npm run check     # = tsc --noEmit + eslint + vitest（26 例）
