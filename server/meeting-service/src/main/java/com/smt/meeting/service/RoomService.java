@@ -36,9 +36,9 @@ public class RoomService {
                 .toList();
     }
 
-    /** 列表：capacity 为"至少可容纳 N 人"语义（>=） */
-    public List<RoomVO> list(Long groupId, Integer capacity, Integer status) {
-        return meetingRoomMapper.selectList(groupId, capacity, status);
+    /** 列表：capacity 为"至少可容纳 N 人"语义（>=）；device 为设备标签精确命中（JSON 数组包含） */
+    public List<RoomVO> list(Long groupId, Integer capacity, Integer status, String device) {
+        return meetingRoomMapper.selectList(groupId, capacity, status, device);
     }
 
     public RoomVO detail(Long id) {
@@ -54,6 +54,7 @@ public class RoomService {
     /** 新增会议室 + 自动创建默认策略（同一事务，默认值对齐种子标准厅） */
     @Transactional
     public Long create(RoomSaveDTO dto) {
+        ensureGroupExists(dto.getGroupId());
         MeetingRoom room = new MeetingRoom();
         room.setName(dto.getName());
         room.setGroupId(dto.getGroupId());
@@ -81,6 +82,7 @@ public class RoomService {
     @Transactional
     public void update(Long id, RoomSaveDTO dto) {
         ensureRoomExists(id);
+        ensureGroupExists(dto.getGroupId());
         MeetingRoom room = new MeetingRoom();
         room.setId(id);
         room.setName(dto.getName());
@@ -122,6 +124,16 @@ public class RoomService {
     private void ensureRoomExists(Long id) {
         if (meetingRoomMapper.selectById(id) == null) {
             throw new BusinessException(ErrorCode.ROOM_NOT_FOUND);
+        }
+    }
+
+    /**
+     * 分组存在性校验（评审 P1-9）：无数据库外键，悬空 group_id 会静默落库——
+     * 该会议室在"按分组筛选"时永远查不到、列表里分组名为空，而管理员看不出哪里错了。
+     */
+    private void ensureGroupExists(Long groupId) {
+        if (groupId != null && roomGroupMapper.selectById(groupId) == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(), "会议室分组不存在: " + groupId);
         }
     }
 }

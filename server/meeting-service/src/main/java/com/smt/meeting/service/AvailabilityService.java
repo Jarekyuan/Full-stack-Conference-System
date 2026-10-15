@@ -30,9 +30,13 @@ public class AvailabilityService {
     private final ConflictChecker conflictChecker;
     private final MeetingMapper meetingMapper;
 
-    /** 批量可用性：逐会议室调冲突检测（无锁），组装 available + conflicts */
+    /**
+     * 批量可用性：逐会议室调冲突检测（无锁），组装 available + conflicts。
+     * `distinct()` 去重：重复 id 只会得到两条内容完全相同的结论，却要多付一次查询（评审 R7）。
+     */
     public AvailabilityVO check(AvailabilityQueryDTO dto) {
         List<AvailabilityVO.Item> items = dto.getRoomIds().stream()
+                .distinct()
                 .map(roomId -> {
                     List<MeetingConflictVO> conflicts = conflictChecker.findConflicts(
                             roomId, dto.getStartTime(), dto.getEndTime(), dto.getExcludeMeetingId());

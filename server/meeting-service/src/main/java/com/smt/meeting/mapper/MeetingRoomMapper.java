@@ -23,10 +23,11 @@ public interface MeetingRoomMapper {
      */
     Long selectIdForUpdate(@Param("id") Long id);
 
-    /** 列表联查（含分组名与策略；动态筛选：groupId 精确 / capacity 下限 / status 精确） */
+    /** 列表联查（含分组名与策略；动态筛选：groupId 精确 / capacity 下限 / status 精确 / device 命中标签） */
     List<RoomVO> selectList(@Param("groupId") Long groupId,
                             @Param("capacity") Integer capacity,
-                            @Param("status") Integer status);
+                            @Param("status") Integer status,
+                            @Param("device") String device);
 
     /** 详情联查（含分组名与策略） */
     RoomVO selectDetailById(@Param("id") Long id);

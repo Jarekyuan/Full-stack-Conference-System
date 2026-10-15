@@ -57,12 +57,15 @@
     </select>
 
     <!-- 用户名/姓名模糊搜索（选参会人场景，最多 20 条；左模糊无法走索引，用户量小可接受） -->
-    <select id="searchByKeyword" resultMap="BaseResultMap">
-        SELECT <include refid="BaseColumns"/>
-        FROM sys_user
-        WHERE username LIKE CONCAT('%', #{keyword}, '%')
-           OR real_name LIKE CONCAT('%', #{keyword}, '%')
-        ORDER BY id
+    <!-- 选参会人搜索（评审 P1-13）：只取 Picker 真正要用的三个字段（id/姓名/部门），
+         不再SELECT整行再在 Service 里挑字段——少查字段、也彻底杜绝 email 这类 PII 顺带出去 -->
+    <select id="searchBrief" resultType="com.smt.auth.vo.UserSearchVO">
+        SELECT u.id AS id, u.real_name AS realName, d.name AS deptName
+        FROM sys_user u
+        LEFT JOIN sys_dept d ON d.id = u.dept_id
+        WHERE u.username LIKE CONCAT('%', #{keyword}, '%')
+           OR u.real_name LIKE CONCAT('%', #{keyword}, '%')
+        ORDER BY u.id
         LIMIT 20
     </select>
 

@@ -18,6 +18,8 @@ public enum ErrorCode {
     RATE_LIMITED(10005, "请求过于频繁，请稍后再试"),
     DUPLICATE_SUBMIT(10006, "请勿重复提交"),
     SYSTEM_BUSY(10007, "系统繁忙，请重试"),
+    METHOD_NOT_ALLOWED(10008, "请求方法不支持"),
+    UNSUPPORTED_MEDIA_TYPE(10009, "不支持的请求内容类型"),
 
     // ---- 2xxxx 认证与用户 ----
     LOGIN_FAILED(20001, "用户名或密码错误"),

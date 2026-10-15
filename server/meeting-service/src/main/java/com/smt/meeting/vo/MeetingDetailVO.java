@@ -29,16 +29,20 @@ public class MeetingDetailVO {
     private Integer version;
     private LocalDateTime createdAt;
 
-    /** 参会人列表（含姓名/邮箱，JOIN sys_user） */
+    /** 参会人列表（JOIN sys_user 取姓名；**不含 email**，见 ParticipantVO 注释） */
     private List<ParticipantVO> participants;
     /** 状态变更时间线（升序，含操作人姓名） */
     private List<StatusLogVO> logs;
 
+    /**
+     * 参会人精简信息。
+     * 不含 email（评审 R8）：详情对任意登录用户开放且 id 可枚举，返回邮箱 = 可翻页的通讯录，
+     * 而前端从不渲染它——零业务价值的 PII 暴露。需要邮箱的场景（M4 通知）走 /internal/users/batch。
+     */
     @Data
     public static class ParticipantVO {
         private Long userId;
         private String realName;
-        private String email;
     }
 
     @Data

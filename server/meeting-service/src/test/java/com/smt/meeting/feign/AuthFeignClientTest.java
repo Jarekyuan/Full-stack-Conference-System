@@ -1,5 +1,6 @@
 package com.smt.meeting.feign;
 
+import com.smt.common.result.ErrorCode;
 import com.smt.common.result.Result;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -9,6 +10,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
  * Feign 调用双态验证（依赖 Nacos + auth-service 已启动）：
@@ -36,8 +38,9 @@ class AuthFeignClientTest {
     void batchUsersShouldDegradeWhenAuthDown() {
         Result<List<UserBriefVO>> result = authFeignClient.batchUsers(new UserBatchDTO(List.of(1L, 4L, 5L)));
 
-        // 降级：返回 success + 空列表（不抛异常，调用方按"查不到姓名"处理）
-        assertEquals(0, result.getCode());
-        assertEquals(List.of(), result.getData());
+        // 降级：不抛异常（不阻断主流程），但必须是**非 0 code**——
+        // 旧实现回 success + 空列表，调用方分不清"auth 挂了"与"这批 id 查无此人"（评审 P1-16）
+        assertEquals(ErrorCode.SYSTEM_BUSY.getCode(), result.getCode());
+        assertNull(result.getData());
     }
 }

@@ -33,12 +33,13 @@ public class RoomController {
 
     // ---------- 查询（T1.15） ----------
 
-    /** 列表（筛选：groupId 精确 / capacity 下限 / status 精确） */
+    /** 列表（筛选：groupId 精确 / capacity 下限 / status 精确 / device 命中设备标签） */
     @GetMapping
     public Result<List<RoomVO>> list(@RequestParam(required = false) Long groupId,
                                      @RequestParam(required = false) Integer capacity,
-                                     @RequestParam(required = false) Integer status) {
-        return Result.success(roomService.list(groupId, capacity, status));
+                                     @RequestParam(required = false) Integer status,
+                                     @RequestParam(required = false) String device) {
+        return Result.success(roomService.list(groupId, capacity, status, device));
     }
 
     /** 详情（含分组名与策略） */

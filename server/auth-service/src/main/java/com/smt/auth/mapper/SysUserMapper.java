@@ -1,6 +1,7 @@
 package com.smt.auth.mapper;
 
 import com.smt.auth.entity.SysUser;
+import com.smt.auth.vo.UserSearchVO;
 import com.smt.auth.vo.UserVO;
 import org.apache.ibatis.annotations.Param;
 
@@ -20,8 +21,8 @@ public interface SysUserMapper {
     /** 批量按主键查询（IN + foreach；内部接口最多 100 个 id） */
     List<SysUser> selectByIds(@Param("ids") List<Long> ids);
 
-    /** 用户名/姓名模糊搜索（选参会人场景，最多 20 条） */
-    List<SysUser> searchByKeyword(@Param("keyword") String keyword);
+    /** 用户名/姓名模糊搜索（选参会人场景，最多 20 条；LEFT JOIN 部门直出 deptName） */
+    List<UserSearchVO> searchBrief(@Param("keyword") String keyword);
 
     /** 统计总数（分页配套 COUNT；可按部门筛选） */
     long countAll(@Param("deptId") Long deptId);

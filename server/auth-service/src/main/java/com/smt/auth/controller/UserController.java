@@ -2,6 +2,7 @@ package com.smt.auth.controller;
 
 import com.smt.auth.dto.UserCreateDTO;
 import com.smt.auth.service.UserService;
+import com.smt.auth.vo.UserSearchVO;
 import com.smt.auth.vo.UserVO;
 import com.smt.common.result.PageResult;
 import com.smt.common.result.Result;
@@ -30,9 +31,9 @@ public class UserController {
 
     private final UserService userService;
 
-    /** 选参会人搜索 */
+    /** 选参会人搜索（出参 UserSearchVO：id/realName/deptName，见 docs/04 3.1） */
     @GetMapping("/search")
-    public Result<List<UserVO>> search(@RequestParam String keyword) {
+    public Result<List<UserSearchVO>> search(@RequestParam String keyword) {
         return Result.success(userService.search(keyword));
     }
 

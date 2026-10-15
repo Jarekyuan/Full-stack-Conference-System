@@ -69,7 +69,8 @@
         s.cancel_deadline_minutes, s.buffer_minutes, s.allow_recurring
     </sql>
 
-    <!-- 列表：动态筛选（capacity 为下限语义，走 idx 全表小数据直接排序） -->
+    <!-- 列表：动态筛选（capacity 为下限语义；device 走 JSON_CONTAINS 精确命中标签，device_tags 为 NULL 的房间自然落选）
+         注：JSON_CONTAINS 无法走索引 → 全表扫描。会议室量级小（<百）可接受；上万行时应改为标签关联表 -->
     <select id="selectList" resultMap="RoomVOMap">
         SELECT <include refid="RoomVOColumns"/>
         FROM meeting_room r
@@ -79,6 +80,9 @@
             <if test="groupId != null">AND r.group_id = #{groupId}</if>
             <if test="capacity != null">AND r.capacity &gt;= #{capacity}</if>
             <if test="status != null">AND r.status = #{status}</if>
+            <if test="device != null and device != ''">
+                AND JSON_CONTAINS(r.device_tags, JSON_QUOTE(#{device}))
+            </if>
         </where>
         ORDER BY r.group_id, r.id
     </select>

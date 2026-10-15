@@ -17,4 +17,11 @@
         ORDER BY sort_order, id
     </select>
 
+    <!-- 存在性校验用（会议室新增/修改时校验 group_id 不是悬空引用） -->
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT id, name, sort_order, created_at
+        FROM room_group
+        WHERE id = #{id}
+    </select>
+
 </mapper>

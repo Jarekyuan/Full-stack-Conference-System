@@ -27,15 +27,14 @@
         ORDER BY id
     </select>
 
-    <!-- 参会人明细（T2.8 详情）：JOIN sys_user 直出姓名/邮箱 -->
+    <!-- 参会人明细（T2.8 详情）：JOIN sys_user 只取姓名——**不取 email**（评审 R8：详情公开可查且 id 可枚举，邮箱是零业务价值的 PII 暴露） -->
     <resultMap id="ParticipantVOMap" type="com.smt.meeting.vo.MeetingDetailVO$ParticipantVO">
         <result column="user_id" property="userId"/>
         <result column="real_name" property="realName"/>
-        <result column="email" property="email"/>
     </resultMap>
 
     <select id="selectDetailByMeetingId" resultMap="ParticipantVOMap">
-        SELECT mp.user_id, u.real_name, u.email
+        SELECT mp.user_id, u.real_name
         FROM meeting_participant mp
         JOIN sys_user u ON u.id = mp.user_id
         WHERE mp.meeting_id = #{meetingId}
