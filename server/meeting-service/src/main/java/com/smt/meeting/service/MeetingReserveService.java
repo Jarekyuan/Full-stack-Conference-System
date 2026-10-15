@@ -16,6 +16,7 @@ import com.smt.meeting.mapper.MeetingParticipantMapper;
 import com.smt.meeting.mapper.MeetingRoomMapper;
 import com.smt.meeting.mapper.RoomStrategyMapper;
 import com.smt.meeting.statemachine.MeetingStateMachine;
+import com.smt.meeting.vo.ExtendLimitVO;
 import com.smt.meeting.vo.MeetingConflictVO;
 import com.smt.meeting.vo.MeetingCreateVO;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +25,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 
@@ -186,6 +188,146 @@ public class MeetingReserveService {
             stateMachine.transition(meetingId, MeetingEventEnum.MODIFY, operatorId, "修改到需审批会议室，重新送审");
         }
     }
+
+    // ---------- 延长 / 提前结束（T3.4） ----------
+
+    /**
+     * 可延长上限（只读，登录即可查；R-15）：
+     * `min(下一场会议开始 − 锁定缓冲, 当日 24:00) − 当前结束时间`，并给出人话解释。
+     */
+    public ExtendLimitVO extendLimit(Long meetingId) {
+        Meeting meeting = meetingMapper.selectById(meetingId);
+        if (meeting == null) {
+            throw new BusinessException(ErrorCode.MEETING_NOT_FOUND);
+        }
+        return computeExtendLimit(meeting);
+    }
+
+    /**
+     * 延长进行中的会议（R-15 + C-10）。
+     *
+     * 并发设计与 create/update/cancel 同源：**延长会扩大时段占用**（end 往后推），
+     * 所以必须走同一把房间锁 + 会议室行锁（CLAUDE.md 红线 #9），否则"延长"与"别人订下一场"
+     * 会各自读到旧快照、各自通过校验，落成两场重叠会议。
+     *
+     * 上限算两遍（锁外一次快速失败、锁内一次作准）：锁外那次是为了让显然超限的请求早点结束，
+     * 锁内那次才是裁决——两次之间可能有人插进来一场，这正是 TOCTOU 的经典形态。
+     */
+    public void extend(Long meetingId, int minutes, Long operatorId) {
+        Meeting meeting = meetingMapper.selectById(meetingId);
+        if (meeting == null) {
+            throw new BusinessException(ErrorCode.MEETING_NOT_FOUND);
+        }
+        if (!meeting.getOrganiserId().equals(operatorId)) {
+            throw new BusinessException(ErrorCode.NOT_MEETING_OWNER);
+        }
+        requireOngoing(meeting);
+
+        // 锁外快速失败（上限随数据变化，这里只拦"明显超了"的请求）
+        long limitOutside = computeExtendLimit(meeting).maxDelayMinutes();
+        if (minutes > limitOutside) {
+            throw new BusinessException(ErrorCode.EXTEND_LIMIT_EXCEEDED, Map.of("maxDelayMinutes", limitOutside));
+        }
+
+        LocalDateTime newEnd = meeting.getEndTime().plusMinutes(minutes);
+        lockHelper.executeWithLock(meeting.getRoomId(), meeting.getStartTime(), newEnd, () ->
+                transactionTemplate.execute(tx -> {
+                    meetingRoomMapper.selectIdForUpdate(meeting.getRoomId());      // ① 会议室行（锁序第一步）
+                    Meeting locked = meetingMapper.selectByIdForUpdate(meetingId); // ② 会议行
+                    if (locked == null) {
+                        throw new BusinessException(ErrorCode.MEETING_NOT_FOUND);
+                    }
+                    requireOngoing(locked);
+
+                    // 锁内重算上限（作准）：锁外那次算完到这里之间，可能刚有人订了下一场
+                    long limitInside = computeExtendLimit(locked).maxDelayMinutes();
+                    if (minutes > limitInside) {
+                        throw new BusinessException(ErrorCode.EXTEND_LIMIT_EXCEEDED,
+                                Map.of("maxDelayMinutes", limitInside));
+                    }
+
+                    // 冲突复检（排除自身）：上限已含缓冲，这里是第二道——防"上限是按旧数据算的"
+                    List<MeetingConflictVO> conflicts = conflictChecker.findConflicts(
+                            locked.getRoomId(), locked.getStartTime(), newEnd, meetingId);
+                    if (!conflicts.isEmpty()) {
+                        throw new BusinessException(ErrorCode.TIME_CONFLICT, Map.of("conflicts", conflicts));
+                    }
+
+                    int affected = meetingMapper.updateEndTime(meetingId, newEnd, locked.getVersion(),
+                            MeetingStatusEnum.ONGOING.getCode());
+                    if (affected == 0) {
+                        throw new BusinessException(ErrorCode.MEETING_STATUS_NOT_ALLOWED.getCode(),
+                                "会议状态已变化（可能已结束或被取消），请刷新后重试");
+                    }
+                    stateMachine.logExtension(meetingId, operatorId, String.format(
+                            "延长 %d 分钟（%s → %s）",
+                            minutes,
+                            locked.getEndTime().format(DateTimeFormatter.ofPattern("HH:mm")),
+                            newEnd.format(DateTimeFormatter.ofPattern("HH:mm"))));
+                    return null;
+                }));
+    }
+
+    /**
+     * 提前结束进行中的会议（docs/04 3.2）：状态机 30 → 40。
+     * 与 cancel 同理要取房间锁——提前结束会**释放**剩余时段，不取锁时并发的冲突检测会读到
+     * "还没结束"的旧快照，报一场假冲突。
+     */
+    public void finish(Long meetingId, Long operatorId) {
+        Meeting meeting = meetingMapper.selectById(meetingId);
+        if (meeting == null) {
+            throw new BusinessException(ErrorCode.MEETING_NOT_FOUND);
+        }
+        if (!meeting.getOrganiserId().equals(operatorId)) {
+            throw new BusinessException(ErrorCode.NOT_MEETING_OWNER);
+        }
+        // 只允许"进行中"提前结束：迁移表里 RESERVED + END 也通（那是定时任务的"到点结束"），
+        // 若不在入口挡住，给未开始的会议点"提前结束"会被静默接受成"已结束"
+        requireOngoing(meeting);
+
+        lockHelper.executeWithLock(meeting.getRoomId(), meeting.getStartTime(), meeting.getEndTime(), () ->
+                transactionTemplate.execute(tx -> {
+                    meetingRoomMapper.selectIdForUpdate(meeting.getRoomId());
+                    stateMachine.transition(meetingId, MeetingEventEnum.END, operatorId, "组织人提前结束");
+                    return null;
+                }));
+    }
+
+    /** 延长/提前结束的共同前置：必须是进行中（否则 40002） */
+    private void requireOngoing(Meeting meeting) {
+        if (meeting.getStatus() == null || meeting.getStatus() != MeetingStatusEnum.ONGOING.getCode()) {
+            throw new BusinessException(ErrorCode.MEETING_STATUS_NOT_ALLOWED.getCode(),
+                    "仅进行中的会议可执行该操作");
+        }
+    }
+
+    /** R-15 上限计算：min(下一场开始 − 缓冲, 当日 24:00) − 当前 end，并解释"是谁卡住了你" */
+    private ExtendLimitVO computeExtendLimit(Meeting meeting) {
+        LocalDateTime end = meeting.getEndTime();
+        LocalDateTime dayEnd = end.toLocalDate().plusDays(1).atStartOfDay(); // 当日 24:00
+        RoomStrategy strategy = roomStrategyMapper.selectByRoomId(meeting.getRoomId());
+        int buffer = strategy == null || strategy.getBufferMinutes() == null ? 0 : strategy.getBufferMinutes();
+
+        LocalDateTime nextStart = meetingMapper.selectNextMeetingStart(meeting.getRoomId(), end, meeting.getId());
+        LocalDateTime limit = dayEnd;
+        String reason = "当日无后续会议，最多可延至 24:00";
+        if (nextStart != null) {
+            LocalDateTime byNext = nextStart.minusMinutes(buffer);
+            if (byNext.isBefore(limit)) {
+                limit = byNext;
+                reason = buffer > 0
+                        ? String.format("下一场会议 %s 开始（含 %d 分钟锁定缓冲）",
+                                nextStart.format(HHMM), buffer)
+                        : String.format("下一场会议 %s 开始", nextStart.format(HHMM));
+            } else {
+                reason = "下一场会议在次日，最多可延至 24:00";
+            }
+        }
+        long maxDelay = Math.max(Duration.between(end, limit).toMinutes(), 0);
+        return new ExtendLimitVO(maxDelay, reason);
+    }
+
+    private static final DateTimeFormatter HHMM = DateTimeFormatter.ofPattern("HH:mm");
 
     // ---------- 校验链 ----------
 

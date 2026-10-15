@@ -73,6 +73,25 @@ public interface MeetingMapper {
     int updateCancelInfo(@Param("id") Long id, @Param("reason") String reason);
 
     /**
+     * 乐观锁更新结束时间（T3.4 延长会议）：只改 end_time + version 自增。
+     * 不复用 {@link #updateWithVersion} 是因为延长**不该碰** title/room/start——用全字段更新的方法
+     * 意味着要把原值再传一遍，一旦传错就是"改个时长顺手把标题也改了"。
+     * WHERE 同时校 version 与 status：状态被定时任务推进（30→40）时以影响 0 行收场，按 40002 处理。
+     */
+    int updateEndTime(@Param("id") Long id,
+                      @Param("endTime") LocalDateTime endTime,
+                      @Param("version") int version,
+                      @Param("expectedStatus") int expectedStatus);
+
+    /**
+     * 该会议室在 `after` 之后**最早一场**占用会议的开始时间（T3.4 算延长上限，R-15）。
+     * 占用状态：20/30（与冲突检测同一口径）；排除自身；无下一场返回 null。
+     */
+    LocalDateTime selectNextMeetingStart(@Param("roomId") Long roomId,
+                                         @Param("after") LocalDateTime after,
+                                         @Param("excludeMeetingId") Long excludeMeetingId);
+
+    /**
      * 待审批列表（T3.1）：status=10 的会议 + 会议室名/组织人名/用途备注。
      * 与列表 VO 分开的原因：`MeetingVO` 按场景裁剪掉了 remark，而审批人正是靠它做判断（见 docs/04 3.2）。
      */

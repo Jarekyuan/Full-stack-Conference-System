@@ -66,6 +66,18 @@ public class MeetingStateMachine {
         insertLog(meetingId, null, toStatus, MeetingEventEnum.RESERVE, operatorId, remark);
     }
 
+    /**
+     * 记录"延长会议"审计日志（T3.4）：状态不变（30 → 30），变的是 `end_time`。
+     *
+     * 为什么走状态机而不是业务代码直接插日志：延长的每一次 `end_time` 变化都必须留下
+     * who/when/为什么，审计口径要与其他变更一致（时间线里能看出"14:00-15:00 延长成 14:00-16:00"）。
+     * 不能用 {@link #transition}：它要求状态真的发生变化，CAS 会以 0 行失败收场。
+     */
+    public void logExtension(Long meetingId, Long operatorId, String remark) {
+        insertLog(meetingId, MeetingStatusEnum.ONGOING.getCode(), MeetingStatusEnum.ONGOING.getCode(),
+                MeetingEventEnum.EXTEND, operatorId, remark);
+    }
+
     /** 状态迁移（无备注的便捷重载；事务由 4 参方法所在的 public 入口保证） */
     @Transactional
     public void transition(Long meetingId, MeetingEventEnum event, Long operatorId) {

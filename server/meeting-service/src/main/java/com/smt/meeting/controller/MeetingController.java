@@ -6,10 +6,12 @@ import com.smt.common.result.Result;
 import com.smt.meeting.aop.Idempotent;
 import com.smt.meeting.dto.MeetingCancelDTO;
 import com.smt.meeting.dto.MeetingCreateDTO;
+import com.smt.meeting.dto.MeetingExtendDTO;
 import com.smt.meeting.dto.MeetingQueryDTO;
 import com.smt.meeting.dto.MeetingUpdateDTO;
 import com.smt.meeting.service.MeetingQueryService;
 import com.smt.meeting.service.MeetingReserveService;
+import com.smt.meeting.vo.ExtendLimitVO;
 import com.smt.meeting.vo.MeetingCreateVO;
 import com.smt.meeting.vo.MeetingDetailVO;
 import com.smt.meeting.vo.MeetingVO;
@@ -81,5 +83,25 @@ public class MeetingController {
     public Result<MeetingCreateVO> create(@Valid @RequestBody MeetingCreateDTO dto) {
         Long organiserId = UserContext.getUserId();
         return Result.success(reserveService.create(dto, organiserId));
+    }
+
+    /** 可延长上限（docs/04 4.6，T3.4）：R-15 的计算在服务端，前端只负责展示 maxDelayMinutes + reason */
+    @GetMapping("/{id}/extend-limit")
+    public Result<ExtendLimitVO> extendLimit(@PathVariable Long id) {
+        return Result.success(reserveService.extendLimit(id));
+    }
+
+    /** 延长会议（组织人；仅进行中，超上限 40006，与下一场冲突 40001） */
+    @PostMapping("/{id}/extend")
+    public Result<Void> extend(@PathVariable Long id, @Valid @RequestBody MeetingExtendDTO dto) {
+        reserveService.extend(id, dto.getMinutes(), UserContext.getUserId());
+        return Result.success();
+    }
+
+    /** 提前结束（组织人；仅进行中，30 → 40） */
+    @PostMapping("/{id}/finish")
+    public Result<Void> finish(@PathVariable Long id) {
+        reserveService.finish(id, UserContext.getUserId());
+        return Result.success();
     }
 }

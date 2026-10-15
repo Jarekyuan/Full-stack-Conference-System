@@ -217,6 +217,28 @@
         WHERE status = 10
     </select>
 
+    <!-- 延长会议（T3.4）：只动 end_time 与 version，WHERE 双条件兜住并发（version）与状态漂移（status） -->
+    <update id="updateEndTime">
+        UPDATE meeting
+        SET end_time = #{endTime},
+            version = version + 1,
+            updated_at = NOW()
+        WHERE id = #{id}
+          AND version = #{version}
+          AND status = #{expectedStatus}
+    </update>
+
+    <!-- 下一场占用会议的开始时间（R-15：延长终点 ≤ 下一场开始 − 锁定缓冲）：
+         口径与 selectConflicts 一致（20/30 为占用态），排除自身；无下一场 → 返回 NULL -->
+    <select id="selectNextMeetingStart" resultType="java.time.LocalDateTime">
+        SELECT MIN(start_time)
+        FROM meeting
+        WHERE room_id = #{roomId}
+          AND status IN (20, 30)
+          AND start_time &gt;= #{after}
+          <if test="excludeMeetingId != null">AND id &lt;&gt; #{excludeMeetingId}</if>
+    </select>
+
     <!-- 详情 VO（全字段 + 展示冗余；participants/logs 由 Service 另行装配） -->
     <resultMap id="MeetingDetailMap" type="com.smt.meeting.vo.MeetingDetailVO">
         <id column="id" property="id"/>
