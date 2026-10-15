@@ -14,6 +14,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { getRoomCalendar, type CalendarDay, type CalendarMeeting } from '@/api/meeting'
 import { listRooms, type Room } from '@/api/room'
 import { CalendarGrid, type EmptySlot } from '@/components/CalendarGrid'
+import BookingDrawer, { type BookingPrefill } from '@/pages/BookingDrawer'
 import { useAppRequest } from '@/hooks/useAppRequest'
 
 /** 取该日期所在周的周一（dayjs day(): 0=周日 … 6=周六） */
@@ -32,9 +33,11 @@ interface WeekPayload {
 export default function Calendar() {
   const { message } = App.useApp()
   const [week, setWeek] = useState<Dayjs>(() => mondayOf(dayjs()))
+  const [bookingOpen, setBookingOpen] = useState(false)
+  const [prefill, setPrefill] = useState<BookingPrefill | null>(null)
   const weekStr = week.format('YYYY-MM-DD')
 
-  const { data, loading } = useAppRequest<WeekPayload>(
+  const { data, loading, refresh } = useAppRequest<WeekPayload>(
     async () => {
       const rooms = await listRooms({ status: 0 })
       const calendars = await Promise.all(rooms.map((room) => getRoomCalendar(room.id, weekStr)))
@@ -51,14 +54,16 @@ export default function Calendar() {
     [week],
   )
 
-  const handleEmptyClick = useCallback(
-    (slot: EmptySlot) => {
-      const start = dayjs(slot.date).add(slot.startMinutes, 'minute').format('HH:mm')
-      const end = dayjs(slot.date).add(slot.endMinutes, 'minute').format('HH:mm')
-      message.info(`已带出预填时间：${slot.roomName}　${slot.date} ${start}~${end}（预约表单见 T2.F2）`)
-    },
-    [message],
-  )
+  // 点空格 → 打开预约 Drawer（T2.F2），把日期 + 吸附后的分钟数组装成接口时间格式
+  const handleEmptyClick = useCallback((slot: EmptySlot) => {
+    const day = dayjs(slot.date)
+    setPrefill({
+      roomId: slot.roomId,
+      startTime: day.add(slot.startMinutes, 'minute').format('YYYY-MM-DD HH:mm:ss'),
+      endTime: day.add(slot.endMinutes, 'minute').format('YYYY-MM-DD HH:mm:ss'),
+    })
+    setBookingOpen(true)
+  }, [])
 
   const handleMeetingClick = useCallback(
     (meeting: CalendarMeeting) => message.info(`「${meeting.title}」——会议详情见 T2.F3`),
@@ -104,6 +109,14 @@ export default function Calendar() {
           )}
         </div>
       </Spin>
+
+      <BookingDrawer
+        open={bookingOpen}
+        prefill={prefill}
+        rooms={payload?.rooms ?? []}
+        onClose={() => setBookingOpen(false)}
+        onSuccess={refresh}
+      />
     </Card>
   )
 }

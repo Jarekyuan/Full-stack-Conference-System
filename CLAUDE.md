@@ -47,7 +47,7 @@
 | M0 基础设施 | ✅ | Docker 4 容器 + 数据库 15 表 + Git |
 | M1 骨架+认证+会议室 | ✅ | 23 任务：双 token 无感刷新、会议室 CRUD、策略、Feign、登录/布局 |
 | M2 后端（预约核心） | ✅ **10/10** | 状态机 → 冲突检测 → 可用性/日历 → 创建预约 → 幂等 → Redisson 锁 → 并发脚本 → 列表详情 → 取消 → 修改（乐观锁） |
-| M2 前端 | 🔶 **1/3** | ✅ T2.F1 日历页（周视图 × 会议室网格，时间轴定位 + memo 行级组件化）｜⬜ T2.F2 预约表单 / T2.F3 我的会议 |
+| M2 前端 | 🔶 **2/3** | ✅ T2.F1 日历页（周视图 × 会议室网格，时间轴定位 + memo 行级组件化）｜✅ T2.F2 预约表单 Drawer（防抖冲突提示 + 幂等提交）｜⬜ T2.F3 我的会议 |
 | M3 审批+生命周期 | ⬜ | 8 任务 |
 | M4 通知+MQ+打磨 | ⬜ | 12 任务 |
 | M5 进阶+部署 | ⬜ | 7 任务 |
@@ -69,10 +69,13 @@
 - 性能：`CalendarGrid` / `RoomRow` 双层 memo，空集合用模块级常量保引用稳定
 - 状态色（**docs/04 §5.1 为准**）：10 待审橙 / 20 已预约**蓝** / 30 进行中**绿** / 40 已结束灰 / 50 已取消浅灰 / 60 已拒绝红
 
-### T2.F2 预约表单（Drawer + RHF）
-- 字段：主题 / 时间范围（TimeRangePicker）/ 会议室 / 参会人（UserPicker 调 `GET /users/search` 防抖）/ 备注
-- 时间或会议室变化 → **防抖 500ms** 调 `POST /rooms/availability` → 冲突红字提示
-- 提交：进入表单时生成 UUID 放 `X-Idempotency-Token` 请求头 → 成功后刷新日历
+### ✅ T2.F2 预约表单（Drawer + RHF）已完成，2026-10-15
+- 点日历空格 → 开 `BookingDrawer`（预填会议室 + 时间）；字段：主题 / 会议室 / 时间范围 / 参会人 / 备注
+- 时间或会议室变化 → **防抖 500ms** 调 `POST /rooms/availability` → 红字冲突提示（带占用会议详情）
+- 提交：打开表单时生成一次 `crypto.randomUUID()` 放 `X-Idempotency-Token` → 成功后刷新日历
+- ⚠️ **10006 陷阱**：request.ts 对幂等重复是"静默解包成 undefined"（不抛异常），成功回调必须判空
+- ⚠️ 提交 40001（被并发抢）→ 弹冲突 Modal；此时抽屉**有意不关闭**，让用户就地改时间
+- 参会人搜索：`components/UserPicker.tsx`（防抖 500ms 调 `GET /users/search`，已选项靠 seen 表兜 label）
 
 ### T2.F3 我的会议列表 + 详情
 - 列表：状态筛选 + 分页，调 `GET /meetings?scope=mine`（VO 含 roomName/organiserName/participantCount）

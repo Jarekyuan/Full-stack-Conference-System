@@ -42,3 +42,68 @@ export interface RoomCalendar {
 export function getRoomCalendar(roomId: number, week: string): Promise<RoomCalendar> {
   return http.get<RoomCalendar>(`/rooms/${roomId}/calendar`, { params: { week } })
 }
+
+// ———————————————————— 可用性（T2.F2 预约表单实时校验）————————————————————
+// 注意：只读查询**不加锁**，只是 UI 辅助；最终以提交时的冲突校验为准（docs/04 7.4"查询与提交分离"）。
+
+/** 冲突会议简报（后端 MeetingConflictVO；比日历条目少 status/organiserId，以文档为准不臆造） */
+export interface MeetingConflict {
+  meetingId: number
+  title: string
+  startTime: string
+  endTime: string
+  organiserName: string
+}
+
+/** 单会议室可用性结果 */
+export interface AvailabilityItem {
+  roomId: number
+  available: boolean
+  conflicts: MeetingConflict[]
+}
+
+/** 批量可用性查询入参（后端 AvailabilityQueryDTO；excludeMeetingId 用于"修改会议"排除自身） */
+export interface AvailabilityQuery {
+  roomIds: number[]
+  startTime: string
+  endTime: string
+  excludeMeetingId?: number | null
+}
+
+/** 批量可用性查询：这些会议室在这段时间是否可用 */
+export function checkAvailability(query: AvailabilityQuery): Promise<{ items: AvailabilityItem[] }> {
+  return http.post<{ items: AvailabilityItem[] }>('/rooms/availability', query)
+}
+
+// ———————————————————— 创建预约（T2.F2，最核心）————————————————————
+
+/** 创建预约入参（后端 MeetingCreateDTO；v1.3 起参会人只收 userIds） */
+export interface MeetingCreateInput {
+  title: string
+  roomId: number
+  startTime: string
+  endTime: string
+  remark?: string
+  participants?: { userIds: number[] }
+}
+
+/** 创建预约结果（后端 MeetingCreateVO） */
+export interface MeetingCreateResult {
+  meetingId: number
+  /** 10 待审批 / 20 已预约（按会议室策略分流） */
+  status: number
+  needApproval: boolean
+  msg: string
+}
+
+/**
+ * 创建预约。幂等：idempotencyToken 由调用方在"进入表单时"生成一次并复用
+ * （重试/手抖重发必须带同一个 token，后端 SETNX 判重）。
+ * ⚠️ 重复提交时后端返回 10006，request.ts 会**静默解包成 undefined**（不抛异常）——
+ * 调用方拿到 undefined 时说明是重复提交，不能当成功结果用。
+ */
+export function createMeeting(input: MeetingCreateInput, idempotencyToken: string): Promise<MeetingCreateResult> {
+  return http.post<MeetingCreateResult>('/meetings', input, {
+    headers: { 'X-Idempotency-Token': idempotencyToken },
+  })
+}
