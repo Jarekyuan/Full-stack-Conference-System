@@ -60,7 +60,8 @@ server/
 - **错误码必须登记在 `ErrorCode` 枚举**，不许散落魔法数字；新增码同步登记 04 文档表
 - **会议状态值**：10 待审批 / 20 已预约 / 30 进行中 / 40 已结束 / 50 已取消 / 60 已拒绝
 - **状态变更必须走状态机**（`MeetingStateMachine.transition`：校验迁移 + 写 `meeting_status_log`），禁止裸 UPDATE 改状态
-- **认证链路**：网关验 JWT → 注入 `X-User-Id`/`X-User-Role` → 服务内从 `UserContext` 取用户；服务内不许自己解析 token
+- **认证链路**：网关验 JWT → 注入 `X-User-Id`/`X-User-Roles`（**逗号分隔多角色**，v1.3）→ 服务内从 `UserContext` 取用户；服务内不许自己解析 token
+- **角色数据（v1.3）**：角色走 RBAC 五表（`sys_user_role` 关联，一人可多角色），**禁止在用户表加角色字段或代码里硬编码单角色**；鉴权一律 `@PreAuthorize("hasRole('ADMIN')")`（多角色任一匹配即通过）；部门（`sys_dept`）仅作组织结构，不参与鉴权
 - **并发锁**：预约用 Redisson（key=`lock:meeting:{roomId}:{yyyyMMdd}`，见 02 文档 5.2）；修改会议用乐观锁 version；审批用 `SELECT ... FOR UPDATE` 锁会议行
 - **本地配置**：真实密钥只进 `application-local.yml`（已被 .gitignore 忽略）；可提交的配置用占位符
 - **端口**：gateway 8080 / auth 8081 / meeting 8082 / notification 8083

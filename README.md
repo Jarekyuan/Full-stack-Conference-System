@@ -48,11 +48,15 @@ new-meeting-systems/
 
 ## 👤 演示账号（种子数据）
 
-| 账号 | 密码 | 角色 |
-|------|------|------|
-| admin | admin123 | 管理员（会议室管理/用户管理/看板） |
-| approver1 / approver2 | user123 | 审批人（梧桐厅/红枫厅的预约需审批） |
-| user1 / user2 / user3 | user123 | 普通用户 |
+| 账号 | 密码 | 角色 | 部门 |
+|------|------|------|------|
+| admin | admin123 | **ADMIN + APPROVER**（多角色演示） | 行政部 |
+| approver1 | user123 | APPROVER（审批人） | 产品部 |
+| approver2 | user123 | APPROVER（审批人） | 研发部 |
+| user1 / user2 | user123 | USER（普通用户） | 研发部 |
+| user3 | user123 | USER（普通用户） | 产品部 |
+
+> 角色为 RBAC 五表模型（一人可多角色）；梧桐厅/红枫厅的预约需审批。
 
 ## ⚙️ 端口约定
 

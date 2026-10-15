@@ -29,7 +29,7 @@ import java.util.List;
  * 网关鉴权过滤器（全局）：
  * ① 剥离外部传入的 X-User-*（防伪造：信任边界在网关，见 docs/04 接口设计 7.3）
  * ② 白名单放行（登录/刷新/actuator）
- * ③ 校验 JWT → 解析 userId/role → 重新注入 X-User-Id / X-User-Role
+ * ③ 校验 JWT → 解析 userId/roles → 重新注入 X-User-Id / X-User-Roles（逗号分隔多角色，v1.3）
  * ④ 失败统一返回 401 + {code:10002}
  */
 @Slf4j
