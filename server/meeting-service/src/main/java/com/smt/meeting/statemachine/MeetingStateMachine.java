@@ -41,7 +41,8 @@ public class MeetingStateMachine {
             MeetingStatusEnum.RESERVED.getCode(), Map.of(
                     MeetingEventEnum.START, MeetingStatusEnum.ONGOING.getCode(),      // 20 → 30
                     MeetingEventEnum.END, MeetingStatusEnum.FINISHED.getCode(),       // 20 → 40
-                    MeetingEventEnum.CANCEL, MeetingStatusEnum.CANCELLED.getCode()    // 20 → 50
+                    MeetingEventEnum.CANCEL, MeetingStatusEnum.CANCELLED.getCode(),   // 20 → 50
+                    MeetingEventEnum.MODIFY, MeetingStatusEnum.PENDING_APPROVAL.getCode() // 20 → 10（R-14：改到需审批会议室）
             ),
             MeetingStatusEnum.ONGOING.getCode(), Map.of(
                     MeetingEventEnum.END, MeetingStatusEnum.FINISHED.getCode()        // 30 → 40（含提前结束）

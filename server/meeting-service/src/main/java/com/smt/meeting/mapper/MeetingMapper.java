@@ -63,4 +63,17 @@ public interface MeetingMapper {
 
     /** 写取消信息（取消原因 + 取消时间；时间由 NOW() 落库）—T2.9 */
     int updateCancelInfo(@Param("id") Long id, @Param("reason") String reason);
+
+    /**
+     * 乐观锁更新（T2.10）：只改非状态字段 + version 自增；
+     * WHERE version=#{version} 校验并发——影响 0 行 = 已被他人修改，调用方按 40002 提示重试。
+     * status 变更（R-14 回退到待审批）单独走状态机，保证日志一致。
+     */
+    int updateWithVersion(@Param("id") Long id,
+                          @Param("title") String title,
+                          @Param("roomId") Long roomId,
+                          @Param("startTime") LocalDateTime startTime,
+                          @Param("endTime") LocalDateTime endTime,
+                          @Param("remark") String remark,
+                          @Param("version") int version);
 }

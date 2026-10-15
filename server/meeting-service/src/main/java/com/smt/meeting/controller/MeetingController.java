@@ -7,6 +7,7 @@ import com.smt.meeting.aop.Idempotent;
 import com.smt.meeting.dto.MeetingCancelDTO;
 import com.smt.meeting.dto.MeetingCreateDTO;
 import com.smt.meeting.dto.MeetingQueryDTO;
+import com.smt.meeting.dto.MeetingUpdateDTO;
 import com.smt.meeting.service.MeetingQueryService;
 import com.smt.meeting.service.MeetingReserveService;
 import com.smt.meeting.vo.MeetingCreateVO;
@@ -17,6 +18,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -57,6 +59,16 @@ public class MeetingController {
                                @Valid @RequestBody(required = false) MeetingCancelDTO dto) {
         String reason = dto == null ? null : dto.getReason();
         reserveService.cancel(id, reason, UserContext.getUserId());
+        return Result.success();
+    }
+
+    /**
+     * 修改会议（组织人；docs/04 3.2）
+     * 乐观锁 version 校验并发 + R-14 审批分流重判
+     */
+    @PutMapping("/{id}")
+    public Result<Void> update(@PathVariable Long id, @Valid @RequestBody MeetingUpdateDTO dto) {
+        reserveService.update(id, dto, UserContext.getUserId());
         return Result.success();
     }
 

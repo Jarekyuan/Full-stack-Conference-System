@@ -3,11 +3,13 @@ package com.smt.meeting.service;
 import com.smt.common.exception.BusinessException;
 import com.smt.common.result.ErrorCode;
 import com.smt.meeting.dto.MeetingCreateDTO;
+import com.smt.meeting.dto.MeetingUpdateDTO;
 import com.smt.meeting.entity.Meeting;
 import com.smt.meeting.entity.MeetingParticipant;
 import com.smt.meeting.entity.MeetingRoom;
 import com.smt.meeting.entity.RoomStrategy;
 import com.smt.meeting.enums.MeetingEventEnum;
+import com.smt.meeting.enums.MeetingStatusEnum;
 import com.smt.meeting.lock.MeetingLockHelper;
 import com.smt.meeting.mapper.MeetingMapper;
 import com.smt.meeting.mapper.MeetingParticipantMapper;
@@ -65,7 +67,7 @@ public class MeetingReserveService {
         return lockHelper.executeWithLock(room.getId(), dto.getStartTime(), dto.getEndTime(), () ->
                 transactionTemplate.execute(txStatus -> {
                     // ★ 冲突检测必须在锁内：锁保证本时段串行，检测结果才可信
-                    checkConflict(room.getId(), dto.getStartTime(), dto.getEndTime());
+                    checkConflict(room.getId(), dto.getStartTime(), dto.getEndTime(), null);
 
                     Meeting meeting = insertMeeting(dto, room.getId(), organiserId, status);
                     saveParticipants(meeting.getId(), dto.getParticipants());
@@ -108,6 +110,55 @@ public class MeetingReserveService {
         meetingMapper.updateCancelInfo(meetingId, reason);
     }
 
+    // ---------- 修改（T2.10） ----------
+
+    /**
+     * 修改会议：归属校验 → 仅 RESERVED 可改（R-12）→ 改期时重跑校验链+冲突检测（排除自身）
+     * → 乐观锁更新（version 校验并发）→ R-14 分流（改到需审批会议室 → 状态回 10）。
+     * 只改 title/remark（不改时间/会议室）时不重跑冲突检测。
+     */
+    @Transactional
+    public void update(Long meetingId, MeetingUpdateDTO dto, Long operatorId) {
+        Meeting meeting = meetingMapper.selectById(meetingId);
+        if (meeting == null) {
+            throw new BusinessException(ErrorCode.MEETING_NOT_FOUND);
+        }
+        if (!meeting.getOrganiserId().equals(operatorId)) {
+            throw new BusinessException(ErrorCode.NOT_MEETING_OWNER);
+        }
+        // R-12：仅 RESERVED(20) 可修改（延长除外，属 M3）
+        if (meeting.getStatus() == null || meeting.getStatus() != MeetingStatusEnum.RESERVED.getCode()) {
+            throw new BusinessException(ErrorCode.MEETING_STATUS_NOT_ALLOWED);
+        }
+
+        // 是否改了时间/会议室（触发校验链 + R-14 分流）
+        boolean scheduleChanged = !dto.getRoomId().equals(meeting.getRoomId())
+                || !dto.getStartTime().equals(meeting.getStartTime())
+                || !dto.getEndTime().equals(meeting.getEndTime());
+
+        boolean backToApproval = false;
+        if (scheduleChanged) {
+            MeetingRoom room = loadAvailableRoom(dto.getRoomId());
+            RoomStrategy strategy = roomStrategyMapper.selectByRoomId(room.getId());
+            validateTime(dto.getStartTime(), dto.getEndTime(), strategy);
+            checkConflict(room.getId(), dto.getStartTime(), dto.getEndTime(), meetingId); // 排除自身
+            backToApproval = isNeedApproval(strategy); // R-14：目标会议室需审批 → 回 10
+        }
+
+        // 乐观锁更新（只改非状态字段 + version 自增；version 不匹配 = 并发已改 → 40002）
+        int affected = meetingMapper.updateWithVersion(meetingId, dto.getTitle(), dto.getRoomId(),
+                dto.getStartTime(), dto.getEndTime(), dto.getRemark(), dto.getVersion());
+        if (affected == 0) {
+            throw new BusinessException(ErrorCode.MEETING_STATUS_NOT_ALLOWED.getCode(),
+                    "会议已被他人修改，请刷新后重试");
+        }
+
+        // R-14 状态回退：20 → 10（走状态机唯一入口，保证日志一致）
+        if (backToApproval) {
+            stateMachine.transition(meetingId, MeetingEventEnum.MODIFY, operatorId, "修改到需审批会议室，重新送审");
+        }
+    }
+
     // ---------- 校验链 ----------
 
     private MeetingRoom loadAvailableRoom(Long roomId) {
@@ -145,8 +196,8 @@ public class MeetingReserveService {
     }
 
     /** 冲突检测：40001 的 data 携带 conflicts 结构化详情（供前端弹冲突详情框，docs/04 4.4） */
-    private void checkConflict(Long roomId, LocalDateTime start, LocalDateTime end) {
-        List<MeetingConflictVO> conflicts = conflictChecker.findConflicts(roomId, start, end, null);
+    private void checkConflict(Long roomId, LocalDateTime start, LocalDateTime end, Long excludeMeetingId) {
+        List<MeetingConflictVO> conflicts = conflictChecker.findConflicts(roomId, start, end, excludeMeetingId);
         if (!conflicts.isEmpty()) {
             throw new BusinessException(ErrorCode.TIME_CONFLICT, Map.of("conflicts", conflicts));
         }

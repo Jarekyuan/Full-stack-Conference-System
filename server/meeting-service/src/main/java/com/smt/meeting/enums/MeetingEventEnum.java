@@ -24,7 +24,9 @@ public enum MeetingEventEnum {
     /** 结束（定时任务或组织人提前结束）：20/30 → 40 */
     END("会议结束"),
     /** 延长（ONGOING 特例：只改 end_time 不改状态，M3 实现时补迁移规则） */
-    EXTEND("延长会议");
+    EXTEND("延长会议"),
+    /** 修改会议触发审批分流重判（R-14）：20 → 10（改到需审批会议室时，T2.10） */
+    MODIFY("修改会议");
 
     private final String label;
 

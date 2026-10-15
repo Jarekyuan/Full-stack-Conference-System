@@ -213,4 +213,16 @@
         WHERE id = #{id}
     </update>
 
+    <!--
+      乐观锁更新（T2.10）：WHERE version=#{version} 校验并发，影响 0 行 = 已被他人修改。
+      只改非状态字段 + version 自增；status 变更（R-14 回退）单独走状态机保证日志一致。
+    -->
+    <update id="updateWithVersion">
+        UPDATE meeting
+        SET title = #{title}, room_id = #{roomId},
+            start_time = #{startTime}, end_time = #{endTime}, remark = #{remark},
+            version = version + 1
+        WHERE id = #{id} AND version = #{version}
+    </update>
+
 </mapper>
