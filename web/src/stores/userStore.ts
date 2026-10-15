@@ -9,7 +9,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { immer } from 'zustand/middleware/immer'
 import type { LoginUser, TokenResult } from '@/api/types'
-import { clearTokens, setTokens } from '@/api/token'
+import { clearSession, setTokens, USER_STORAGE_KEY } from '@/api/token'
 
 interface UserState {
   user: LoginUser | null
@@ -30,14 +30,15 @@ export const useUserStore = create<UserState>()(
         })
       },
       logout: () => {
-        clearTokens()
+        clearSession()
         set((state) => {
           state.user = null
         })
       },
     })),
     {
-      name: 'meeting.user',
+      // 键从 api/token.ts 导入：它同时也是"清会话"要清的键，写两处就会漏一处（评审 P1-14）
+      name: USER_STORAGE_KEY,
       // 只持久化 user，函数不序列化
       partialize: (state) => ({ user: state.user }),
     },

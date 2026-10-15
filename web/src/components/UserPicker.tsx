@@ -12,7 +12,7 @@
 import { useState } from 'react'
 import { Select } from 'antd'
 import { useDebounceFn } from 'ahooks'
-import { searchUsers, type User } from '@/api/user'
+import { searchUsers, type UserSearchItem } from '@/api/user'
 import { useAppRequest } from '@/hooks/useAppRequest'
 
 /** 搜索防抖窗口（与项目既有的防抖约定一致，见 docs/05 T2.F2） */
@@ -26,9 +26,9 @@ interface UserPickerProps {
 }
 
 export default function UserPicker({ value = [], onChange, disabled, placeholder = '搜索姓名或用户名' }: UserPickerProps) {
-  const [options, setOptions] = useState<User[]>([])
-  /** id → User：累积见过的用户，保证已选项在关键字变化后仍有名字可显示 */
-  const [seen, setSeen] = useState<Map<number, User>>(new Map())
+  const [options, setOptions] = useState<UserSearchItem[]>([])
+  /** id → 用户：累积见过的用户，保证已选项在关键字变化后仍有名字可显示 */
+  const [seen, setSeen] = useState<Map<number, UserSearchItem>>(new Map())
 
   const { run: runSearch, loading } = useAppRequest(searchUsers, {
     onSuccess: (list) => {
@@ -49,9 +49,11 @@ export default function UserPicker({ value = [], onChange, disabled, placeholder
     runSearch(keyword)
   }, { wait: SEARCH_DEBOUNCE_MS })
 
-  const labelOf = (u: User) => `${u.realName}${u.deptName ? ` · ${u.deptName}` : ''}`
+  const labelOf = (u: UserSearchItem) => `${u.realName}${u.deptName ? ` · ${u.deptName}` : ''}`
   // 选项 = 已选中但不在当前结果里的（补 label）+ 当前搜索结果
-  const selectedMissing = value.map((id) => seen.get(id)).filter((u): u is User => !!u && !options.some((o) => o.id === u.id))
+  const selectedMissing = value
+    .map((id) => seen.get(id))
+    .filter((u): u is UserSearchItem => !!u && !options.some((o) => o.id === u.id))
 
   return (
     <Select

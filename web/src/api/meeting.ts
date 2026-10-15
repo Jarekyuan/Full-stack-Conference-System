@@ -144,11 +144,10 @@ export interface MeetingQuery {
   size?: number
 }
 
-/** 参会人（后端 MeetingDetailVO.ParticipantVO，v1.3 起仅系统用户） */
+/** 参会人（后端 MeetingDetailVO.ParticipantVO，v1.3 起仅系统用户；不含 email，见 docs/04 4.5） */
 export interface MeetingParticipant {
   userId: number
   realName: string
-  email: string | null
 }
 
 /** 状态时间线条目（后端 MeetingDetailVO.StatusLogVO）；fromStatus 为 null 表示"创建"这一步 */

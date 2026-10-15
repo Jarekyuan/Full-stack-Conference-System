@@ -13,7 +13,7 @@ import axios, {
   type InternalAxiosRequestConfig,
 } from 'axios'
 import { ApiError, type Result, type TokenResult } from './types'
-import { clearTokens, getAccessToken, getRefreshToken, setTokens } from './token'
+import { clearSession, getAccessToken, getRefreshToken, setTokens } from './token'
 
 /** 幂等重复提交：静默忽略（复用上次结果），见 04 文档 2.2 特殊码清单 */
 const CODE_IDEMPOTENT = 10006
@@ -66,7 +66,8 @@ async function doRefresh(): Promise<string> {
 
 // ———————————————————— 跳登录（登录态彻底失效）————————————————————
 function redirectToLogin(): void {
-  clearTokens()
+  // clearSession（而非 clearTokens）：token 与持久化的用户快照一起清，避免上一用户的资料留在 localStorage（评审 P1-14）
+  clearSession()
   // T1.F3 接入 react-router 后可改为 navigate；当前用硬跳转兜底，并带上原路径供登录后跳回
   if (window.location.pathname !== '/login') {
     const redirect = encodeURIComponent(window.location.pathname + window.location.search)

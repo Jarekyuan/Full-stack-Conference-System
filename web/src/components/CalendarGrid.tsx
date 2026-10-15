@@ -12,14 +12,14 @@ import dayjs from 'dayjs'
 import type { Room } from '@/api/room'
 import type { CalendarDay, CalendarMeeting } from '@/api/meeting'
 import { statusBlockClass } from '@/components/MeetingStatusTag'
+import {
+  blockGeometry,
+  DAY_END_MINUTES,
+  DAY_START_MINUTES,
+  slotFromClickRatio,
+  TOTAL_MINUTES,
+} from '@/components/calendarGeometry'
 
-/** 时间轴窗口（业务时间）：超出窗口的会议块裁剪到边界 */
-const DAY_START_MINUTES = 8 * 60
-const DAY_END_MINUTES = 20 * 60
-const TOTAL_MINUTES = DAY_END_MINUTES - DAY_START_MINUTES
-/** 点击吸附粒度 / 默认会议时长 */
-const SNAP_MINUTES = 30
-const DEFAULT_DURATION_MINUTES = 60
 /** 单元格高度（px）——各行等高，时间轴比例因此一致 */
 const CELL_HEIGHT = 240
 /** 刻度标签（首/中/末三点，够读且不噪） */
@@ -50,32 +50,6 @@ interface CalendarGridProps {
   daysByRoom: Map<number, CalendarDay[]>
   onEmptyClick: (slot: EmptySlot) => void
   onMeetingClick: (meeting: CalendarMeeting) => void
-}
-
-/** 距 00:00 的分钟数；跨天会议（结束在次日）按时间轴末端处理，这里只取时刻 */
-function toMinutes(time: string): number {
-  const t = dayjs(time)
-  return t.hour() * 60 + t.minute()
-}
-
-function clampMinutes(minutes: number): number {
-  return Math.min(Math.max(minutes, DAY_START_MINUTES), DAY_END_MINUTES)
-}
-
-/** 会议块的几何：top/height 百分比（裁剪到时间轴窗口内）+ 时长分钟数（决定文字排几行） */
-function blockGeometry(meeting: CalendarMeeting) {
-  const start = clampMinutes(toMinutes(meeting.startTime))
-  const end = dayjs(meeting.endTime).isSame(dayjs(meeting.startTime), 'day')
-    ? clampMinutes(toMinutes(meeting.endTime))
-    : DAY_END_MINUTES
-  const minutes = Math.max(end - start, 0)
-  return {
-    style: {
-      top: `${((start - DAY_START_MINUTES) / TOTAL_MINUTES) * 100}%`,
-      height: `${(minutes / TOTAL_MINUTES) * 100}%`,
-    },
-    minutes,
-  }
 }
 
 function MeetingBlock({ meeting, onClick }: { meeting: CalendarMeeting; onClick: (m: CalendarMeeting) => void }) {
@@ -117,15 +91,12 @@ function DayCell({
 }) {
   const handleEmptyClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect()
-    const raw = DAY_START_MINUTES + ((e.clientY - rect.top) / rect.height) * TOTAL_MINUTES
-    const snapped = Math.round(raw / SNAP_MINUTES) * SNAP_MINUTES
-    const start = clampMinutes(snapped)
+    // 只把"比例"交给纯函数（吸附/裁剪/默认时长的规则都在 calendarGeometry，且有单测覆盖）
     onEmptyClick({
       roomId: room.id,
       roomName: room.name,
       date,
-      startMinutes: start,
-      endMinutes: Math.min(start + DEFAULT_DURATION_MINUTES, DAY_END_MINUTES),
+      ...slotFromClickRatio((e.clientY - rect.top) / rect.height),
     })
   }
 

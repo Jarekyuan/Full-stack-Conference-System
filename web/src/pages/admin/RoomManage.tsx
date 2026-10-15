@@ -64,10 +64,13 @@ export default function RoomManage() {
   // 分组列表：挂载即加载一次
   const { data: groups } = useAppRequest(listRoomGroups, { manual: false })
 
-  // 会议室列表：筛选变化时重查
+  // 会议室列表：筛选变化时重查。
+  // 依赖写的是 filter 的两个字段而非 filter 对象本身——对象每次 setState 都是新引用，
+  // 放进依赖会变成"每次渲染都重查"；filter 在体内只被读取，不含闭包陷阱
   const { data: rooms, loading, run } = useAppRequest(listRooms)
   useEffect(() => {
     run(filter)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter.groupId, filter.status, run])
 
   const { runAsync: doDelete } = useAppRequest(deleteRoom)
