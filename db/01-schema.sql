@@ -31,13 +31,84 @@ CREATE TABLE IF NOT EXISTS sys_user (
   real_name   VARCHAR(50)  NOT NULL                COMMENT '姓名',
   email       VARCHAR(100) DEFAULT NULL            COMMENT '邮箱（通知用）',
   avatar      VARCHAR(255) DEFAULT NULL            COMMENT '头像 URL（腾讯云 COS）',
-  role        VARCHAR(20)  NOT NULL DEFAULT 'USER' COMMENT '角色：USER/APPROVER/ADMIN',
+  dept_id     BIGINT       DEFAULT NULL            COMMENT '所属部门（sys_dept.id，可空=未分配）',
   status      TINYINT      NOT NULL DEFAULT 1      COMMENT '状态：0 禁用 / 1 启用',
   created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (id),
-  UNIQUE KEY uk_username (username)
+  UNIQUE KEY uk_username (username),
+  KEY idx_dept (dept_id)
 ) ENGINE = InnoDB COMMENT = '用户表';
+
+-- ----------------------------------------------------------------------------
+-- 1.1 sys_dept 部门表（树形结构；用途仅"组织结构"，不参与权限判定）★ v1.3
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS sys_dept (
+  id          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '部门ID',
+  parent_id   BIGINT       NOT NULL DEFAULT 0      COMMENT '父部门ID（0=根）',
+  name        VARCHAR(50)  NOT NULL                COMMENT '部门名称',
+  sort_order  INT          NOT NULL DEFAULT 0      COMMENT '同级排序',
+  status      TINYINT      NOT NULL DEFAULT 1      COMMENT '状态：0 停用 / 1 启用',
+  created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (id),
+  KEY idx_parent (parent_id)
+) ENGINE = InnoDB COMMENT = '部门表（树形）';
+
+-- ----------------------------------------------------------------------------
+-- 1.2 sys_role 角色表 ★ v1.3（替代原 sys_user.role 单字段，支持多角色）
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS sys_role (
+  id          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '角色ID',
+  code        VARCHAR(30)  NOT NULL                COMMENT '角色编码：USER/APPROVER/ADMIN（鉴权按 code）',
+  name        VARCHAR(50)  NOT NULL                COMMENT '角色名称',
+  description VARCHAR(200) DEFAULT NULL            COMMENT '描述',
+  status      TINYINT      NOT NULL DEFAULT 1      COMMENT '状态：0 停用 / 1 启用',
+  created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_code (code)
+) ENGINE = InnoDB COMMENT = '角色表';
+
+-- ----------------------------------------------------------------------------
+-- 1.3 sys_permission 权限表（资源清单：当前不参与鉴权，供菜单/后续扩展）★ v1.3
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS sys_permission (
+  id          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '权限ID',
+  code        VARCHAR(50)  NOT NULL                COMMENT '权限标识（如 room:manage）',
+  name        VARCHAR(50)  NOT NULL                COMMENT '权限名称',
+  type        TINYINT      NOT NULL DEFAULT 1      COMMENT '类型：1 菜单 / 2 按钮 / 3 接口',
+  sort_order  INT          NOT NULL DEFAULT 0      COMMENT '排序',
+  created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_code (code)
+) ENGINE = InnoDB COMMENT = '权限表（资源清单）';
+
+-- ----------------------------------------------------------------------------
+-- 1.4 sys_user_role 用户角色关联（N:N 中间表）★ v1.3
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS sys_user_role (
+  id          BIGINT   NOT NULL AUTO_INCREMENT COMMENT '主键',
+  user_id     BIGINT   NOT NULL                COMMENT '用户ID',
+  role_id     BIGINT   NOT NULL                COMMENT '角色ID',
+  created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '授权时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_user_role (user_id, role_id),
+  KEY idx_role (role_id)
+) ENGINE = InnoDB COMMENT = '用户角色关联表';
+
+-- ----------------------------------------------------------------------------
+-- 1.5 sys_role_permission 角色权限关联（N:N 中间表）★ v1.3
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS sys_role_permission (
+  id            BIGINT   NOT NULL AUTO_INCREMENT COMMENT '主键',
+  role_id       BIGINT   NOT NULL                COMMENT '角色ID',
+  permission_id BIGINT   NOT NULL                COMMENT '权限ID',
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '授权时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_role_permission (role_id, permission_id),
+  KEY idx_permission (permission_id)
+) ENGINE = InnoDB COMMENT = '角色权限关联表';
 
 -- ----------------------------------------------------------------------------
 -- 2. room_group 会议室分组（楼层/区域）
@@ -120,17 +191,15 @@ CREATE TABLE IF NOT EXISTS meeting (
 -- 6. meeting_participant 参会人
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS meeting_participant (
-  id             BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
-  meeting_id     BIGINT       NOT NULL                COMMENT '会议ID',
-  user_id        BIGINT       DEFAULT NULL            COMMENT '用户ID（外部参会人为 NULL）',
-  is_external    TINYINT      NOT NULL DEFAULT 0      COMMENT '是否外部参会人：0 内部 / 1 外部',
-  external_name  VARCHAR(50)  DEFAULT NULL            COMMENT '外部参会人姓名',
-  external_email VARCHAR(100) DEFAULT NULL            COMMENT '外部参会人邮箱',
-  created_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  id          BIGINT   NOT NULL AUTO_INCREMENT COMMENT '主键',
+  meeting_id  BIGINT   NOT NULL                COMMENT '会议ID',
+  user_id     BIGINT   NOT NULL                COMMENT '参会人用户ID（限系统用户；v1.3 起不区分外部参会人）',
+  created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '加入时间',
   PRIMARY KEY (id),
-  KEY idx_meeting (meeting_id),
+  -- N:N 中间表标配：联合唯一防重复参会人；其最左前缀覆盖"按会议查参会人"，故不再单建 idx_meeting
+  UNIQUE KEY uk_meeting_user (meeting_id, user_id),
   KEY idx_user (user_id)
-) ENGINE = InnoDB COMMENT = '会议参会人表';
+) ENGINE = InnoDB COMMENT = '会议参会人表（N:N 中间表）';
 
 -- ----------------------------------------------------------------------------
 -- 7. meeting_approval 审批记录（历史表，同一会议可多条：被拒后修改重送审场景）
