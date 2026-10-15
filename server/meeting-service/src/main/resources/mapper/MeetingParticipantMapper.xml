@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 会议参会人 SQL（手写 XML） -->
+<mapper namespace="com.smt.meeting.mapper.MeetingParticipantMapper">
+
+    <resultMap id="BaseResultMap" type="com.smt.meeting.entity.MeetingParticipant">
+        <id column="id" property="id"/>
+        <result column="meeting_id" property="meetingId"/>
+        <result column="user_id" property="userId"/>
+        <result column="is_external" property="isExternal"/>
+        <result column="external_name" property="externalName"/>
+        <result column="external_email" property="externalEmail"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <!-- 批量新增：<foreach> 拼多值 VALUES，一次往返写完全部参会人（避免 N+1 次 insert） -->
+    <insert id="batchInsert">
+        INSERT INTO meeting_participant (meeting_id, user_id, is_external, external_name, external_email)
+        VALUES
+        <foreach collection="list" item="p" separator=",">
+            (#{p.meetingId}, #{p.userId}, #{p.isExternal}, #{p.externalName}, #{p.externalEmail})
+        </foreach>
+    </insert>
+
+    <!-- 按会议查询：命中 idx_meeting -->
+    <select id="selectByMeetingId" resultMap="BaseResultMap">
+        SELECT id, meeting_id, user_id, is_external, external_name, external_email, created_at
+        FROM meeting_participant
+        WHERE meeting_id = #{meetingId}
+        ORDER BY is_external, id
+    </select>
+
+</mapper>
