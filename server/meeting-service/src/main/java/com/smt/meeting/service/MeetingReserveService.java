@@ -7,6 +7,7 @@ import com.smt.meeting.entity.Meeting;
 import com.smt.meeting.entity.MeetingParticipant;
 import com.smt.meeting.entity.MeetingRoom;
 import com.smt.meeting.entity.RoomStrategy;
+import com.smt.meeting.lock.MeetingLockHelper;
 import com.smt.meeting.mapper.MeetingMapper;
 import com.smt.meeting.mapper.MeetingParticipantMapper;
 import com.smt.meeting.mapper.MeetingRoomMapper;
@@ -16,23 +17,25 @@ import com.smt.meeting.vo.MeetingConflictVO;
 import com.smt.meeting.vo.MeetingCreateVO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 /**
- * 预约服务（T2.4 基础版：校验 → 落库 → 状态机；T2.5 叠幂等、T2.6 叠分布式锁）
+ * 预约服务（T2.4 基础版 → T2.5 幂等 → T2.6 分布式锁）
  *
- * 校验链（单类方法链，按序执行，失败即抛对应错误码）：
- *   ① 会议室可用性（30001 不存在 / 30002 维护中）
- *   ② 时间合法性（10001 start>=end / 30003 过去时间或超出提前天数 / 30004 超时长上限）
- *   ③ 冲突检测（40001，data 携带 conflicts 结构化详情）
- *   ④ 审批分流（R-7：need_approval → 10，否则 20）
- * 落库在单事务内：meeting + participants + 状态日志（status 由状态机 initialStatus 决定，禁止手写）
+ * 校验链（分两段）：
+ *   无锁前置（快速失败，避免无谓抢锁）：会议室可用性 30001/30002 → 时间合法性 10001/30003/30004
+ *   锁内复检（并发正确性关键）：冲突检测 40001
+ *   分流（R-7）：need_approval → 10，否则 20
+ *
+ * 并发设计（T2.6）：
+ *   锁（lock:meeting:{roomId}:{date}）**包住事务**——用 TransactionTemplate 而非 @Transactional，
+ *   否则"锁释放 → 事务提交"之间存在空窗：后一个请求拿到锁时读不到前一请求未提交的数据，
+ *   冲突检测会失效（经典陷阱：锁的范围必须 ⊇ 事务的范围）。
  */
 @Service
 @RequiredArgsConstructor
@@ -44,34 +47,32 @@ public class MeetingReserveService {
     private final MeetingParticipantMapper participantMapper;
     private final ConflictChecker conflictChecker;
     private final MeetingStateMachine stateMachine;
+    private final MeetingLockHelper lockHelper;
+    private final TransactionTemplate transactionTemplate;
 
-    @Transactional
     public MeetingCreateVO create(MeetingCreateDTO dto, Long organiserId) {
+        // ---------- 第一段：无锁前置校验（快速失败） ----------
         MeetingRoom room = loadAvailableRoom(dto.getRoomId());
         RoomStrategy strategy = roomStrategyMapper.selectByRoomId(room.getId());
-
         validateTime(dto.getStartTime(), dto.getEndTime(), strategy);
-        checkConflict(room.getId(), dto.getStartTime(), dto.getEndTime());
 
         boolean needApproval = isNeedApproval(strategy);
         int status = stateMachine.initialStatus(needApproval);
 
-        Meeting meeting = new Meeting();
-        meeting.setTitle(dto.getTitle());
-        meeting.setRoomId(room.getId());
-        meeting.setOrganiserId(organiserId);
-        meeting.setStartTime(dto.getStartTime());
-        meeting.setEndTime(dto.getEndTime());
-        meeting.setStatus(status);
-        meeting.setRemark(dto.getRemark());
-        meetingMapper.insert(meeting);
+        // ---------- 第二段：锁内复检 + 事务落库 ----------
+        return lockHelper.executeWithLock(room.getId(), dto.getStartTime(), dto.getEndTime(), () ->
+                transactionTemplate.execute(txStatus -> {
+                    // ★ 冲突检测必须在锁内：锁保证本时段串行，检测结果才可信
+                    checkConflict(room.getId(), dto.getStartTime(), dto.getEndTime());
 
-        saveParticipants(meeting.getId(), dto.getParticipants());
-        // 状态机补记初始日志（from_status = NULL）
-        stateMachine.logCreation(meeting.getId(), status, organiserId, null);
+                    Meeting meeting = insertMeeting(dto, room.getId(), organiserId, status);
+                    saveParticipants(meeting.getId(), dto.getParticipants());
+                    // 状态机补记初始日志（from_status = NULL）
+                    stateMachine.logCreation(meeting.getId(), status, organiserId, null);
 
-        return new MeetingCreateVO(meeting.getId(), status, needApproval,
-                needApproval ? "预约已提交，等待审批" : "预约成功");
+                    return new MeetingCreateVO(meeting.getId(), status, needApproval,
+                            needApproval ? "预约已提交，等待审批" : "预约成功");
+                }));
     }
 
     // ---------- 校验链 ----------
@@ -122,6 +123,19 @@ public class MeetingReserveService {
 
     private boolean isNeedApproval(RoomStrategy strategy) {
         return strategy != null && strategy.getNeedApproval() != null && strategy.getNeedApproval() == 1;
+    }
+
+    private Meeting insertMeeting(MeetingCreateDTO dto, Long roomId, Long organiserId, int status) {
+        Meeting meeting = new Meeting();
+        meeting.setTitle(dto.getTitle());
+        meeting.setRoomId(roomId);
+        meeting.setOrganiserId(organiserId);
+        meeting.setStartTime(dto.getStartTime());
+        meeting.setEndTime(dto.getEndTime());
+        meeting.setStatus(status);
+        meeting.setRemark(dto.getRemark());
+        meetingMapper.insert(meeting);
+        return meeting;
     }
 
     /** 参会人落库（v1.3：仅系统用户；distinct 去重，联合唯一键兜底防重） */

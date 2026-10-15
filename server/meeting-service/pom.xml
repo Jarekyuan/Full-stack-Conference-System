@@ -45,6 +45,17 @@
             <artifactId>spring-boot-starter-aop</artifactId>
         </dependency>
 
+        <!--
+          Redisson 核心库（T2.6 分布式锁）。
+          刻意不用 redisson-spring-boot-starter：后者会接管 Spring Data Redis 的连接工厂，
+          影响现有 StringRedisTemplate（Lettuce）行为；职责隔离——锁用 Redisson，其余用 RedisTemplate。
+        -->
+        <dependency>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson</artifactId>
+            <version>${redisson.version}</version>
+        </dependency>
+
         <!-- Nacos 服务发现 -->
         <dependency>
             <groupId>com.alibaba.cloud</groupId>
