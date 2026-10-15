@@ -92,6 +92,38 @@ public interface MeetingMapper {
                                          @Param("excludeMeetingId") Long excludeMeetingId);
 
     /**
+     * 到点该开始的会议 id（T3.5 定时任务；docs/03 4.2 查询，命中 `idx_status_start(status, start_time)`）。
+     * 只取 id：状态迁移要逐条走状态机（红线 #4 禁止裸 UPDATE 改 status），取整行没有意义。
+     */
+    List<Long> selectIdsToStart(@Param("limit") int limit);
+
+    /**
+     * 到点该结束的会议 id（T3.5；docs/03 4.2 查询，命中 `idx_status_end(status, end_time)`）。
+     * 含 20：到点但无人签到的会议由"结束"任务直接收敛到 40（docs/01 流程 4 的注）。
+     */
+    List<Long> selectIdsToFinish(@Param("limit") int limit);
+
+    /**
+     * 对账用（T3.6 / E-4）：**开始时间已过 2 小时**却还停在待开始态的会议。
+     * 正常轮询每分钟就跑一次，所以这类记录只可能来自"任务停摆/异常"——是告警线索，不只是脏数据。
+     * 阈值写死在 SQL 里（而不是让调用方传时间）：口径统一走 DB 时钟，避免 JVM 与 DB 双时钟漂移。
+     */
+    List<Long> selectStuckIdsToStart(@Param("limit") int limit);
+
+    /** 对账用（T3.6 / E-4）：**结束时间已过 2 小时**却还没结束（20/30）的会议 */
+    List<Long> selectStuckIdsToFinish(@Param("limit") int limit);
+
+    /**
+     * 对账用（T3.6 / E-4）：**时间早已过去却仍是待审批（10）**的会议。
+     *
+     * <p>这一类**只检测不自动修**：10 既不占时段、也不在任何自动流转的覆盖范围内，
+     * 于是"没人批、时间又过了"的申请会永远躺在审批人的待办箱里。但把它改成什么状态是**产品决策**
+     * （自动拒绝？自动作废？），不该由一段对账代码替产品做主——所以这里只把它捞出来打 ERROR 告警，
+     * 由人决定（见 docs/05 T3.6 的实现说明）。
+     */
+    List<Long> selectStuckPending(@Param("limit") int limit);
+
+    /**
      * 待审批列表（T3.1）：status=10 的会议 + 会议室名/组织人名/用途备注。
      * 与列表 VO 分开的原因：`MeetingVO` 按场景裁剪掉了 remark，而审批人正是靠它做判断（见 docs/04 3.2）。
      */

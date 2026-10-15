@@ -239,6 +239,58 @@
           <if test="excludeMeetingId != null">AND id &lt;&gt; #{excludeMeetingId}</if>
     </select>
 
+    <!-- 定时任务扫描（T3.5）：到点该开始 / 该结束的会议 id。
+         时间用 DB 的 NOW()（docs/03 4.2 的既有写法），配合 idx_status_start / idx_status_end 走 range 扫描；
+         LIMIT 由调用方给（分批处理，单批不放大事务） -->
+    <select id="selectIdsToStart" resultType="long">
+        SELECT id
+        FROM meeting
+        WHERE status = 20
+          AND start_time &lt;= NOW()
+        ORDER BY start_time
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectIdsToFinish" resultType="long">
+        SELECT id
+        FROM meeting
+        WHERE status IN (20, 30)
+          AND end_time &lt;= NOW()
+        ORDER BY end_time
+        LIMIT #{limit}
+    </select>
+
+    <!-- 对账扫描（T3.6 / E-4）：把时间条件从"到点"放宽到"过了 2 小时还没动"。
+         2 小时的用意：正常轮询每分钟一次，任何 2 小时都没被推进的记录都不是"慢"，是"卡住了"；
+         阈值也给得足够宽，不会和"刚刚才到点、正常任务正在处理"的记录抢同一行 -->
+    <select id="selectStuckIdsToStart" resultType="long">
+        SELECT id
+        FROM meeting
+        WHERE status = 20
+          AND start_time &lt;= NOW() - INTERVAL 2 HOUR
+        ORDER BY start_time
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectStuckIdsToFinish" resultType="long">
+        SELECT id
+        FROM meeting
+        WHERE status IN (20, 30)
+          AND end_time &lt;= NOW() - INTERVAL 2 HOUR
+        ORDER BY end_time
+        LIMIT #{limit}
+    </select>
+
+    <!-- 待审批超时（T3.6 / E-4）：10 既不占时段、也不被任何自动流转覆盖 -->
+    <select id="selectStuckPending" resultType="long">
+        SELECT id
+        FROM meeting
+        WHERE status = 10
+          AND end_time &lt;= NOW()
+        ORDER BY end_time
+        LIMIT #{limit}
+    </select>
+
     <!-- 详情 VO（全字段 + 展示冗余；participants/logs 由 Service 另行装配） -->
     <resultMap id="MeetingDetailMap" type="com.smt.meeting.vo.MeetingDetailVO">
         <id column="id" property="id"/>
