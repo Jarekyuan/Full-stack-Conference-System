@@ -86,6 +86,29 @@ pick_slot() {
 }
 
 # ---------------------------------------------------------------------------
+# 取消某时段上的会议（脚本自我清理：释放槽位，保证脚本可重复运行）
+#
+# 2026-10-15 补：本脚本原先**不清理**每轮胜出的那场会议，跑 10 轮就在该会议室
+# 留下 10 场 status=20 的"并发验证-R*"，几轮回归之后候选时段全被占满，
+# 脚本就再也跑不动了（实测：青竹厅 10-22~10-29 每天 10:00 都被历史残留占着，
+# 报"连续 10 天候选时段均被占用"）。同一套 cancel_slot 与 concurrent-modify.sh 保持一致。
+# ---------------------------------------------------------------------------
+cancel_slot() {
+  local start_time=$1 end_time=$2 ids id
+  ids=$(curl -s --noproxy '*' -X POST "$BASE_URL/api/rooms/availability" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Type: application/json' \
+    -d "{\"roomIds\":[${ROOM_ID}],\"startTime\":\"${start_time}\",\"endTime\":\"${end_time}\"}" \
+    | python3 -c "import sys,json; print(' '.join(str(c['meetingId']) for c in json.load(sys.stdin)['data']['items'][0]['conflicts']))" 2>/dev/null)
+  for id in $ids; do
+    curl -s --noproxy '*' -X POST "$BASE_URL/api/meetings/${id}/cancel" \
+      -H "Authorization: Bearer $TOKEN" \
+      -H 'Content-Type: application/json' \
+      -d '{"reason":"并发脚本清理"}' > /dev/null 2>&1
+  done
+}
+
+# ---------------------------------------------------------------------------
 # 执行一轮
 # ---------------------------------------------------------------------------
 run_round() {
@@ -129,11 +152,14 @@ PY
   echo "第 ${round}/${REPEAT} 轮  [${start_time}]"
   echo "  成功=$success  冲突=$conflict  繁忙=$busy  其他=$other"
 
+  # 自清理：释放本轮占下的槽位（否则跑 N 轮就在该会议室留 N 场，把候选时段耗干）
+  cancel_slot "$start_time" "$end_time"
+
   if [[ "$success" -eq "$EXPECTED_SUCCESS" ]]; then
     echo "  ✅ 断言通过：恰好 ${EXPECTED_SUCCESS} 个成功（并发防护生效）"
     return 0
   else
-    echo "  ❌ 断言失败：期望成功 ${EXPECTED_SUCCESS} 个，实际 ${success} 个"
+    echo "  ❌ 断言失败：期望成功 ${EXPECTED_SUCCESS} 个，实际 ${success} 个（本轮残留已清理）"
     return 1
   fi
 }

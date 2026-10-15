@@ -32,7 +32,27 @@ M1 的 17 条 P1 里，**11 条仍未修**（详见第五章）。
 | 第 1 批 | **安全止血**：C1（基础设施端口收环回 + refreshToken 只存 SHA-256 摘要）、C2（三服务 `server.address: 127.0.0.1`）、R1（分页 page 上限，两个服务）、R2（登录时序陪跑哈希）、R3（`/auth/me` 校验账号状态） | ✅ **已完成并验证** | 见 fix 提交 |
 | 第 2 批 | 并发正确性：C3（锁 acquire 收尾）、C4（`updateWithVersion` 补 status 守卫）、R5（幂等语义）、`cancel` 进锁 | ✅ **已完成并验证** | `eafda49` |
 | 第 3 批 | 前端可见缺陷：R9~R15 + R16（E2E 入库）+ 两个"下一个调用方会踩"的加固 | ✅ **已完成并验证** | `79a9609` |
-| 第 4 批 | 契约与工程：R7（roomIds 入参上限）、R8（详情 email PII 收口）、M1 残留 11 条 | ⏳ 待做 | — |
+| 第 4 批 | 契约与工程：R7（roomIds 入参上限）、R8（详情 email PII 收口）、R4（悬空 deptId/roleIds）、C1 剩余项（Redis `requirepass`）、P1-2/6/9/10/11/13/14/15/16/17 | ✅ **已完成并验证** | 见下 |
+
+> 第 4 批验证方式（逐条实测，脚本入库为 `scripts/verify-review-batch4.sh`，**33/33 通过**）：
+> `roomIds` 50 个放行 / 51 与 52 个回 `10001 一次最多查询 50 个会议室`（边界两侧都测）/ 重复 id 去重成 1 条 / 负数被拒；
+> 会议详情 `participants` 已无 `email` 字段；`/users/search` 只回 `id/realName/deptName` 且 `deptName` 由 JOIN 直出（此前恒为 null）；
+> `?device=投影仪` 筛出的房间都含该标签、不存在的标签回空列表；`groupId=99999` / `deptId=99999` / `roleIds=[99999]` 均 `10001`；
+> 框架异常四类：参数类型错与缺参 → `10001`、错方法 → HTTP **405** + `10008`、错 Content-Type → HTTP **415** + `10009`（修复前四类均 500）；
+> 匿名直连 8081 打 ADMIN 接口 → **401 + 10002**（修复前 403）、已登录 USER 打同一接口仍 403；
+> 网关响应头带 `X-Trace-Id`（含 401 响应）、自带合法 traceId 被沿用、非法 traceId 被重新生成；
+> OPTIONS 预检 → **200 + `Access-Control-Allow-Origin` + `Access-Control-Expose-Headers`**（修复前 401）。
+> 回归：`concurrent-reserve`（会议室 4）**10/10**、`concurrent-modify` **10/10**、三个 E2E **11/11 + 19/19 + 19/19**、
+> 后端单测 **45 例 0 失败**（含定向跑通的 Feign 降级：`WARN [Fallback] … cause=ServiceUnavailable`，返回 `10007` 且 data 为空）、
+> 前端 `tsc` + `eslint` 零问题、**vitest 26 例**、`vite build` 分包后 app chunk 由 1.36MB 降至 55KB（vendor 三包独立缓存）。
+> Redis：免密 `PING` → `NOAUTH Authentication required.`，三个服务在带口令的连接下全部功能正常。
+
+> ⚠️ **本批顺带发现并修掉的两个"非代码"问题**（都在验证过程中暴露）：
+> ① `scripts/concurrent-reserve.sh` **从不清理**每轮胜出的会议——十轮回归就在该会议室留下 10 场 `status=20`，
+> 跑几轮后候选时段被自己填满，脚本开始报"连续 10 天候选时段均被占用"（青竹厅 10-22~10-29 每天 10:00 都被历史残留占着）。
+> 已补上与 `concurrent-modify.sh` 一致的 `cancel_slot` 自清理（实测 3 轮后该会议室活跃会议数归 0）。
+> ② 上述残留数据会**让后端单测误红**：`ConflictCheckerTest` 用固定时段 2026-11-10 10:00（@Transactional 自带回滚），
+> 一旦该时段有外部残留就断言失败。清理后 45 例全绿——**遇到测试红了先看数据库有没有脏数据**，别急着怀疑代码。
 
 > 第 2、3 批验证方式：C4 实测"建会议 → 取消（50）→ 再改期 → code=40002 且时间未变"；
 > R5 实测 Redis 中幂等 key 的值已为 `S`（处理中/已完成状态位）；定向测试 18/18；
@@ -140,12 +160,12 @@ T1 继续：锁内冲突复检通过 → `UPDATE ... WHERE id=? AND version=3` *
 |---|------|------|---------|
 | R1 | `meeting/service/MeetingQueryService.java:39-40,56`<br>`auth/service/UserService.java:56` | **分页 page 无上限 → int 溢出 → 500** | ✅ **主评审实测**：`/api/meetings?page=2147483647&size=100` → HTTP 500 `code:10000`（`(2147483646*100)` 溢出为 -200 → `LIMIT -200,100` → MySQL 1064）。`/users` 同型。改法：`long offset = ((long)page-1)*size` + page 上限 |
 | R2 | `auth/service/AuthService.java:54` | **登录时序泄漏用户名**（防枚举只防了错误码，没防时间） | 实测：不存在的用户名 ~4ms，存在的 `user3` ~58ms（**约 15 倍差**）——脚本按响应时间排序即可批量拿有效用户名；再叠加认证域零限流 → 定向撞库。改法：`user==null` 时对预置 `DUMMY_HASH` 跑一次 `matches` + Redis 滑动窗口限流（`10005` 已登记） |
-| R3 | `auth/service/UserService.java:81-88`、`AuthService.java:87-93`、**`:96-106`** | 停用/登出后的 **accessToken 真空期**；**新发现：`/auth/me` 也不看 status** | admin 停用 user1 后，其未过期 accessToken 仍可通行 ≤30 分钟，`/auth/me` 也照常 200 返回资料与角色 —— "停用"在 30 分钟内几乎是装饰。（M1 P1-3 未修 + 新增 currentUser 漏点） |
-| R4 | `auth/service/UserService.java:73,77`、`mapper/SysRoleMapper.java:26-27` | 建用户**不校验 `deptId`/`roleIds`**（悬空引用；"校验用"的 Mapper 方法备而未用） | `POST /api/users {"deptId":99999,"roleIds":[7]}` → 200 创建成功；该用户登录后 `roles` 为空、所有 `@PreAuthorize` 过不去，排障看不到根因。与 M1 P1-9（会议室 groupId）完全同型 |
+| R3 | `auth/service/UserService.java:81-88`、`AuthService.java:87-93`、**`:96-106`** | 停用/登出后的 **accessToken 真空期**；**新发现：`/auth/me` 也不看 status** | ⚠️ **部分修复**：`/auth/me` 已校验 status（批量 1）；**真空期仍在**——见下方遗留清单第 1 条 |
+| R4 | `auth/service/UserService.java:73,77`、`mapper/SysRoleMapper.java:26-27` | 建用户**不校验 `deptId`/`roleIds`**（悬空引用；"校验用"的 Mapper 方法备而未用） | ✅ **已修**（第 4 批）：`ensureDeptExists` + `ensureRolesExist`（顺手用上了 `SysRoleMapper.selectByIds` 这个"备而未用"的方法、对 roleIds 去重），实测 `deptId=99999`/`roleIds=[99999]` 均 `10001`。与 M1 P1-9 同型，两边一起修 |
 | R5 | `meeting/aop/IdempotentAspect.java:52-57,59-65` | **10006 的"已成功"语义与"失败删 key"互相打架** | R1 持 token K 在等锁/事务中，R2 同 token 到达 → 立刻 10006 → 前端弹"该预约已提交过"**并关闭抽屉**；若 R1 随后失败，用户看到"已提交过 + 抽屉关闭 + 日历里什么都没有"——**一次预约静默丢失**。根因：key 的 value 只有 `"1"`、没存结果，"重复即复用上次结果"物理上无法实现；且"抛异常 ⟺ 没提交"在 COMMIT 阶段断连时不成立 |
 | R6 | `meeting/resources/mapper/` 各 XML 的索引注释（如 `MeetingMapper.xml:61-67`） | 注释断言"命中 idx_room_time"，**实测走的是 idx_status_start + filesort** | ✅ 主评审实测：`key: idx_status_start`、`Extra: Using index condition; Using where; **Using filesort**`——而 `docs/03 4.1` 自己写"若出现 filesort 说明写法有问题"。小数据量下是 cost 摆动（rows=2），但**注释与事实不符**（AI-RULES 要求注释准确）。改法：在真实数据量下复跑 EXPLAIN 后按实测改注释 |
-| R7 | `meeting/service/AvailabilityService.java:35-41` + `dto/AvailabilityQueryDTO.java:16-17` | `roomIds` **无数量/去重/元素校验**，逐房间 2 次串行查询 | ✅ 主评审实测：传 5 个重复 id → 返回 5 个结果，不去重不报错。2MB 请求体可塞约 20 万个数值 → 40 万次 DB 往返挂在**一个**请求线程上（该接口登录即可调）。改法：`@Size(max=50)` + `distinct()` |
-| R8 | `meeting/vo/MeetingDetailVO.java:38-42` + `MeetingParticipantMapper.xml:37-43` | 详情"公开可查"把参会人 **email（PII）** 以自增 ID 可枚举的方式曝光 | ✅ 主评审实测：详情返回 `user2@example.com` 等；而 **email 在全前端零渲染**（grep 确认）→ "零业务价值的 PII 暴露"。改法：先改 `docs/04 4.5` 样例 → 删 `ParticipantVO.email` 与 SQL 的 `u.email`（一行） |
+| R7 | `meeting/service/AvailabilityService.java:35-41` + `dto/AvailabilityQueryDTO.java:16-17` | `roomIds` **无数量/去重/元素校验**，逐房间 2 次串行查询 | ✅ **已修**（第 4 批）：`@Size(max=50)` + 容器元素约束 `List<@NotNull @Positive Long>` + service 层 `distinct()`。实测 50 个放行、51/52 个回 `10001 一次最多查询 50 个会议室`、`[-1]` 被拒、`[3,3,3]` 去重成 1 条 |
+| R8 | `meeting/vo/MeetingDetailVO.java:38-42` + `MeetingParticipantMapper.xml:37-43` | 详情"公开可查"把参会人 **email（PII）** 以自增 ID 可枚举的方式曝光 | ✅ **已修**（第 4 批，文档先行）：`docs/04 4.5` 样例先去掉 email 并写明理由 → 再删 `ParticipantVO.email`、SQL 的 `u.email`、前端 `MeetingParticipant.email`。实测详情响应 `participants[0]` 已无该字段 |
 
 ### 前端（多条为 2026-10-15 新写的代码，一并列出）
 
@@ -203,22 +223,33 @@ T1 继续：锁内冲突复检通过 → `UPDATE ... WHERE id=? AND version=3` *
 | 编号 | 问题 | 状态 |
 |------|------|------|
 | P1-1 | `/users/batch` 无鉴权 | ⚠️ **部分修复**：路径隔离有效（四种穿越变体实测 400/404），但直连 8081 仍零凭据 → 并入 C2 |
-| P1-2 | 默认凭据入库 | ❌ 仍在（3 个 yml + compose 的 `MYSQL_ROOT_PASSWORD: root123`） |
-| P1-3 | 登出/停用不彻底 | ❌ 仍在（并入 R3，且新发现 `/auth/me` 也不看 status） |
-| P1-4 | 登录无防爆破 | ❌ 仍在（并入 R2，另有时序泄漏） |
+| P1-2 | 默认凭据入库 | ⚠️ **部分修复**：compose 的 MySQL/Redis 口令改为 `${MYSQL_ROOT_PASSWORD:-root123}` / `${REDIS_PASSWORD:-redis123}` 可环境变量覆盖 + 只绑回环；默认值仍在文件里（**本地开发型的取舍，已在注释里写明生产做法**） |
+| P1-3 | 登出/停用不彻底 | ⚠️ **部分修复**：`/auth/me` 已校验 status、refreshToken 走 Redis 可即时吊销；**accessToken 的 ≤30 分钟真空期仍在**（需引入"失效时间戳"下发到网关，见遗留清单） |
+| P1-4 | 登录无防爆破 | ⚠️ **部分修复**：时序泄漏已消除（陪跑哈希）；**限流未做**（`10005` 已登记，docs/05 T4.8 有 Redis 滑动窗口的实现计划） |
 | P1-5 | redirect 闭环 | ✅ 已修 |
-| P1-6 | 缺 device 筛选 | ❌ 仍在（`selectList` 只有 groupId/capacity/status） |
+| P1-6 | 缺 device 筛选 | ✅ **已修**（`JSON_CONTAINS` + `?device=`，docs/04 3.2 早已约定该参数；前端管理页筛选 UI 暂未接入，已在文档注明） |
 | P1-7 | 默认策略值不一致 | ✅ 已修 |
 | P1-8 | upsert 非原子 | ✅ 已修 |
-| P1-9 | 未校验 groupId | ❌ 仍在（`roomGroupMapper` 只在 listGroups 用过）；auth 侧同型见 R4 |
-| P1-10 | 匿名访问映射 403 | ❌ 仍在（`handleAccessDenied` 无匿名判断） |
-| P1-11 | 框架异常吞成 500 | ⚠️ **部分修复**：`HttpMessageNotReadable`/`NoResourceFound` 已补；**残留 4 类实测仍 500**（参数类型错 / 路径变量类型错 / 方法不支持应 405 / 缺 Content-Type 应 415） |
+| P1-9 | 未校验 groupId | ✅ **已修**（`ensureGroupExists`，create/update 都过）；auth 侧同型 R4 一并修掉 |
+| P1-10 | 匿名访问映射 403 | ✅ **已修**（`handleAccessDenied` 按 `AnonymousAuthenticationToken` 分叉：匿名 401 / 已登录 403），单测 3 例覆盖 |
+| P1-11 | 框架异常吞成 500 | ✅ **已修**：四类残留（参数类型错、路径变量类型错、方法不支持、缺 Content-Type）分别映射 `10001`/`10001`/`405+10008`/`415+10009`；另补 `MissingServletRequestParameter`、`BindException` 两类同族异常 |
 | P1-12 | unhandled rejection | ✅ 已修 |
-| P1-13 | 前端类型与契约不一致 | ❌ 仍在（另见：`/users/search` 返回 `roles:null`,`/users` 返回数组 —— 同一 VO 两种形状） |
-| P1-14 | token 两处真相 | ❌ 仍在（刷新失败只清 token 不清 `meeting.user`，残留上一用户 PII） |
-| P1-15 | 无 lint / 无测试 / 无分包 | ❌ 仍在（单包 1.36MB；E2E 脚本也没入库，见 R16） |
-| P1-16 | Feign 降级语义 + 无超时 | ❌ 仍在（且降级把"auth 挂了"与"查无此人"压成同一个空 List） |
-| P1-17 | 网关 traceId/CORS | ⚠️ 部分：`/ws/**` 路由已加；**traceId/CORS 仍缺**，且新发现：`JwtAuthFilter` 在方法判定前就要求 token → **浏览器 OPTIONS 预检会 401**，CORS 加了也不通 |
+| P1-13 | 前端类型与契约不一致 | ✅ **已修**：`/users/search` 换用场景专用 `UserSearchVO`（id/realName/deptName），前端类型同步为 `UserSearchItem`；顺带堵掉该接口的 email 外泄 |
+| P1-14 | token 两处真相 | ✅ **已修**：新增 `clearSession()` 统一清 token + `meeting.user`，`redirectToLogin` 与 store.logout 都走它 |
+| P1-15 | 无 lint / 无测试 / 无分包 | ✅ **已修**：ESLint（扁平配置，`no-explicit-any`/`no-console` 落成规则）+ vitest **26 例** + `manualChunks` 三分包；单包 1.36MB → app 55KB + 三个 vendor 包 |
+| P1-16 | Feign 降级语义 + 无超时 | ✅ **已修**：降级改回 `10007`（不再用空列表冒充"查无此人"）+ connect/read 超时配死（默认 read 60s 会把请求线程挂在假死的 auth 上） |
+| P1-17 | 网关 traceId/CORS | ✅ **已修**：`TraceIdFilter`（生成/透传/回带，含 401 响应；入参白名单校验）+ `globalcors` + `JwtAuthFilter` 放行 OPTIONS 预检 |
+
+### 五·补、第 4 批之后**仍未修**的（明确遗留，别当成已修）
+
+| # | 项 | 为什么留着 / 怎么修 |
+|---|----|--------------------|
+| 1 | **R3 的 accessToken 真空期**（≤30 分钟） | 停用/登出后 accessToken 仍能通行到自然过期。修法要动**网关**：登录时下发"用户级失效时间戳"（Redis `auth:invalid-before:{uid}`），网关校验 `iat` 是否早于它——相当于给无状态 JWT 加一层可撤销性。属于设计变更，值得单独一批 + 一份说明（面试问"JWT 怎么登出"时的标准答案） |
+| 2 | **P1-4 登录限流** | `10005` 已登记、docs/05 T4.8 有完整方案（Redis ZSET 滑动窗口 + Nacos 阈值 + `@RateLimit`）。放在 M4 与限流一起做更省事，不建议现在零散加 |
+| 3 | **P1-2 的"默认口令"本体** | 现已支持环境变量覆盖，但 `root123`/`redis123` 作为默认值仍在 compose 里——本地开发项目需要"clone 下来就能跑"，这是**有意保留**的取舍；生产做法（不发布端口 + 强制注入 + 密钥管理）已写进 compose 注释与 docs/04 |
+| 4 | Optional 里影响面较大的几条 | ① `availability` 对"时间顺序 / 会议室存在性"零校验（会**错报可用**）；② `MeetingCreateDTO.participants.userIds` 无上限（批量插入在锁内，能拉长锁持有时间）；③ `scope=mine` 的 `OR EXISTS` 走全表扫描（`EXPLAIN ANALYZE` loops=63），10 万行后每页扫全表；④ keyword 的 `%`/`_` 未转义；⑤ 业务判断用 JVM 时钟、审计字段用 DB 时钟（容器化不设 TZ 会偏 8 小时）；⑥ 锁 key 契约在 docs/01、docs/02、AI-RULES 三处写法不一致（实现是 `lock:meeting:{roomId}:{yyyy-MM-dd}`） |
+| 5 | 前端工程化的下一层 | 路由级 `React.lazy`（antd vendor 仍 1.07MB，首屏 ≈1.5MB）、CSP、HttpOnly Cookie 的取舍讨论、`request.ts` 里 `onErrorCode` 至今零调用（死代码，要么用要么删） |
+| 6 | 其余 Optional（行锁粒度=整间会议室、`@Idempotent` 只在 Controller 层、`calendar` 不校验会议室存在、`needApproval` 文档 boolean vs 代码 0/1 等） | 见第四章，逐条都写了位置与影响，未动 |
 
 ---
 

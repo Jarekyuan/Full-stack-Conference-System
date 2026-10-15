@@ -57,6 +57,10 @@
 
 **M2 后端补强（2026-10-15）**：修掉一处双重预订竞态——`update()`（改期）原先不经过预约锁，与"新建"并发时能各自通过冲突检测、同一时段落下两场会议（**实测 10 轮 7 轮复现**）。修法：改期纳入同一把房间锁 + 事务内加会议室行锁兜底（`selectIdForUpdate`），并补齐"凡是改变时段占用状态的写路径都要取行锁"这条设计约束（审批 T3.2 同此理）。回归脚本 `scripts/concurrent-modify.sh` 修复后 10/10 通过。
 
+**M2 全量评审与修复（2026-10-15，见 `docs/review-M2.md`）**：对代码做了一次从 M0 到现在的全量 review（4 Critical + 12 Required + 14 Optional + M1 存量 17 条 P1 逐条核实），随后分 4 批修完：
+安全止血（Redis 口令/摘要存储、服务只绑回环、分页溢出、登录时序）→ 并发正确性（锁的异常收尾、状态守卫、幂等语义）→ 前端可见缺陷（竞态守卫、状态映射收敛等 7 条）→ 契约与工程（入参上限、PII 收口、框架异常映射、网关 traceId/CORS、前端 lint+测试+分包）。
+**明确未修**的项集中记在 `review-M2.md`「五·补」小节（如 accessToken 真空期、登录限流、路由级懒加载），不要当成已完成。
+
 ---
 
 ## 4. 下一步：M3 审批 + 生命周期（详见 05 文档 T3.1~T3.8）
@@ -123,14 +127,33 @@
    - **处置**：已装回 1.56.0（JDT 3.47 + JDK 21，无该误报；实测报错 241 → 0）。⚠️ **在 VS Code 扩展面板对 redhat.java 点「忽略更新 / Ignore Updates」**，否则会被自动升回去、故障复现
    - **兜底习惯**：改了后端代码一律 `mvn clean package`（`clean` 能清掉任何残留桩类）
 8. **服务与基础设施一律只绑回环 `127.0.0.1`**（2026-10-15 评审 C1/C2 后加的）：
-   三个服务的 `application.yml` 有 `server.address: 127.0.0.1`，`deploy/docker-compose.infra.yml` 的端口映射全部写成 `127.0.0.1:xxxx:xxxx`。
+   三个服务的 `application.yml` 有 `server.address: 127.0.0.1`，`deploy/docker-compose.infra.yml` 的端口映射全部写成 `127.0.0.1:xxxx:xxxx`；
+   **Redis 同时加了 `requirepass`**（第 4 批补齐——此前只有端口收窄，免密这件事本身没解决）。
    - **为什么**：服务端**无条件信任** `X-User-*` 身份头（网关验签后注入的设计前提是"业务端口只在网关后面可达"）。
      绑 `0.0.0.0` 时，同网段任意机器直连 8081 伪造 `X-User-Roles: ADMIN` 就能读 ADMIN 接口、伪造 `X-User-Id` 就能操作他人会议；
      Redis 还无密码 + 存着会话凭证 → 实测一条 `nc` 就能读走 refreshToken 换 ADMIN token（详见 `docs/review-M2.md` C1/C2）。
    - **副作用**：服务不能再被局域网其他设备访问。要给面试官演示，需显式改 `server.address` 并自行承担风险，
      或改用「网关绑内网网卡 + 业务端口只对网关机开放」的部署形态。
+   - **Redis 口令**：默认 `redis123`，用 `REDIS_PASSWORD` 环境变量覆盖（compose 与三个 yml 同源）。
+     ⚠️ `docker exec smt-redis redis-cli PING` 现在会回 `NOAUTH`（这是正常的）；要手工连需 `-a` 或 `REDISCLI_AUTH`。
+     ⚠️ 改 MySQL 口令必须 `down -v` 重建数据卷（只在首次初始化时读取），改 Redis 口令只需重启容器。
    - 顺手清理：改完后 Redis 里会残留修复前的**明文**反向索引 key（`auth:refresh:token:*` 后缀 36 字符的那批）——
      新代码按摘要查找、已不可达，可用 `--scan --pattern` 删掉。
+
+9. **回归/验证脚本必须自清理，否则会"把系统跑坏"**（2026-10-15 第 4 批踩到）：
+   - `scripts/concurrent-reserve.sh` 原先每轮留下 1 场 `status=20` 的会议 → 跑几轮后该会议室候选时段被自己填满，
+     脚本开始报"连续 10 天候选时段均被占用"，**看起来像功能坏了，其实是被自己的数据堵死了**。已补 `cancel_slot` 自清理。
+   - 残留数据还会**让后端单测误红**：`ConflictCheckerTest` 用固定时段 2026-11-10 10:00，
+     该时段一旦有外部残留（哪怕是自己几小时前跑脚本留下的），断言就从 1 变 2 而失败。
+     **单测红了先查库，别先怀疑代码**：`SELECT id,title FROM meeting WHERE status IN (10,20,30) AND start_time >= '...'`。
+   - 判断"是不是自己造的"最省事的办法：看 `created_at` 是不是刚才、标题是不是 `并发验证-*` / `E2E*` / `C4验证-*`。
+
+10. **跑 Maven 别被管道吞掉退出码**（2026-10-15 踩到，白跑两次）：
+    `mvn ... | tail -20` 的 `$?` 是 `tail` 的退出码，**永远 0**；而 `-DskipTests` 只跳过"执行"、**仍然编译测试类**，
+    测试编译失败一样算构建失败。写法：`mvn ... > /tmp/build.log 2>&1; echo $?`（或 `set -o pipefail`）。
+    本次教训：`GlobalExceptionHandler.handleAccessDenied` 签名从 `Result` 改成 `ResponseEntity` 后，
+    `CommonWebAutoConfigurationTest` 编译不过 → 构建其实失败了，却因为看的是管道退出码而误判为成功，
+    导致后面"用旧 jar 启动服务 + 连新 Redis"打出一堆 `NOAUTH` 假故障。
 
 ---
 
@@ -150,11 +173,19 @@ cd server && env -u SERVER__PORT java -jar meeting-service/target/meeting-servic
 cd web && npm run dev    # http://localhost:5173
 ```
 
-**并发验证脚本**（需上面三个服务已启动；退出码非 0 = 断言失败，可用于 CI）：
+**验证与测试**（都要求上面三个服务已启动；退出码非 0 = 断言失败，可直接接 CI）：
 
 ```bash
-bash scripts/concurrent-reserve.sh 5 --repeat 10   # 5 个客户端抢同一时段 → 恰好 1 成功
+# 后端
+bash scripts/concurrent-reserve.sh 5 --repeat 10   # 5 个客户端抢同一时段 → 恰好 1 成功（跑完自清理槽位）
 bash scripts/concurrent-modify.sh 10               # 改期 vs 新建抢同一时段 → 时段只落 1 场
+bash scripts/verify-review-batch4.sh               # 第 4 批修复的 33 条逐项断言（R7/R8/P1-*）
+cd server && mvn -q test -Dtest='!AuthFeignClientTest#batchUsersShouldDegradeWhenAuthDown'  # 单测（那条降级用例需 auth 停机时单独跑）
+#   ⚠️ 别用 `mvn ... | tail`：管道会把退出码换成 tail 的（见踩坑 #10）
+
+# 前端
+cd web && npm run check     # = tsc --noEmit + eslint + vitest（26 例）
+node e2e/e2e-calendar.cjs   # playwright E2E（需先 npm i --no-save playwright + dev server；详见 web/e2e/README.md）
 ```
 
 **演示账号**（密码均为 `admin123`/`user123`）：
