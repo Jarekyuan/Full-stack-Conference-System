@@ -28,4 +28,24 @@
         ORDER BY created_at, id
     </select>
 
+    <!-- 状态时间线 VO（T2.8 详情）：LEFT JOIN sys_user（operator_id 可为 NULL = 系统任务） -->
+    <resultMap id="TimelineVOMap" type="com.smt.meeting.vo.MeetingDetailVO$StatusLogVO">
+        <result column="from_status" property="fromStatus"/>
+        <result column="to_status" property="toStatus"/>
+        <result column="event" property="event"/>
+        <result column="operator_id" property="operatorId"/>
+        <result column="operator_name" property="operatorName"/>
+        <result column="remark" property="remark"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <select id="selectTimeline" resultMap="TimelineVOMap">
+        SELECT l.from_status, l.to_status, l.event, l.operator_id,
+               u.real_name AS operator_name, l.remark, l.created_at
+        FROM meeting_status_log l
+        LEFT JOIN sys_user u ON u.id = l.operator_id
+        WHERE l.meeting_id = #{meetingId}
+        ORDER BY l.created_at, l.id
+    </select>
+
 </mapper>

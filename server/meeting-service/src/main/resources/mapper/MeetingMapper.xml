@@ -108,4 +108,102 @@
         ORDER BY m.start_time
     </select>
 
+    <!--
+      列表查询条件（T2.8；<where> 自动处理 AND 前缀 + <choose>/<if> 组合）：
+        scope：mine 限定"我组织的 或 我参与的"（EXISTS 半连接，避免 JOIN 去重）；
+               all 不加归属条件（ADMIN/APPROVER 权限在 Service 层校验）★ choose 教学点
+        statuses：多值 IN（<foreach>）；startDate/endDate 按开始时间过滤（endDate 含当天）
+    -->
+    <sql id="QueryConditions">
+        <where>
+            <choose>
+                <when test="scope == 'mine'">
+                    AND (m.organiser_id = #{userId}
+                    OR EXISTS (SELECT 1 FROM meeting_participant mp
+                    WHERE mp.meeting_id = m.id AND mp.user_id = #{userId}))
+                </when>
+                <otherwise>
+                    <!-- scope = all：不加归属过滤 -->
+                </otherwise>
+            </choose>
+            <if test="statuses != null and statuses.size() > 0">                AND m.status IN
+                <foreach collection="statuses" item="s" open="(" separator="," close=")">#{s}</foreach>
+            </if>
+            <if test="roomId != null">AND m.room_id = #{roomId}</if>
+            <if test="startDate != null">AND m.start_time &gt;= #{startDate}</if>
+            <if test="endDate != null">AND m.start_time &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)</if>
+            <if test="keyword != null and keyword != ''">AND m.title LIKE CONCAT('%', #{keyword}, '%')</if>
+        </where>
+    </sql>
+
+    <!-- 列表 VO（join 直出展示字段；participantCount 子查询统计） -->
+    <resultMap id="MeetingVOMap" type="com.smt.meeting.vo.MeetingVO">
+        <id column="id" property="id"/>
+        <result column="title" property="title"/>
+        <result column="room_id" property="roomId"/>
+        <result column="room_name" property="roomName"/>
+        <result column="organiser_id" property="organiserId"/>
+        <result column="organiser_name" property="organiserName"/>
+        <result column="start_time" property="startTime"/>
+        <result column="end_time" property="endTime"/>
+        <result column="status" property="status"/>
+        <result column="need_approval" property="needApproval"/>
+        <result column="participant_count" property="participantCount"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <!-- 列表（手写分页 LIMIT；按开始时间倒序，"最近的在前面"） -->
+    <select id="selectPage" resultMap="MeetingVOMap">
+        SELECT m.id, m.title, m.room_id, r.name AS room_name,
+               m.organiser_id, u.real_name AS organiser_name,
+               m.start_time, m.end_time, m.status,
+               s.need_approval,
+               (SELECT COUNT(*) FROM meeting_participant mp2 WHERE mp2.meeting_id = m.id) AS participant_count,
+               m.created_at
+        FROM meeting m
+        LEFT JOIN meeting_room r ON r.id = m.room_id
+        LEFT JOIN sys_user u ON u.id = m.organiser_id
+        LEFT JOIN room_strategy s ON s.room_id = m.room_id
+        <include refid="QueryConditions"/>
+        ORDER BY m.start_time DESC, m.id DESC
+        LIMIT #{offset}, #{size}
+    </select>
+
+    <!-- 独立 COUNT（不 JOIN：条件仅涉及 meeting 表） -->
+    <select id="countPage" resultType="long">
+        SELECT COUNT(*)
+        FROM meeting m
+        <include refid="QueryConditions"/>
+    </select>
+
+    <!-- 详情 VO（全字段 + 展示冗余；participants/logs 由 Service 另行装配） -->
+    <resultMap id="MeetingDetailMap" type="com.smt.meeting.vo.MeetingDetailVO">
+        <id column="id" property="id"/>
+        <result column="title" property="title"/>
+        <result column="room_id" property="roomId"/>
+        <result column="room_name" property="roomName"/>
+        <result column="organiser_id" property="organiserId"/>
+        <result column="organiser_name" property="organiserName"/>
+        <result column="start_time" property="startTime"/>
+        <result column="end_time" property="endTime"/>
+        <result column="status" property="status"/>
+        <result column="remark" property="remark"/>
+        <result column="cancel_reason" property="cancelReason"/>
+        <result column="cancel_time" property="cancelTime"/>
+        <result column="recurring_id" property="recurringId"/>
+        <result column="version" property="version"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <select id="selectDetailById" resultMap="MeetingDetailMap">
+        SELECT m.id, m.title, m.room_id, r.name AS room_name,
+               m.organiser_id, u.real_name AS organiser_name,
+               m.start_time, m.end_time, m.status, m.remark,
+               m.cancel_reason, m.cancel_time, m.recurring_id, m.version, m.created_at
+        FROM meeting m
+        LEFT JOIN meeting_room r ON r.id = m.room_id
+        LEFT JOIN sys_user u ON u.id = m.organiser_id
+        WHERE m.id = #{id}
+    </select>
+
 </mapper>

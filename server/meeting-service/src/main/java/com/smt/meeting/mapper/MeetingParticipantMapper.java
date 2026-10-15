@@ -1,6 +1,7 @@
 package com.smt.meeting.mapper;
 
 import com.smt.meeting.entity.MeetingParticipant;
+import com.smt.meeting.vo.MeetingDetailVO;
 import org.apache.ibatis.annotations.Param;
 
 import java.util.List;
@@ -10,9 +11,12 @@ import java.util.List;
  */
 public interface MeetingParticipantMapper {
 
-    /** 批量新增（内部 + 外部参会人一次落库，教学点：<foreach> 生成多值 INSERT） */
+    /** 批量新增（<foreach> 生成多值 INSERT） */
     int batchInsert(@Param("list") List<MeetingParticipant> list);
 
-    /** 按会议查询参会人（T2.8 详情页用） */
+    /** 按会议查询参会人（实体；内部用） */
     List<MeetingParticipant> selectByMeetingId(@Param("meetingId") Long meetingId);
+
+    /** 参会人明细（JOIN sys_user 直出姓名/邮箱；T2.8 详情用） */
+    List<MeetingDetailVO.ParticipantVO> selectDetailByMeetingId(@Param("meetingId") Long meetingId);
 }
