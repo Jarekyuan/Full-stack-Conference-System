@@ -1,7 +1,6 @@
 package com.smt.meeting.dto;
 
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -33,27 +32,13 @@ public class MeetingCreateDTO {
     @Size(max = 500, message = "备注最长 500 字符")
     private String remark;
 
-    /** 参会人（可空；内部用户 + 外部参会人） */
+    /** 参会人（可空；仅系统用户，v1.3 起不区分外部参会人） */
     @Valid
     private Participants participants;
 
     @Data
     public static class Participants {
-        /** 内部参会人（sys_user.id） */
+        /** 内部参会人（sys_user.id；重复 id 由联合唯一键与去重逻辑兜底） */
         private List<Long> userIds;
-        /** 外部参会人（客户等无账号参与者） */
-        @Valid
-        private List<External> externals;
-    }
-
-    @Data
-    public static class External {
-        @NotBlank(message = "外部参会人姓名不能为空")
-        @Size(max = 50, message = "外部参会人姓名最长 50 字符")
-        private String name;
-
-        @Email(message = "邮箱格式不正确")
-        @Size(max = 100, message = "邮箱最长 100 字符")
-        private String email;
     }
 }

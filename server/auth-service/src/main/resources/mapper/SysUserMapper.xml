@@ -10,15 +10,27 @@
         <result column="real_name" property="realName"/>
         <result column="email" property="email"/>
         <result column="avatar" property="avatar"/>
-        <result column="role" property="role"/>
+        <result column="dept_id" property="deptId"/>
         <result column="status" property="status"/>
         <result column="created_at" property="createdAt"/>
         <result column="updated_at" property="updatedAt"/>
     </resultMap>
 
     <sql id="BaseColumns">
-        id, username, password, real_name, email, avatar, role, status, created_at, updated_at
+        id, username, password, real_name, email, avatar, dept_id, status, created_at, updated_at
     </sql>
+
+    <!-- 用户出参 VO 映射（分页用；deptName 由 LEFT JOIN 直出，roles 由 Service 批量装配） -->
+    <resultMap id="UserVOMap" type="com.smt.auth.vo.UserVO">
+        <id column="id" property="id"/>
+        <result column="username" property="username"/>
+        <result column="real_name" property="realName"/>
+        <result column="email" property="email"/>
+        <result column="avatar" property="avatar"/>
+        <result column="dept_id" property="deptId"/>
+        <result column="dept_name" property="deptName"/>
+        <result column="status" property="status"/>
+    </resultMap>
 
     <!-- 按用户名查询：命中唯一索引 uk_username -->
     <select id="selectByUsername" resultMap="BaseResultMap">
@@ -54,22 +66,32 @@
         LIMIT 20
     </select>
 
+    <!-- 用户总数（可按部门筛选；命中 idx_dept） -->
     <select id="countAll" resultType="long">
-        SELECT COUNT(*) FROM sys_user
+        SELECT COUNT(*)
+        FROM sys_user
+        <where>
+            <if test="deptId != null">AND dept_id = #{deptId}</if>
+        </where>
     </select>
 
-    <!-- 分页（手写 LIMIT；offset/size 由 Service 层规范化） -->
-    <select id="selectPage" resultMap="BaseResultMap">
-        SELECT <include refid="BaseColumns"/>
-        FROM sys_user
-        ORDER BY id
+    <!-- 分页（手写 LIMIT；LEFT JOIN 部门直出 deptName；offset/size 由 Service 层规范化） -->
+    <select id="selectPage" resultMap="UserVOMap">
+        SELECT u.id, u.username, u.real_name, u.email, u.avatar, u.dept_id, u.status,
+               d.name AS dept_name
+        FROM sys_user u
+        LEFT JOIN sys_dept d ON d.id = u.dept_id
+        <where>
+            <if test="deptId != null">AND u.dept_id = #{deptId}</if>
+        </where>
+        ORDER BY u.id
         LIMIT #{offset}, #{size}
     </select>
 
-    <!-- 创建用户：自增主键回填 id（created_at/updated_at 走数据库默认值） -->
+    <!-- 创建用户：自增主键回填 id（created_at/updated_at 走数据库默认值；dept_id 可空） -->
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
-        INSERT INTO sys_user (username, password, real_name, email, avatar, role, status)
-        VALUES (#{username}, #{password}, #{realName}, #{email}, #{avatar}, #{role}, #{status})
+        INSERT INTO sys_user (username, password, real_name, email, avatar, dept_id, status)
+        VALUES (#{username}, #{password}, #{realName}, #{email}, #{avatar}, #{deptId}, #{status})
     </insert>
 
     <!-- 更新状态（updated_at 走 ON UPDATE CURRENT_TIMESTAMP） -->

@@ -23,6 +23,8 @@ import org.springframework.util.AntPathMatcher;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
+import java.util.List;
+
 /**
  * 网关鉴权过滤器（全局）：
  * ① 剥离外部传入的 X-User-*（防伪造：信任边界在网关，见 docs/04 接口设计 7.3）
@@ -35,7 +37,8 @@ import reactor.core.publisher.Mono;
 public class JwtAuthFilter implements GlobalFilter, Ordered {
 
     public static final String HEADER_USER_ID = "X-User-Id";
-    public static final String HEADER_USER_ROLE = "X-User-Role";
+    /** 角色列表头（逗号分隔；v1.3 起替代原单值 X-User-Role） */
+    public static final String HEADER_USER_ROLES = "X-User-Roles";
     private static final String BEARER_PREFIX = "Bearer ";
 
     private final AuthProperties authProperties;
@@ -58,7 +61,7 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
         ServerHttpRequest stripped = request.mutate()
                 .headers(headers -> {
                     headers.remove(HEADER_USER_ID);
-                    headers.remove(HEADER_USER_ROLE);
+                    headers.remove(HEADER_USER_ROLES);
                 })
                 .build();
 
@@ -76,9 +79,9 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
             Claims claims = jwtUtil.parse(token);
             ServerHttpRequest.Builder builder = stripped.mutate()
                     .header(HEADER_USER_ID, String.valueOf(jwtUtil.getUserId(claims)));
-            String role = jwtUtil.getRole(claims);
-            if (StrUtil.isNotBlank(role)) {
-                builder.header(HEADER_USER_ROLE, role);
+            List<String> roles = jwtUtil.getRoles(claims);
+            if (!roles.isEmpty()) {
+                builder.header(HEADER_USER_ROLES, String.join(",", roles));
             }
             return chain.filter(exchange.mutate().request(builder.build()).build());
         } catch (JwtException | IllegalArgumentException e) {

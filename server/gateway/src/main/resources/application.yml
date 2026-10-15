@@ -16,7 +16,8 @@ spring:
         - id: auth-service
           uri: lb://auth-service
           predicates:
-            - Path=/api/auth/**,/api/users/**
+            # v1.3：新增 /api/depts/**（部门）、/api/roles/**（角色列表）
+            - Path=/api/auth/**,/api/users/**,/api/depts/**,/api/roles/**
           filters:
             - StripPrefix=1
         - id: meeting-service

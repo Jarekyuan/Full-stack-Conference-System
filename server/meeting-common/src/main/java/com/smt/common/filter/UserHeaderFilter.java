@@ -13,17 +13,19 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
 
 /**
- * 读取网关注入的 X-User-Id / X-User-Role → 写入 UserContext + 桥接 SecurityContext
- * （供 @PreAuthorize("hasRole('ADMIN')") 使用）。
+ * 读取网关注入的 X-User-Id / X-User-Roles → 写入 UserContext + 桥接 SecurityContext
+ * （供 @PreAuthorize("hasRole('ADMIN')") 使用；多角色 = 多个 ROLE_ 权限对象，任一匹配即通过）。
  * 服务内信任请求头：外部伪造的同名头已由网关剥离后重写（docs/04 接口设计 1.4）。
  */
 public class UserHeaderFilter extends OncePerRequestFilter {
 
     public static final String HEADER_USER_ID = "X-User-Id";
-    public static final String HEADER_USER_ROLE = "X-User-Role";
+    /** 角色列表头（逗号分隔，如 "ADMIN,APPROVER"；v1.3 起替代原单值 X-User-Role） */
+    public static final String HEADER_USER_ROLES = "X-User-Roles";
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
@@ -43,7 +45,7 @@ public class UserHeaderFilter extends OncePerRequestFilter {
             return;
         }
         try {
-            LoginUser loginUser = new LoginUser(Long.valueOf(userId), request.getHeader(HEADER_USER_ROLE));
+            LoginUser loginUser = new LoginUser(Long.valueOf(userId), parseRoles(request.getHeader(HEADER_USER_ROLES)));
             UserContext.set(loginUser);
             bindSecurityContext(loginUser);
         } catch (NumberFormatException ignored) {
@@ -51,12 +53,26 @@ public class UserHeaderFilter extends OncePerRequestFilter {
         }
     }
 
+    /** "ADMIN,APPROVER" → ["ADMIN","APPROVER"]（空段与空白容错） */
+    private List<String> parseRoles(String header) {
+        if (StrUtil.isBlank(header)) {
+            return List.of();
+        }
+        return Arrays.stream(header.split(","))
+                .map(String::trim)
+                .filter(StrUtil::isNotBlank)
+                .toList();
+    }
+
     private void bindSecurityContext(LoginUser loginUser) {
-        if (StrUtil.isBlank(loginUser.role())) {
+        if (loginUser.roles().isEmpty()) {
             return;
         }
+        List<SimpleGrantedAuthority> authorities = loginUser.roles().stream()
+                .map(role -> new SimpleGrantedAuthority("ROLE_" + role))
+                .toList();
         UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
-                loginUser, null, List.of(new SimpleGrantedAuthority("ROLE_" + loginUser.role())));
+                loginUser, null, authorities);
         SecurityContextHolder.getContext().setAuthentication(authentication);
     }
 }

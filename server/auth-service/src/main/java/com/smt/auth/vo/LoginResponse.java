@@ -2,9 +2,10 @@ package com.smt.auth.vo;
 
 import lombok.Data;
 
+import java.util.List;
+
 /**
  * 登录响应（docs/04 接口设计 4.1）
- * refreshToken / expiresIn 在 T1.11 双 token 完整版中填充
  */
 @Data
 public class LoginResponse {
@@ -20,7 +21,11 @@ public class LoginResponse {
         private Long id;
         private String username;
         private String realName;
-        private String role;
+        /** 角色 code 列表（RBAC 多角色，如 ["ADMIN","APPROVER"]） */
+        private List<String> roles;
+        /** 所属部门（可空 = 未分配） */
+        private Long deptId;
+        private String deptName;
         private String avatar;
     }
 }

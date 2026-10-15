@@ -39,8 +39,9 @@ public class UserController {
     @GetMapping
     @PreAuthorize("hasRole('ADMIN')")
     public Result<PageResult<UserVO>> page(@RequestParam(defaultValue = "1") int page,
-                                           @RequestParam(defaultValue = "10") int size) {
-        return Result.success(userService.page(page, size));
+                                           @RequestParam(defaultValue = "10") int size,
+                                           @RequestParam(required = false) Long deptId) {
+        return Result.success(userService.page(page, size, deptId));
     }
 
     @PostMapping

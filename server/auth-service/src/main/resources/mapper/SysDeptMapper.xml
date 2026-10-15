@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 部门 SQL（手写 XML） -->
+<mapper namespace="com.smt.auth.mapper.SysDeptMapper">
+
+    <resultMap id="BaseResultMap" type="com.smt.auth.entity.SysDept">
+        <id column="id" property="id"/>
+        <result column="parent_id" property="parentId"/>
+        <result column="name" property="name"/>
+        <result column="sort_order" property="sortOrder"/>
+        <result column="status" property="status"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="BaseColumns">
+        id, parent_id, name, sort_order, status, created_at, updated_at
+    </sql>
+
+    <select id="selectAll" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM sys_dept
+        ORDER BY parent_id, sort_order, id
+    </select>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM sys_dept
+        WHERE id = #{id}
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO sys_dept (parent_id, name, sort_order, status)
+        VALUES (#{parentId}, #{name}, #{sortOrder}, #{status})
+    </insert>
+
+    <update id="update">
+        UPDATE sys_dept
+        SET name = #{name}, sort_order = #{sortOrder}, status = #{status}
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteById">
+        DELETE FROM sys_dept WHERE id = #{id}
+    </delete>
+
+    <!-- 删除前校验：子部门数（命中 idx_parent） -->
+    <select id="countChildren" resultType="int">
+        SELECT COUNT(*) FROM sys_dept WHERE parent_id = #{parentId}
+    </select>
+
+    <!-- 删除前校验：挂靠用户数（命中 idx_dept） -->
+    <select id="countUsers" resultType="int">
+        SELECT COUNT(*) FROM sys_user WHERE dept_id = #{deptId}
+    </select>
+
+</mapper>

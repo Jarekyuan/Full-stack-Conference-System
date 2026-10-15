@@ -8,13 +8,16 @@ import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Date;
+import java.util.List;
 
 /**
  * JWT 工具（jjwt 0.12.x 新 API）：签发与解析 accessToken
- * 载荷约定：sub=userId，claim role=角色（见 docs/04 接口设计 4.1）
+ * 载荷约定：sub=userId，claim roles=角色 code 数组（RBAC 多角色，见 docs/04 接口设计 4.1）
  * 实例由各服务配置类创建（@Bean），secret 从配置读取
  */
 public class JwtUtil {
+
+    private static final String CLAIM_ROLES = "roles";
 
     private final SecretKey key;
 
@@ -22,11 +25,11 @@ public class JwtUtil {
         this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
     }
 
-    public String generate(Long userId, String role, Duration ttl) {
+    public String generate(Long userId, List<String> roles, Duration ttl) {
         Date now = new Date();
         return Jwts.builder()
                 .subject(String.valueOf(userId))
-                .claim("role", role)
+                .claim(CLAIM_ROLES, roles)
                 .issuedAt(now)
                 .expiration(new Date(now.getTime() + ttl.toMillis()))
                 .signWith(key)
@@ -44,7 +47,12 @@ public class JwtUtil {
         return Long.valueOf(claims.getSubject());
     }
 
-    public String getRole(Claims claims) {
-        return claims.get("role", String.class);
+    /** 角色 code 列表（无 roles claim 时返回空列表，调用方按"无角色"处理） */
+    public List<String> getRoles(Claims claims) {
+        List<?> raw = claims.get(CLAIM_ROLES, List.class);
+        if (raw == null) {
+            return List.of();
+        }
+        return raw.stream().map(String::valueOf).toList();
     }
 }

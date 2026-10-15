@@ -124,32 +124,20 @@ public class MeetingReserveService {
         return strategy != null && strategy.getNeedApproval() != null && strategy.getNeedApproval() == 1;
     }
 
+    /** 参会人落库（v1.3：仅系统用户；distinct 去重，联合唯一键兜底防重） */
     private void saveParticipants(Long meetingId, MeetingCreateDTO.Participants participants) {
-        if (participants == null) {
+        if (participants == null || participants.getUserIds() == null || participants.getUserIds().isEmpty()) {
             return;
         }
-        List<MeetingParticipant> list = new ArrayList<>();
-        if (participants.getUserIds() != null) {
-            participants.getUserIds().forEach(userId -> {
-                MeetingParticipant p = new MeetingParticipant();
-                p.setMeetingId(meetingId);
-                p.setUserId(userId);
-                p.setIsExternal(0);
-                list.add(p);
-            });
-        }
-        if (participants.getExternals() != null) {
-            participants.getExternals().forEach(external -> {
-                MeetingParticipant p = new MeetingParticipant();
-                p.setMeetingId(meetingId);
-                p.setIsExternal(1);
-                p.setExternalName(external.getName());
-                p.setExternalEmail(external.getEmail());
-                list.add(p);
-            });
-        }
-        if (!list.isEmpty()) {
-            participantMapper.batchInsert(list);
-        }
+        List<MeetingParticipant> list = participants.getUserIds().stream()
+                .distinct()
+                .map(userId -> {
+                    MeetingParticipant p = new MeetingParticipant();
+                    p.setMeetingId(meetingId);
+                    p.setUserId(userId);
+                    return p;
+                })
+                .toList();
+        participantMapper.batchInsert(list);
     }
 }

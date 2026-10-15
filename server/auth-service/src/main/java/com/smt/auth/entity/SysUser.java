@@ -6,6 +6,7 @@ import java.time.LocalDateTime;
 
 /**
  * 用户实体（对应表 sys_user，字段见 docs/03 数据库设计）
+ * 角色不再在此实体上（RBAC 多角色经 sys_user_role 关联，查询时另行装配）
  */
 @Data
 public class SysUser {
@@ -17,8 +18,8 @@ public class SysUser {
     private String realName;
     private String email;
     private String avatar;
-    /** USER / APPROVER / ADMIN */
-    private String role;
+    /** 所属部门（sys_dept.id，可空 = 未分配） */
+    private Long deptId;
     /** 0 禁用 / 1 启用 */
     private Integer status;
     private LocalDateTime createdAt;

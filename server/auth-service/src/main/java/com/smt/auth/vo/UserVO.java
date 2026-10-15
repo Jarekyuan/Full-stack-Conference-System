@@ -2,6 +2,8 @@ package com.smt.auth.vo;
 
 import lombok.Data;
 
+import java.util.List;
+
 /**
  * 用户出参 VO（绝不包含 password）
  */
@@ -13,6 +15,10 @@ public class UserVO {
     private String realName;
     private String email;
     private String avatar;
-    private String role;
+    /** 角色 code 列表（RBAC 多角色） */
+    private List<String> roles;
+    /** 所属部门（可空 = 未分配） */
+    private Long deptId;
+    private String deptName;
     private Integer status;
 }

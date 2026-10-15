@@ -1,7 +1,10 @@
 package com.smt.auth.service;
 
 import com.smt.auth.dto.LoginRequest;
+import com.smt.auth.entity.SysDept;
 import com.smt.auth.entity.SysUser;
+import com.smt.auth.mapper.SysDeptMapper;
+import com.smt.auth.mapper.SysRoleMapper;
 import com.smt.auth.mapper.SysUserMapper;
 import com.smt.auth.store.RefreshTokenStore;
 import com.smt.auth.vo.LoginResponse;
@@ -14,24 +17,31 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
 
 /**
  * 认证服务：登录 / 刷新（滚动）/ 登出 / 当前用户（T1.10-T1.11）
+ * v1.3：角色改为 RBAC 多角色——签发 JWT 前查 sys_user_role 装配 roles 数组
  */
 @Service
 public class AuthService {
 
     private final SysUserMapper sysUserMapper;
+    private final SysRoleMapper sysRoleMapper;
+    private final SysDeptMapper sysDeptMapper;
     private final JwtUtil jwtUtil;
     private final PasswordEncoder passwordEncoder;
     private final RefreshTokenStore refreshTokenStore;
     private final Duration accessTokenTtl;
 
-    public AuthService(SysUserMapper sysUserMapper, JwtUtil jwtUtil, PasswordEncoder passwordEncoder,
+    public AuthService(SysUserMapper sysUserMapper, SysRoleMapper sysRoleMapper, SysDeptMapper sysDeptMapper,
+                       JwtUtil jwtUtil, PasswordEncoder passwordEncoder,
                        RefreshTokenStore refreshTokenStore,
                        @Value("${security.jwt.access-token-ttl:30m}") Duration accessTokenTtl) {
         this.sysUserMapper = sysUserMapper;
+        this.sysRoleMapper = sysRoleMapper;
+        this.sysDeptMapper = sysDeptMapper;
         this.jwtUtil = jwtUtil;
         this.passwordEncoder = passwordEncoder;
         this.refreshTokenStore = refreshTokenStore;
@@ -65,11 +75,12 @@ public class AuthService {
             refreshTokenStore.removeByUser(rotated.userId());
             throw new BusinessException(ErrorCode.REFRESH_TOKEN_INVALID);
         }
+        List<String> roles = rolesOf(user.getId());
         LoginResponse response = new LoginResponse();
-        response.setAccessToken(jwtUtil.generate(user.getId(), user.getRole(), accessTokenTtl));
+        response.setAccessToken(jwtUtil.generate(user.getId(), roles, accessTokenTtl));
         response.setRefreshToken(rotated.newToken());
         response.setExpiresIn(accessTokenTtl.toSeconds());
-        response.setUser(toUser(user));
+        response.setUser(toUser(user, roles));
         return response;
     }
 
@@ -91,11 +102,12 @@ public class AuthService {
         if (user == null) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED);
         }
-        return toUser(user);
+        return toUser(user, rolesOf(user.getId()));
     }
 
     private LoginResponse issueTokens(SysUser user) {
-        String accessToken = jwtUtil.generate(user.getId(), user.getRole(), accessTokenTtl);
+        List<String> roles = rolesOf(user.getId());
+        String accessToken = jwtUtil.generate(user.getId(), roles, accessTokenTtl);
         String refreshToken = UUID.randomUUID().toString();
         refreshTokenStore.save(user.getId(), refreshToken);
 
@@ -103,16 +115,26 @@ public class AuthService {
         response.setAccessToken(accessToken);
         response.setRefreshToken(refreshToken);
         response.setExpiresIn(accessTokenTtl.toSeconds());
-        response.setUser(toUser(user));
+        response.setUser(toUser(user, roles));
         return response;
     }
 
-    private LoginResponse.User toUser(SysUser user) {
+    /** 用户的角色 code 列表（只含启用角色；多角色按 id 排序稳定输出） */
+    private List<String> rolesOf(Long userId) {
+        return sysRoleMapper.selectCodesByUserId(userId);
+    }
+
+    private LoginResponse.User toUser(SysUser user, List<String> roles) {
         LoginResponse.User vo = new LoginResponse.User();
         vo.setId(user.getId());
         vo.setUsername(user.getUsername());
         vo.setRealName(user.getRealName());
-        vo.setRole(user.getRole());
+        vo.setRoles(roles);
+        vo.setDeptId(user.getDeptId());
+        if (user.getDeptId() != null) {
+            SysDept dept = sysDeptMapper.selectById(user.getDeptId());
+            vo.setDeptName(dept == null ? null : dept.getName());
+        }
         vo.setAvatar(user.getAvatar());
         return vo;
     }
