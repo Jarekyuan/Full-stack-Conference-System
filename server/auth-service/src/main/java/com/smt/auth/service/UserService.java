@@ -14,6 +14,7 @@ import com.smt.auth.vo.UserVO;
 import com.smt.common.exception.BusinessException;
 import com.smt.common.result.ErrorCode;
 import com.smt.common.result.PageResult;
+import com.smt.common.util.PageBounds;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -35,9 +36,6 @@ public class UserService {
     private final SysDeptMapper sysDeptMapper;
     private final PasswordEncoder passwordEncoder;
 
-    /** 页码上限：防 offset 乘法溢出（上限 × 最大 size 仍远小于 Integer.MAX_VALUE），也顺带挡住深分页扫描 */
-    private static final int MAX_PAGE = 100_000;
-
     /** 选参会人搜索：空关键字直接返回空（避免无意义全表扫描）；出参为场景专用的 UserSearchVO（不装配角色、不含 email） */
     public List<UserSearchVO> search(String keyword) {
         if (StrUtil.isBlank(keyword)) {
@@ -55,13 +53,12 @@ public class UserService {
 
     /** 分页（可按部门筛选；角色一次批量装配，避免逐行 N+1） */
     public PageResult<UserVO> page(int page, int size, Long deptId) {
-        // page 双向钳制：只设下限时大 page 会让 offset 溢出成负数 → LIMIT 报错 → 500（评审 R1）
-        int safePage = Math.min(Math.max(page, 1), MAX_PAGE);
-        int safeSize = Math.min(Math.max(size, 1), 100);
+        // 分页边界统一由 PageBounds 钳制（page 溢出会让 offset 变负数 → LIMIT 报错 → 500，评审 R1）
+        PageBounds bounds = PageBounds.of(page, size);
         long total = sysUserMapper.countAll(deptId);
-        List<UserVO> list = sysUserMapper.selectPage(deptId, (safePage - 1) * safeSize, safeSize);
+        List<UserVO> list = sysUserMapper.selectPage(deptId, bounds.offset(), bounds.size());
         fillRoles(list);
-        return PageResult.of(list, total, safePage, safeSize);
+        return PageResult.of(list, total, bounds.page(), bounds.size());
     }
 
     /** 创建用户 + 绑定角色（同一事务：用户与角色关联要么都成功、要么都回滚） */

@@ -2,6 +2,7 @@ package com.smt.meeting.mapper;
 
 import com.smt.meeting.dto.MeetingQueryParam;
 import com.smt.meeting.entity.Meeting;
+import com.smt.meeting.vo.ApprovalVO;
 import com.smt.meeting.vo.CalendarMeetingVO;
 import com.smt.meeting.vo.MeetingConflictVO;
 import com.smt.meeting.vo.MeetingDetailVO;
@@ -18,6 +19,13 @@ public interface MeetingMapper {
 
     /** 按主键查询（状态机迁移前校验用） */
     Meeting selectById(@Param("id") Long id);
+
+    /**
+     * 事务内锁住会议行（`SELECT ... FOR UPDATE`，T3.2/T3.3 审批用）。
+     * 用途：把"复检 → 状态迁移 → 写审批记录"串行化，防**双人同审**（两个审批人同时点通过）。
+     * ⚠️ 调用方必须保证：① 在事务内；② 若同时要锁会议室行，**先会议室行、后会议行**（CLAUDE.md 红线 #10）。
+     */
+    Meeting selectByIdForUpdate(@Param("id") Long id);
 
     /**
      * CAS 更新状态：仅当前状态等于 fromStatus 时更新，返回影响行数。
@@ -63,6 +71,15 @@ public interface MeetingMapper {
 
     /** 写取消信息（取消原因 + 取消时间；时间由 NOW() 落库）—T2.9 */
     int updateCancelInfo(@Param("id") Long id, @Param("reason") String reason);
+
+    /**
+     * 待审批列表（T3.1）：status=10 的会议 + 会议室名/组织人名/用途备注。
+     * 与列表 VO 分开的原因：`MeetingVO` 按场景裁剪掉了 remark，而审批人正是靠它做判断（见 docs/04 3.2）。
+     */
+    List<ApprovalVO> selectPendingPage(@Param("offset") int offset, @Param("size") int size);
+
+    /** 待审批总数（分页配套 COUNT） */
+    long countPending();
 
     /**
      * 乐观锁更新（T2.10）：只改非状态字段 + version 自增；

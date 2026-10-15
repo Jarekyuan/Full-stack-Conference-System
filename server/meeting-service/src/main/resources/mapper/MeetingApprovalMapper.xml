@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 审批记录 SQL（手写 XML；历史表，同一会议可多条：被拒后改期重送审场景） -->
+<mapper namespace="com.smt.meeting.mapper.MeetingApprovalMapper">
+
+    <resultMap id="BaseResultMap" type="com.smt.meeting.entity.MeetingApproval">
+        <id column="id" property="id"/>
+        <result column="meeting_id" property="meetingId"/>
+        <result column="approver_id" property="approverId"/>
+        <result column="action" property="action"/>
+        <result column="comment" property="comment"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <!-- 追加记录：审批动作与状态迁移在同一事务内，要么都成、要么都不成 -->
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO meeting_approval (meeting_id, approver_id, action, `comment`)
+        VALUES (#{meetingId}, #{approverId}, #{action}, #{comment})
+    </insert>
+
+    <select id="selectByMeetingId" resultMap="BaseResultMap">
+        SELECT id, meeting_id, approver_id, action, `comment`, created_at
+        FROM meeting_approval
+        WHERE meeting_id = #{meetingId}
+        ORDER BY created_at DESC, id DESC
+    </select>
+
+    <!-- 已处理列表（T3.1）：JOIN 会议/会议室/组织人直出展示字段，避免前端 N+1；
+         a.meeting_id 上仅有普通索引 idx_meeting，按 approver_id 过滤要回表，数据量小可接受，
+         量级上来后应补 idx_approver(approver_id, created_at) -->
+    <resultMap id="HistoryVOMap" type="com.smt.meeting.vo.ApprovalHistoryVO">
+        <result column="approval_id" property="approvalId"/>
+        <result column="meeting_id" property="meetingId"/>
+        <result column="title" property="title"/>
+        <result column="room_name" property="roomName"/>
+        <result column="organiser_name" property="organiserName"/>
+        <result column="start_time" property="startTime"/>
+        <result column="end_time" property="endTime"/>
+        <result column="action" property="action"/>
+        <result column="comment" property="comment"/>
+        <result column="approver_id" property="approverId"/>
+        <result column="approver_name" property="approverName"/>
+        <result column="meeting_status" property="meetingStatus"/>
+        <result column="handled_at" property="handledAt"/>
+    </resultMap>
+
+    <sql id="HistoryColumns">
+        a.id AS approval_id, m.id AS meeting_id, m.title, r.name AS room_name,
+        u.real_name AS organiser_name, m.start_time, m.end_time,
+        a.action, a.`comment`, a.approver_id, au.real_name AS approver_name,
+        m.status AS meeting_status, a.created_at AS handled_at
+    </sql>
+
+    <sql id="HistoryFrom">
+        FROM meeting_approval a
+        JOIN meeting m ON m.id = a.meeting_id
+        LEFT JOIN meeting_room r ON r.id = m.room_id
+        LEFT JOIN sys_user u ON u.id = m.organiser_id
+        LEFT JOIN sys_user au ON au.id = a.approver_id
+        WHERE a.approver_id = #{approverId}
+    </sql>
+
+    <select id="selectHistoryPage" resultMap="HistoryVOMap">
+        SELECT <include refid="HistoryColumns"/>
+        <include refid="HistoryFrom"/>
+        ORDER BY a.created_at DESC, a.id DESC
+        LIMIT #{offset}, #{size}
+    </select>
+
+    <select id="countHistory" resultType="long">
+        SELECT COUNT(*)
+        FROM meeting_approval a
+        WHERE a.approver_id = #{approverId}
+    </select>
+
+</mapper>

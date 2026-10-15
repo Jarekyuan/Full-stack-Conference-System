@@ -32,6 +32,15 @@
         WHERE id = #{id}
     </select>
 
+    <!-- 审批用悲观锁（T3.2/T3.3）：锁住这一行，让"复检 → 迁移 → 写审批记录"对外不可穿插；
+         命中主键 → 单行记录锁（非表锁）。锁序：若同时要锁会议室行，必须先锁会议室行 -->
+    <select id="selectByIdForUpdate" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM meeting
+        WHERE id = #{id}
+        FOR UPDATE
+    </select>
+
     <!--
       CAS 状态更新：WHERE 带前态条件（status = #{fromStatus}），影响 0 行 = 状态已被并发变更。
       updated_at 由表定义的 ON UPDATE CURRENT_TIMESTAMP 自动刷新，无需显式 SET。
@@ -174,6 +183,38 @@
         SELECT COUNT(*)
         FROM meeting m
         <include refid="QueryConditions"/>
+    </select>
+
+    <!-- 待审批列表（T3.1）：固定 status=10，按开始时间升序（最早要开的先批） -->
+    <resultMap id="ApprovalVOMap" type="com.smt.meeting.vo.ApprovalVO">
+        <result column="meeting_id" property="meetingId"/>
+        <result column="title" property="title"/>
+        <result column="room_id" property="roomId"/>
+        <result column="room_name" property="roomName"/>
+        <result column="organiser_id" property="organiserId"/>
+        <result column="organiser_name" property="organiserName"/>
+        <result column="start_time" property="startTime"/>
+        <result column="end_time" property="endTime"/>
+        <result column="remark" property="remark"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <select id="selectPendingPage" resultMap="ApprovalVOMap">
+        SELECT m.id AS meeting_id, m.title, m.room_id, r.name AS room_name,
+               m.organiser_id, u.real_name AS organiser_name,
+               m.start_time, m.end_time, m.remark, m.created_at
+        FROM meeting m
+        LEFT JOIN meeting_room r ON r.id = m.room_id
+        LEFT JOIN sys_user u ON u.id = m.organiser_id
+        WHERE m.status = 10
+        ORDER BY m.start_time, m.id
+        LIMIT #{offset}, #{size}
+    </select>
+
+    <select id="countPending" resultType="long">
+        SELECT COUNT(*)
+        FROM meeting
+        WHERE status = 10
     </select>
 
     <!-- 详情 VO（全字段 + 展示冗余；participants/logs 由 Service 另行装配） -->

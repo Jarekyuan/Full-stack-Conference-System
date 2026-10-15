@@ -4,6 +4,7 @@ import com.smt.common.context.UserContext;
 import com.smt.common.exception.BusinessException;
 import com.smt.common.result.ErrorCode;
 import com.smt.common.result.PageResult;
+import com.smt.common.util.PageBounds;
 import com.smt.meeting.dto.MeetingQueryDTO;
 import com.smt.meeting.dto.MeetingQueryParam;
 import com.smt.meeting.mapper.MeetingMapper;
@@ -31,18 +32,13 @@ public class MeetingQueryService {
     private final MeetingParticipantMapper participantMapper;
     private final MeetingStatusLogMapper statusLogMapper;
 
-    /** 页码上限：防 offset 乘法溢出（上限 × 最大 size 仍远小于 Integer.MAX_VALUE），也顺带挡住深分页扫描 */
-    private static final int MAX_PAGE = 100_000;
-
     /**
      * 列表：scope=mine（我组织的或参与的，默认）不需要额外权限；
      * scope=all（全量）仅 ADMIN/APPROVER —— 权限校验在 Service 层（SQL 层不加归属条件）。
      */
     public PageResult<MeetingVO> page(MeetingQueryDTO query) {
-        // page 必须双向钳制：只设下限时 page=2147483647 会让 offset 乘法溢出成负数，
-        // 传到 MySQL 的 LIMIT 直接报错 → 500（评审 R1 实测）。上限按"总条数规模"给足即可。
-        int safePage = Math.min(Math.max(query.getPage() == null ? 1 : query.getPage(), 1), MAX_PAGE);
-        int safeSize = Math.min(Math.max(query.getSize() == null ? 10 : query.getSize(), 1), 100);
+        // 分页边界统一由 PageBounds 钳制（page 溢出会让 LIMIT 报错 → 500，评审 R1）
+        PageBounds bounds = PageBounds.of(query.getPage(), query.getSize());
 
         String scope = "all".equals(query.getScope()) ? "all" : "mine";
         if ("all".equals(scope)
@@ -58,12 +54,12 @@ public class MeetingQueryService {
         param.setStartDate(query.getStartDate());
         param.setEndDate(query.getEndDate());
         param.setKeyword(query.getKeyword());
-        param.setOffset((safePage - 1) * safeSize);
-        param.setSize(safeSize);
+        param.setOffset(bounds.offset());
+        param.setSize(bounds.size());
 
         long total = meetingMapper.countPage(param);
         List<MeetingVO> list = total == 0 ? List.of() : meetingMapper.selectPage(param);
-        return PageResult.of(list, total, safePage, safeSize);
+        return PageResult.of(list, total, bounds.page(), bounds.size());
     }
 
     /**
