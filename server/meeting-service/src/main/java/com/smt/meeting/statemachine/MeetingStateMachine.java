@@ -1,5 +1,10 @@
 package com.smt.meeting.statemachine;
 
+import java.util.Map;
+
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+
 import com.smt.common.exception.BusinessException;
 import com.smt.common.result.ErrorCode;
 import com.smt.meeting.entity.Meeting;
@@ -8,11 +13,8 @@ import com.smt.meeting.enums.MeetingEventEnum;
 import com.smt.meeting.enums.MeetingStatusEnum;
 import com.smt.meeting.mapper.MeetingMapper;
 import com.smt.meeting.mapper.MeetingStatusLogMapper;
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
-import java.util.Map;
+import lombok.RequiredArgsConstructor;
 
 /**
  * 会议状态机：**所有状态变更的唯一入口**（对照 docs/01 4.5 迁移矩阵）
@@ -21,7 +23,7 @@ import java.util.Map;
  * ① 迁移表驱动：Map<当前状态, Map<事件, 目标状态>>，未列出的组合一律视为非法（fail-closed）；
  * ② 校验 → CAS 更新 → 写日志三步在同一事务内（@Transactional），任何一步失败整体回滚；
  * ③ 并发防线用 CAS（UPDATE ... WHERE status = 前态）：影响 0 行说明状态已被并发变更，按 40002 处理——
- *    与"校验时读到的状态"相比，CAS 才是真正防住并发的那一步；
+ * 与"校验时读到的状态"相比，CAS 才是真正防住并发的那一步；
  * ④ 禁止业务代码直接 setStatus：绕过状态机 = 绕过校验与日志。
  */
 @Component
@@ -34,21 +36,20 @@ public class MeetingStateMachine {
     /** 迁移表（严格对照 docs/01 4.5 矩阵；"（无）"行的创建场景见 {@link #initialStatus}） */
     private static final Map<Integer, Map<MeetingEventEnum, Integer>> TRANSITIONS = Map.of(
             MeetingStatusEnum.PENDING_APPROVAL.getCode(), Map.of(
-                    MeetingEventEnum.APPROVE, MeetingStatusEnum.RESERVED.getCode(),   // 10 → 20
-                    MeetingEventEnum.REJECT, MeetingStatusEnum.REJECTED.getCode(),    // 10 → 60
-                    MeetingEventEnum.CANCEL, MeetingStatusEnum.CANCELLED.getCode()    // 10 → 50
+                    MeetingEventEnum.APPROVE, MeetingStatusEnum.RESERVED.getCode(), // 10 → 20
+                    MeetingEventEnum.REJECT, MeetingStatusEnum.REJECTED.getCode(), // 10 → 60
+                    MeetingEventEnum.CANCEL, MeetingStatusEnum.CANCELLED.getCode() // 10 → 50
             ),
             MeetingStatusEnum.RESERVED.getCode(), Map.of(
-                    MeetingEventEnum.START, MeetingStatusEnum.ONGOING.getCode(),      // 20 → 30
-                    MeetingEventEnum.END, MeetingStatusEnum.FINISHED.getCode(),       // 20 → 40
-                    MeetingEventEnum.CANCEL, MeetingStatusEnum.CANCELLED.getCode(),   // 20 → 50
+                    MeetingEventEnum.START, MeetingStatusEnum.ONGOING.getCode(), // 20 → 30
+                    MeetingEventEnum.END, MeetingStatusEnum.FINISHED.getCode(), // 20 → 40
+                    MeetingEventEnum.CANCEL, MeetingStatusEnum.CANCELLED.getCode(), // 20 → 50
                     MeetingEventEnum.MODIFY, MeetingStatusEnum.PENDING_APPROVAL.getCode() // 20 → 10（R-14：改到需审批会议室）
             ),
             MeetingStatusEnum.ONGOING.getCode(), Map.of(
-                    MeetingEventEnum.END, MeetingStatusEnum.FINISHED.getCode()        // 30 → 40（含提前结束）
-                    // 注意：30 禁止 CANCEL（矩阵标注），故此处不登记 CANCEL
-            )
-    );
+                    MeetingEventEnum.END, MeetingStatusEnum.FINISHED.getCode() // 30 → 40（含提前结束）
+            // 注意：30 禁止 CANCEL（矩阵标注），故此处不登记 CANCEL
+            ));
 
     /**
      * 创建时的初始状态（矩阵"（无）"行）：需审批 → 10 待审批；免审 → 20 已预约。
@@ -73,6 +74,7 @@ public class MeetingStateMachine {
 
     /**
      * 状态迁移唯一入口。
+     * 
      * @throws BusinessException 40003 会议不存在 / 40002 当前状态不允许该事件（含并发导致的 CAS 失败）
      */
     @Transactional
@@ -98,7 +100,7 @@ public class MeetingStateMachine {
     }
 
     private void insertLog(Long meetingId, Integer fromStatus, Integer toStatus,
-                           MeetingEventEnum event, Long operatorId, String remark) {
+            MeetingEventEnum event, Long operatorId, String remark) {
         MeetingStatusLog log = new MeetingStatusLog();
         log.setMeetingId(meetingId);
         log.setFromStatus(fromStatus);
