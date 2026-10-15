@@ -4,6 +4,7 @@ import com.smt.common.result.ErrorCode;
 import com.smt.common.result.Result;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -35,6 +36,16 @@ public class GlobalExceptionHandler {
                 .collect(Collectors.joining("; "));
         log.warn("参数校验失败: {}", detail);
         return Result.error(ErrorCode.PARAM_ERROR.getCode(), detail.isEmpty() ? ErrorCode.PARAM_ERROR.getMsg() : detail);
+    }
+
+    /**
+     * 请求体不可读（JSON 语法错 / 字段类型不可转换，如时间格式非法）：
+     * 按参数错误映射为 10001——落到 Exception 兜底会变成 500/10000，误导调用方以为服务端故障（评审 P1-11 修复）。
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public Result<Void> handleMessageNotReadable(HttpMessageNotReadableException e) {
+        log.warn("请求体解析失败: {}", e.getMessage());
+        return Result.error(ErrorCode.PARAM_ERROR.getCode(), "请求体格式错误（检查字段类型，如时间应为 yyyy-MM-dd HH:mm:ss）");
     }
 
     /** 路径/静态资源不存在：框架级 404 语义，不能被下方兜底误伤成 500 */
