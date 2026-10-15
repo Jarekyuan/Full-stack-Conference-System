@@ -11,23 +11,17 @@ import { useDebounceFn } from 'ahooks'
 import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
 import { listMeetings, type MeetingListItem } from '@/api/meeting'
-import MeetingStatusTag from '@/components/MeetingStatusTag'
+import MeetingStatusTag, { MEETING_STATUS_META } from '@/components/MeetingStatusTag'
 import { useAppRequest } from '@/hooks/useAppRequest'
 
 const PAGE_SIZE = 10
-/** 状态筛选项（照 docs/04 5.1 的六个状态） */
-const STATUS_OPTIONS = [
-  { value: 10, label: '待审批' },
-  { value: 20, label: '已预约' },
-  { value: 30, label: '进行中' },
-  { value: 40, label: '已结束' },
-  { value: 50, label: '已取消' },
-  { value: 60, label: '已拒绝' },
-]
+/** 状态筛选项：从 MeetingStatusTag 的元数据派生，状态文案只维护一处 */
+const STATUS_OPTIONS = Object.entries(MEETING_STATUS_META).map(([value, meta]) => ({
+  value: Number(value),
+  label: meta.text,
+}))
 
 interface ListPayload {
-  /** 本次请求的查询键 —— 渲染前与当前筛选比对，充当竞态守卫 */
-  key: string
   list: MeetingListItem[]
   total: number
 }
@@ -41,6 +35,9 @@ export default function MeetingList() {
   const statusParam = statuses.join(',')
   const queryKey = `${statusParam}|${keyword}|${page}`
 
+  // 这里**刻意不做**"响应键比对"守卫：ahooks 的 Fetch 自带 count 守卫，过期响应本就不会覆盖新结果，
+  // 再比对一遍只会让翻页/改筛选的瞬间表格闪成"暂无数据 + 共 0 条"（评审 R9）。
+  // 保留上一条数据、由 Table 的 loading 遮罩过渡，才是列表该有的 keepPreviousData 语义。
   const { data, loading } = useAppRequest<ListPayload>(
     async () => {
       const result = await listMeetings({
@@ -50,14 +47,12 @@ export default function MeetingList() {
         page,
         size: PAGE_SIZE,
       })
-      return { key: queryKey, list: result.list, total: result.total }
+      return { list: result.list, total: result.total }
     },
     { manual: false, refreshDeps: [queryKey] },
   )
 
-  const payload = data && data.key === queryKey ? data : undefined
-
-  // 关键字防抖 500ms（与项目其他输入型筛选保持一致），并回到第 1 页
+  // 关键字防抖 500ms（与项目其他输入型筛选一致），并回到第 1 页
   const { run: applyKeyword } = useDebounceFn((value: string) => {
     setKeyword(value.trim())
     setPage(1)
@@ -78,7 +73,16 @@ export default function MeetingList() {
         title: '操作',
         width: 90,
         render: (_, r) => (
-          <Button type="link" size="small" onClick={() => navigate(`/meetings/${r.id}`)}>
+          <Button
+            type="link"
+            size="small"
+            // 阻止冒泡：否则与行 onClick 在同一 tick 内 push 两次同一 URL，历史栈多一条重复记录，
+            // 详情页按浏览器后退会"第一次没反应"（评审 R13）
+            onClick={(e) => {
+              e.stopPropagation()
+              navigate(`/meetings/${r.id}`)
+            }}
+          >
             详情
           </Button>
         ),
@@ -115,14 +119,14 @@ export default function MeetingList() {
       <Table<MeetingListItem>
         rowKey="id"
         columns={columns}
-        dataSource={payload?.list ?? []}
+        dataSource={data?.list ?? []}
         loading={loading}
         onRow={(record) => ({ onClick: () => navigate(`/meetings/${record.id}`) })}
         rowClassName="cursor-pointer"
         pagination={{
           current: page,
           pageSize: PAGE_SIZE,
-          total: payload?.total ?? 0,
+          total: data?.total ?? 0,
           showSizeChanger: false,
           showTotal: (total) => `共 ${total} 条`,
           onChange: setPage,

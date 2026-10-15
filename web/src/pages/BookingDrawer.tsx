@@ -34,13 +34,32 @@ const CONFLICT_CHECK_DEBOUNCE_MS = 500
 /** 后端统一时间格式 */
 const API_TIME_FORMAT = 'YYYY-MM-DD HH:mm:ss'
 
+/**
+ * 幂等 token。优先 `crypto.randomUUID()`，但它只在 **secure context**（https / localhost）存在——
+ * 若改成"局域网 IP + http"给面试官演示，直接调用会抛 TypeError，预约流程整条不可用。
+ * 这里不承担安全职责（只是去重标识），退化到时间戳+随机串即可。
+ */
+function newIdempotencyToken(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `idem-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 const bookingSchema = z
   .object({
     title: z.string().trim().min(1, '请填写会议主题').max(100, '主题最长 100 字符'),
     roomId: z.number({ required_error: '请选择会议室' }),
-    timeRange: z.tuple([z.custom<Dayjs>(), z.custom<Dayjs>()], {
-      required_error: '请选择会议时间',
-    }),
+    // ⚠️ rc-picker 的"清空"传上来的是 `null`（不是 `[null, null]`），而 required_error 只覆盖 undefined
+    // → 实测会漏出 zod 默认英文报错 "Expected array, received null"（评审 R12）。
+    // 故同时给 invalid_type_error，并用**带校验函数**的 custom 保证元素真的是 Dayjs
+    // （原写法 `z.custom<Dayjs>()` 不带校验等于恒真，只校验了"数组长度 2"，还让下面的 refine 有抛 TypeError 的风险）
+    timeRange: z.tuple(
+      [
+        z.custom<Dayjs>((v) => dayjs.isDayjs(v), '请选择会议时间'),
+        z.custom<Dayjs>((v) => dayjs.isDayjs(v), '请选择会议时间'),
+      ],
+      { required_error: '请选择会议时间', invalid_type_error: '请选择会议时间' },
+    ),
     userIds: z.array(z.number()),
     remark: z.string().max(500, '备注最长 500 字符').optional(),
   })
@@ -112,7 +131,7 @@ export default function BookingDrawer({ open, prefill, rooms, onClose, onSuccess
   // 打开抽屉：按预填值初始化表单 + 生成本次表单的幂等 token
   useEffect(() => {
     if (!open) return
-    setIdempotencyToken(crypto.randomUUID())
+    setIdempotencyToken(newIdempotencyToken())
     setAvailability(null)
     reset({
       title: '',

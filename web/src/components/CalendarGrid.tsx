@@ -11,6 +11,7 @@ import { memo } from 'react'
 import dayjs from 'dayjs'
 import type { Room } from '@/api/room'
 import type { CalendarDay, CalendarMeeting } from '@/api/meeting'
+import { statusBlockClass } from '@/components/MeetingStatusTag'
 
 /** 时间轴窗口（业务时间）：超出窗口的会议块裁剪到边界 */
 const DAY_START_MINUTES = 8 * 60
@@ -25,13 +26,6 @@ const CELL_HEIGHT = 240
 const RULER_MINUTES = [DAY_START_MINUTES, (DAY_START_MINUTES + DAY_END_MINUTES) / 2, DAY_END_MINUTES]
 /** 列模板：会议室名 | 时间刻度 | 7 天 */
 const COLUMNS = '120px 52px repeat(7, minmax(96px, 1fr))'
-/** 状态配色（docs/04 5.1：10 橙 / 20 蓝 / 30 绿） */
-const STATUS_BLOCK_CLASS: Record<number, string> = {
-  10: 'bg-amber-100 border-amber-400 text-amber-900',
-  20: 'bg-blue-100 border-blue-400 text-blue-900',
-  30: 'bg-emerald-100 border-emerald-400 text-emerald-900',
-}
-const FALLBACK_BLOCK_CLASS = 'bg-gray-100 border-gray-400 text-gray-700'
 
 /** 空集合常量：保证"无数据"时引用稳定，否则每次渲染新建数组会让行级 memo 失效 */
 const EMPTY_DAYS: CalendarDay[] = []
@@ -85,7 +79,7 @@ function blockGeometry(meeting: CalendarMeeting) {
 }
 
 function MeetingBlock({ meeting, onClick }: { meeting: CalendarMeeting; onClick: (m: CalendarMeeting) => void }) {
-  const cls = STATUS_BLOCK_CLASS[meeting.status] ?? FALLBACK_BLOCK_CLASS
+  const cls = statusBlockClass(meeting.status) // 状态配色统一由 MeetingStatusTag 提供（避免多处副本各改各的）
   const { style, minutes } = blockGeometry(meeting)
   const startText = dayjs(meeting.startTime).format('HH:mm')
   return (

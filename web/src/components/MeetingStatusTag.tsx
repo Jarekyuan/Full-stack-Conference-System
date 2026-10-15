@@ -6,14 +6,26 @@
  */
 import { Tag } from 'antd'
 
-/** 状态元数据（文案与配色均照 docs/04 5.1） */
-export const MEETING_STATUS_META: Record<number, { text: string; color: string }> = {
-  10: { text: '待审批', color: 'orange' },
-  20: { text: '已预约', color: 'blue' },
-  30: { text: '进行中', color: 'green' },
-  40: { text: '已结束', color: 'default' },
-  50: { text: '已取消', color: 'default' },
-  60: { text: '已拒绝', color: 'red' },
+/**
+ * 状态元数据（文案与配色均照 docs/04 5.1）。
+ * `blockClass` 供日历网格的会议块使用（块用背景色、标签用 Tag 配色，视觉不同但语义同源）——
+ * 放在这里是为了让"状态 → 展示"只有一处定义：列表标签、日历块、筛选下拉全部从这里派生。
+ */
+export const MEETING_STATUS_META: Record<
+  number,
+  { text: string; color: string; blockClass: string }
+> = {
+  10: { text: '待审批', color: 'orange', blockClass: 'bg-amber-100 border-amber-400 text-amber-900' },
+  20: { text: '已预约', color: 'blue', blockClass: 'bg-blue-100 border-blue-400 text-blue-900' },
+  30: { text: '进行中', color: 'green', blockClass: 'bg-emerald-100 border-emerald-400 text-emerald-900' },
+  40: { text: '已结束', color: 'default', blockClass: 'bg-gray-100 border-gray-300 text-gray-500' },
+  50: { text: '已取消', color: 'default', blockClass: 'bg-gray-100 border-gray-300 text-gray-400' },
+  60: { text: '已拒绝', color: 'red', blockClass: 'bg-red-100 border-red-400 text-red-900' },
+}
+
+/** 会议块的配色类（日历网格用）；未知状态给中性灰兜底 */
+export function statusBlockClass(status: number): string {
+  return MEETING_STATUS_META[status]?.blockClass ?? 'bg-gray-100 border-gray-400 text-gray-700'
 }
 
 /** 状态文案（时间线等只想要文字的场景用） */

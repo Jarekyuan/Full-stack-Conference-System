@@ -28,10 +28,15 @@ export default function MeetingDetail() {
   const [cancelOpen, setCancelOpen] = useState(false)
   const [reason, setReason] = useState('')
 
-  const { data: detail, loading, refresh } = useAppRequest(() => getMeeting(meetingId), {
+  const { data, loading, refresh } = useAppRequest(() => getMeeting(meetingId), {
     manual: false,
     refreshDeps: [meetingId],
   })
+
+  // 竞态守卫：只有"返回体的 id 就是当前路由的 id"才渲染。
+  // 少了这一层，从 /meetings/2 浏览器后退到 /meetings/1 时（同一路由元素、实例复用、不重挂载），
+  // 会在会议 1 的 URL 下完整显示会议 2 的标题/参会人/备注——比"空窗"更糟（评审 R10）。
+  const detail = data && data.id === meetingId ? data : undefined
 
   const { runAsync: doCancel, loading: cancelling } = useAppRequest(cancelMeeting, { toastError: false })
 

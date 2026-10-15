@@ -8,9 +8,10 @@
  * 本任务（T2.F1）做到"点空格带出预填时间"；预约 Drawer 表单由 T2.F2 接入。
  */
 import { useCallback, useMemo, useState } from 'react'
-import { App, Button, Card, Space, Spin } from 'antd'
+import { Alert, Button, Card, Space, Spin } from 'antd'
 import dayjs, { type Dayjs } from 'dayjs'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { getRoomCalendar, type CalendarDay, type CalendarMeeting } from '@/api/meeting'
 import { listRooms, type Room } from '@/api/room'
 import { CalendarGrid, type EmptySlot } from '@/components/CalendarGrid'
@@ -28,10 +29,12 @@ interface WeekPayload {
   week: string
   rooms: Room[]
   daysByRoom: Map<number, CalendarDay[]>
+  /** 取数失败的会议室（逐房间容错，见下方 allSettled 说明） */
+  failedRoomIds: number[]
 }
 
 export default function Calendar() {
-  const { message } = App.useApp()
+  const navigate = useNavigate()
   const [week, setWeek] = useState<Dayjs>(() => mondayOf(dayjs()))
   const [bookingOpen, setBookingOpen] = useState(false)
   const [prefill, setPrefill] = useState<BookingPrefill | null>(null)
@@ -40,8 +43,20 @@ export default function Calendar() {
   const { data, loading, refresh } = useAppRequest<WeekPayload>(
     async () => {
       const rooms = await listRooms({ status: 0 })
-      const calendars = await Promise.all(rooms.map((room) => getRoomCalendar(room.id, weekStr)))
-      return { week: weekStr, rooms, daysByRoom: new Map(calendars.map((c) => [c.roomId, c.days])) }
+      // 用 allSettled 而非 all：6 个会议室里只要 1 个失败（网络抖动、会议室刚被删 → 30001），
+      // Promise.all 会让整个 service reject → 新一周的网格**完全不渲染**、只剩空白 + 一条 toast，
+      // 用户会以为"这一周没有任何会议"（评审 R14）。失败的房间单独标记，其余照常画。
+      const settled = await Promise.allSettled(rooms.map((room) => getRoomCalendar(room.id, weekStr)))
+      const daysByRoom = new Map<number, CalendarDay[]>()
+      const failedRoomIds: number[] = []
+      settled.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          daysByRoom.set(result.value.roomId, result.value.days)
+        } else {
+          failedRoomIds.push(rooms[index].id)
+        }
+      })
+      return { week: weekStr, rooms, daysByRoom, failedRoomIds }
     },
     { manual: false, refreshDeps: [weekStr] },
   )
@@ -65,9 +80,10 @@ export default function Calendar() {
     setBookingOpen(true)
   }, [])
 
+  // 点会议块 → 进详情页（docs/02 4.2 原型图："已预约块，点击看详情"）
   const handleMeetingClick = useCallback(
-    (meeting: CalendarMeeting) => message.info(`「${meeting.title}」——会议详情见 T2.F3`),
-    [message],
+    (meeting: CalendarMeeting) => navigate(`/meetings/${meeting.meetingId}`),
+    [navigate],
   )
 
   return (
@@ -98,6 +114,16 @@ export default function Calendar() {
     >
       <Spin spinning={loading}>
         <div className="min-h-[280px]">
+          {payload && payload.failedRoomIds.length > 0 && (
+            <Alert
+              type="warning"
+              showIcon
+              className="mb-3"
+              message={`部分会议室日程加载失败：${payload.failedRoomIds
+                .map((id) => payload.rooms.find((r) => r.id === id)?.name ?? id)
+                .join('、')}——切周可重试`}
+            />
+          )}
           {payload && (
             <CalendarGrid
               rooms={payload.rooms}

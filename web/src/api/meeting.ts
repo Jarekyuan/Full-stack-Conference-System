@@ -101,9 +101,13 @@ export interface MeetingCreateResult {
  * 创建预约。幂等：idempotencyToken 由调用方在"进入表单时"生成一次并复用
  * （重试/手抖重发必须带同一个 token，后端 SETNX 判重）。
  * ⚠️ 重复提交时后端返回 10006，request.ts 会**静默解包成 undefined**（不抛异常）——
- * 调用方拿到 undefined 时说明是重复提交，不能当成功结果用。
+ * 返回类型因此显式带上 `| undefined`：调用方必须先判空，不能当成功结果用。
+ * （此前类型承诺非空、只有调用点手写注解兜住，下一个调用方直接 `r.meetingId` 就会炸。）
  */
-export function createMeeting(input: MeetingCreateInput, idempotencyToken: string): Promise<MeetingCreateResult> {
+export function createMeeting(
+  input: MeetingCreateInput,
+  idempotencyToken: string,
+): Promise<MeetingCreateResult | undefined> {
   return http.post<MeetingCreateResult>('/meetings', input, {
     headers: { 'X-Idempotency-Token': idempotencyToken },
   })
