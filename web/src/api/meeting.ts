@@ -6,6 +6,7 @@
  * 按里程碑逐步补齐：T2.F1 日历 → T2.F2 可用性/创建 → T2.F3 列表/详情/取消。
  */
 import { http } from './request'
+import type { PageResult } from './types'
 
 /** 日历中的会议条目（后端 CalendarMeetingVO）；日历只返回有效日程（10/20/30） */
 export interface CalendarMeeting {
@@ -106,4 +107,91 @@ export function createMeeting(input: MeetingCreateInput, idempotencyToken: strin
   return http.post<MeetingCreateResult>('/meetings', input, {
     headers: { 'X-Idempotency-Token': idempotencyToken },
   })
+}
+
+// ———————————————————— 列表与详情（T2.F3）————————————————————
+
+/** 会议列表条目（后端 MeetingVO）：按场景裁剪——含 roomName/organiserName 冗余，不含参会人明细 */
+export interface MeetingListItem {
+  id: number
+  title: string
+  roomId: number
+  roomName: string
+  organiserId: number
+  organiserName: string
+  startTime: string
+  endTime: string
+  /** 10 待审批 / 20 已预约 / 30 进行中 / 40 已结束 / 50 已取消 / 60 已拒绝 */
+  status: number
+  needApproval: number
+  participantCount: number
+  createdAt: string
+}
+
+/** 列表查询参数（docs/04 4.5；status 为逗号分隔多值，page 从 1 起） */
+export interface MeetingQuery {
+  scope?: 'mine' | 'all'
+  status?: string
+  roomId?: number
+  startDate?: string
+  endDate?: string
+  keyword?: string
+  page?: number
+  size?: number
+}
+
+/** 参会人（后端 MeetingDetailVO.ParticipantVO，v1.3 起仅系统用户） */
+export interface MeetingParticipant {
+  userId: number
+  realName: string
+  email: string | null
+}
+
+/** 状态时间线条目（后端 MeetingDetailVO.StatusLogVO）；fromStatus 为 null 表示"创建"这一步 */
+export interface MeetingTimelineLog {
+  fromStatus: number | null
+  toStatus: number
+  /** 事件名（docs/04 5.4：RESERVE/APPROVE/REJECT/CANCEL/START/END/EXTEND/MODIFY） */
+  event: string
+  operatorId: number | null
+  operatorName: string | null
+  remark: string | null
+  createdAt: string
+}
+
+/** 会议详情（后端 MeetingDetailVO；04 文档只登记了接口，字段以后端 VO 为准） */
+export interface MeetingDetail {
+  id: number
+  title: string
+  roomId: number
+  roomName: string
+  organiserId: number
+  organiserName: string
+  startTime: string
+  endTime: string
+  status: number
+  remark: string | null
+  cancelReason: string | null
+  cancelTime: string | null
+  recurringId: number | null
+  version: number
+  createdAt: string
+  participants: MeetingParticipant[]
+  /** 状态变更时间线（含系统任务，其 operatorName 可能为 null） */
+  logs: MeetingTimelineLog[]
+}
+
+/** 我的会议列表（分页；scope=mine 为"我组织的或我参与的"） */
+export function listMeetings(query: MeetingQuery): Promise<PageResult<MeetingListItem>> {
+  return http.get<PageResult<MeetingListItem>>('/meetings', { params: query })
+}
+
+/** 会议详情（含参会人明细 + 状态时间线） */
+export function getMeeting(id: number): Promise<MeetingDetail> {
+  return http.get<MeetingDetail>(`/meetings/${id}`)
+}
+
+/** 取消会议（仅组织人；20 状态还要过 R-6 取消截止，超时后端回 30005） */
+export function cancelMeeting(id: number, reason?: string): Promise<void> {
+  return http.post<void>(`/meetings/${id}/cancel`, { reason })
 }

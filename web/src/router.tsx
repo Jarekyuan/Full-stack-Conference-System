@@ -12,6 +12,8 @@ import Placeholder from '@/components/Placeholder'
 import MainLayout from '@/layouts/MainLayout'
 import Calendar from '@/pages/Calendar'
 import Login from '@/pages/Login'
+import MeetingDetail from '@/pages/MeetingDetail'
+import MeetingList from '@/pages/MeetingList'
 import RoomManage from '@/pages/admin/RoomManage'
 import { useUserStore } from '@/stores/userStore'
 
@@ -46,8 +48,8 @@ export const router = createBrowserRouter([
         children: [
           { index: true, element: <Navigate to="/calendar" replace /> },
           { path: 'calendar', element: <Calendar /> },
-          { path: 'meetings', element: <Placeholder title="我的会议" /> },
-          { path: 'meetings/:id', element: <Placeholder title="会议详情" /> },
+          { path: 'meetings', element: <MeetingList /> },
+          { path: 'meetings/:id', element: <MeetingDetail /> },
           { path: 'notifications', element: <Placeholder title="通知中心" /> },
           {
             path: 'approvals',
