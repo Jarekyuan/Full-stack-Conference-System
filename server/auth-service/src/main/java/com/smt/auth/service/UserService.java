@@ -31,6 +31,9 @@ public class UserService {
     private final SysRoleMapper sysRoleMapper;
     private final PasswordEncoder passwordEncoder;
 
+    /** 页码上限：防 offset 乘法溢出（上限 × 最大 size 仍远小于 Integer.MAX_VALUE），也顺带挡住深分页扫描 */
+    private static final int MAX_PAGE = 100_000;
+
     /** 选参会人搜索：空关键字直接返回空（避免无意义全表扫描）；搜索场景不装配角色 */
     public List<UserVO> search(String keyword) {
         if (StrUtil.isBlank(keyword)) {
@@ -50,7 +53,8 @@ public class UserService {
 
     /** 分页（可按部门筛选；角色一次批量装配，避免逐行 N+1） */
     public PageResult<UserVO> page(int page, int size, Long deptId) {
-        int safePage = Math.max(page, 1);
+        // page 双向钳制：只设下限时大 page 会让 offset 溢出成负数 → LIMIT 报错 → 500（评审 R1）
+        int safePage = Math.min(Math.max(page, 1), MAX_PAGE);
         int safeSize = Math.min(Math.max(size, 1), 100);
         long total = sysUserMapper.countAll(deptId);
         List<UserVO> list = sysUserMapper.selectPage(deptId, (safePage - 1) * safeSize, safeSize);

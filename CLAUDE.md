@@ -121,6 +121,15 @@
    - **危害**：语言服务认为项目编译不过 → 把 **ecj"错误桩"class 写进 `target/classes`** → 桩类时间戳比源码新 → Maven 增量编译**跳过**它、原样打进 jar → 服务启动即崩（`Unresolved compilation problems` / `ClassFormatError: Invalid method Code length 0`）。10-14 日志记为"依赖下载抖动"的 `MojoExecutionException`、10-15 的 `MeetingUpdateDTO` ClassFormatError 都是此因
    - **处置**：已装回 1.56.0（JDT 3.47 + JDK 21，无该误报；实测报错 241 → 0）。⚠️ **在 VS Code 扩展面板对 redhat.java 点「忽略更新 / Ignore Updates」**，否则会被自动升回去、故障复现
    - **兜底习惯**：改了后端代码一律 `mvn clean package`（`clean` 能清掉任何残留桩类）
+8. **服务与基础设施一律只绑回环 `127.0.0.1`**（2026-10-15 评审 C1/C2 后加的）：
+   三个服务的 `application.yml` 有 `server.address: 127.0.0.1`，`deploy/docker-compose.infra.yml` 的端口映射全部写成 `127.0.0.1:xxxx:xxxx`。
+   - **为什么**：服务端**无条件信任** `X-User-*` 身份头（网关验签后注入的设计前提是"业务端口只在网关后面可达"）。
+     绑 `0.0.0.0` 时，同网段任意机器直连 8081 伪造 `X-User-Roles: ADMIN` 就能读 ADMIN 接口、伪造 `X-User-Id` 就能操作他人会议；
+     Redis 还无密码 + 存着会话凭证 → 实测一条 `nc` 就能读走 refreshToken 换 ADMIN token（详见 `docs/review-M2.md` C1/C2）。
+   - **副作用**：服务不能再被局域网其他设备访问。要给面试官演示，需显式改 `server.address` 并自行承担风险，
+     或改用「网关绑内网网卡 + 业务端口只对网关机开放」的部署形态。
+   - 顺手清理：改完后 Redis 里会残留修复前的**明文**反向索引 key（`auth:refresh:token:*` 后缀 36 字符的那批）——
+     新代码按摘要查找、已不可达，可用 `--scan --pattern` 删掉。
 
 ---
 

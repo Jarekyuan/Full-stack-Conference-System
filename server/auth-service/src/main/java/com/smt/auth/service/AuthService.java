@@ -48,10 +48,20 @@ public class AuthService {
         this.accessTokenTtl = accessTokenTtl;
     }
 
+    /**
+     * 用户不存在时也要跑一次 BCrypt 的"陪跑"哈希。
+     * 原因：`user == null || !matches(...)` 会短路，用户不存在时根本不执行 BCrypt（实测约 4ms），
+     * 而用户名存在时要跑（实测约 58ms）——15 倍差异可被脚本按响应时间批量枚举出有效用户名，
+     * 只统一错误码挡不住（评审 R2）。这里用固定占位哈希，密码永不可能匹配成功。
+     */
+    private static final String DUMMY_HASH = "$2y$10$1j9f94FzwjE4l2G/II.G/edJsIUMgUBdFyZKZqLpOQF9joswpyB/2";
+
     public LoginResponse login(LoginRequest request) {
         SysUser user = sysUserMapper.selectByUsername(request.getUsername());
-        // 用户不存在与密码错误返回同一错误码（防用户名枚举）
-        if (user == null || !passwordEncoder.matches(request.getPassword(), user.getPassword())) {
+        // 两条分支都执行一次 BCrypt（时序对齐），错误码统一 LOGIN_FAILED（防用户名枚举）
+        boolean matched = passwordEncoder.matches(request.getPassword(),
+                user == null ? DUMMY_HASH : user.getPassword());
+        if (user == null || !matched) {
             throw new BusinessException(ErrorCode.LOGIN_FAILED);
         }
         if (user.getStatus() == 0) {
@@ -101,6 +111,10 @@ public class AuthService {
         SysUser user = sysUserMapper.selectById(userId);
         if (user == null) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED);
+        }
+        // 账号状态也要看：停用后若这里照常返回资料与角色，前端会以为登录态仍有效（评审 R3 新发现的漏点）
+        if (user.getStatus() == 0) {
+            throw new BusinessException(ErrorCode.USER_DISABLED);
         }
         return toUser(user, rolesOf(user.getId()));
     }

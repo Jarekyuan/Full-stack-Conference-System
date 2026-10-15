@@ -16,8 +16,11 @@ services:
     image: mysql:8.0
     container_name: smt-mysql
     restart: unless-stopped
+    # 端口只绑回环：基础设施仅供本机应用访问。
+    # 绑 0.0.0.0 时（2026-10-15 评审 C1/C2 的根因）同网段任意机器可直接连 root/无密码 Redis，
+    # 而 MySQL root 口令就在本文件里——等于把数据库和令牌库一起交出去。
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     environment:
       MYSQL_ROOT_PASSWORD: root123
       TZ: Asia/Shanghai
@@ -39,8 +42,10 @@ services:
     image: redis:7-alpine
     container_name: smt-redis
     restart: unless-stopped
+    # 同 MySQL：只绑回环。Redis 里存的是会话凭证，且默认无密码——
+    # 暴露到局域网 = 任何人都能读走 refreshToken 直接接管账号（评审 C1 已实测该链路的可达性）
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     command: redis-server --appendonly yes
     volumes:
       - redis-data:/data
@@ -56,8 +61,8 @@ services:
     container_name: smt-rabbitmq
     restart: unless-stopped
     ports:
-      - "5672:5672"      # AMQP
-      - "15672:15672"    # 管理台（guest/guest）
+      - "127.0.0.1:5672:5672"      # AMQP（只绑回环，理由同 MySQL/Redis）
+      - "127.0.0.1:15672:15672"    # 管理台（guest/guest）
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
@@ -71,8 +76,8 @@ services:
     container_name: smt-nacos
     restart: unless-stopped
     ports:
-      - "8848:8848"      # 控制台 / HTTP
-      - "9848:9848"      # 客户端 gRPC（2.x 必需）
+      - "127.0.0.1:8848:8848"      # 控制台 / HTTP（只绑回环）
+      - "127.0.0.1:9848:9848"      # 客户端 gRPC（2.x 必需）
     environment:
       MODE: standalone
       TZ: Asia/Shanghai

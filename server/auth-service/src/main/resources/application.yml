@@ -1,5 +1,8 @@
 server:
   port: 8081
+  # 只绑回环（评审 C2）：直连本端口即可伪造 X-User-* 头冒充 ADMIN，也能零凭据打 /internal/users/batch。
+  # 真实部署改为绑内网网卡 + 安全组，并给内部接口加服务间凭证。
+  address: 127.0.0.1
 
 spring:
   application:

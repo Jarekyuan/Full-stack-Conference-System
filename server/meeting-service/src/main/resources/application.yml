@@ -1,5 +1,8 @@
 server:
   port: 8082
+  # 只绑回环（评审 C2）：本服务用 UserContext.getUserId() 做会议归属校验，
+  # 直连时伪造 X-User-Id 即可取消/改期他人会议。真实部署改为绑内网网卡 + 安全组。
+  address: 127.0.0.1
 
 spring:
   application:

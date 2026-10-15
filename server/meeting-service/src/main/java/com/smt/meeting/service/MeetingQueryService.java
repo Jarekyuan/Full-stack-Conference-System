@@ -31,12 +31,17 @@ public class MeetingQueryService {
     private final MeetingParticipantMapper participantMapper;
     private final MeetingStatusLogMapper statusLogMapper;
 
+    /** 页码上限：防 offset 乘法溢出（上限 × 最大 size 仍远小于 Integer.MAX_VALUE），也顺带挡住深分页扫描 */
+    private static final int MAX_PAGE = 100_000;
+
     /**
      * 列表：scope=mine（我组织的或参与的，默认）不需要额外权限；
      * scope=all（全量）仅 ADMIN/APPROVER —— 权限校验在 Service 层（SQL 层不加归属条件）。
      */
     public PageResult<MeetingVO> page(MeetingQueryDTO query) {
-        int safePage = Math.max(query.getPage() == null ? 1 : query.getPage(), 1);
+        // page 必须双向钳制：只设下限时 page=2147483647 会让 offset 乘法溢出成负数，
+        // 传到 MySQL 的 LIMIT 直接报错 → 500（评审 R1 实测）。上限按"总条数规模"给足即可。
+        int safePage = Math.min(Math.max(query.getPage() == null ? 1 : query.getPage(), 1), MAX_PAGE);
         int safeSize = Math.min(Math.max(query.getSize() == null ? 10 : query.getSize(), 1), 100);
 
         String scope = "all".equals(query.getScope()) ? "all" : "mine";

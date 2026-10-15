@@ -6,15 +6,24 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
 
 /**
  * refreshToken 存储（Redis 双索引，见 docs/04 接口设计 4.1/4.2）：
- * - auth:refresh:{userId}       → refreshToken（按用户管理/登出用，04 文档约定的 key）
- * - auth:refresh:token:{token}  → userId（refresh 时由 token 反查用户）
+ * - auth:refresh:{userId}              → refreshToken 的 **SHA-256 摘要**
+ * - auth:refresh:token:{摘要}           → userId（refresh 时由 token 反查用户）
  * 同一用户只保留一个有效 refreshToken（新登录/滚动更新自动作废旧 token）
+ *
+ * 【只存摘要，不存明文】Redis 里落的是 SHA-256，明文只存在于客户端手里。
+ * 原因：Redis 默认无密码、端口又常被发布到宿主机（评审 C1 实测：一条 nc 就能读走管理员
+ * 的 refreshToken，再打白名单里的 /auth/refresh 直接换成 ADMIN 的 accessToken）。
+ * 存摘要后，即使令牌库被整库读走，也拿不到可用于换 token 的原像。
  *
  * 【并发安全】三个写操作（save/rotate/removeByUser）全部用 Lua 脚本原子执行。
  * 原因：原实现是"读旧值→删旧反向索引→写两键"的多步读改写，并发刷新时会出现
@@ -73,11 +82,11 @@ public class RefreshTokenStore {
     public record Rotated(Long userId, String newToken) {
     }
 
-    /** 保存（新登录）：先作废该用户旧 token，再写两条索引，整体原子 */
+    /** 保存（新登录）：先作废该用户旧 token，再写两条索引，整体原子；落库的只有摘要 */
     public void save(Long userId, String refreshToken) {
         redis.execute(SAVE_SCRIPT,
-                List.of(userKey(userId), tokenKey(refreshToken)),
-                refreshToken, String.valueOf(refreshTokenTtl.toMillis()),
+                List.of(userKey(userId), digestKey(refreshToken)),
+                digest(refreshToken), String.valueOf(refreshTokenTtl.toMillis()),
                 TOKEN_KEY_PREFIX, String.valueOf(userId));
     }
 
@@ -88,8 +97,8 @@ public class RefreshTokenStore {
     public Rotated rotate(String oldToken) {
         String newToken = UUID.randomUUID().toString();
         String userId = redis.execute(ROTATE_SCRIPT,
-                List.of(tokenKey(oldToken), tokenKey(newToken)),
-                oldToken, newToken, String.valueOf(refreshTokenTtl.toMillis()),
+                List.of(digestKey(oldToken), digestKey(newToken)),
+                digest(oldToken), digest(newToken), String.valueOf(refreshTokenTtl.toMillis()),
                 USER_KEY_PREFIX);
         if (userId == null) {
             return null;
@@ -106,7 +115,19 @@ public class RefreshTokenStore {
         return USER_KEY_PREFIX + userId;
     }
 
-    private String tokenKey(String refreshToken) {
-        return TOKEN_KEY_PREFIX + refreshToken;
+    /** 反向索引 key：由**摘要**拼成，Redis 里不出现明文 token */
+    private String digestKey(String refreshToken) {
+        return TOKEN_KEY_PREFIX + digest(refreshToken);
+    }
+
+    /** SHA-256 摘要（十六进制小写） */
+    private static String digest(String refreshToken) {
+        try {
+            byte[] hash = MessageDigest.getInstance("SHA-256")
+                    .digest(refreshToken.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hash);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 不可用", e); // JDK 必备算法，实际不可达
+        }
     }
 }
