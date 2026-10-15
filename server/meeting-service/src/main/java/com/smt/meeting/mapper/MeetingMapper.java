@@ -68,6 +68,11 @@ public interface MeetingMapper {
      * 乐观锁更新（T2.10）：只改非状态字段 + version 自增；
      * WHERE version=#{version} 校验并发——影响 0 行 = 已被他人修改，调用方按 40002 提示重试。
      * status 变更（R-14 回退到待审批）单独走状态机，保证日志一致。
+     *
+     * 【为什么还要校 status】version 只在"改会议"时自增，而**取消走的是状态机 CAS（只改 status）**，
+     * version 不动。于是"读会议 → 抢锁/等行锁（秒级窗口）→ 更新"期间若被取消，
+     * `WHERE version=?` 仍会命中，出现"已取消的会议被改期"（评审 C4）。
+     * 加上 expectedStatus 后，这类交叉写会以影响 0 行收场 → 调用方按 40002 提示刷新。
      */
     int updateWithVersion(@Param("id") Long id,
                           @Param("title") String title,
@@ -75,5 +80,6 @@ public interface MeetingMapper {
                           @Param("startTime") LocalDateTime startTime,
                           @Param("endTime") LocalDateTime endTime,
                           @Param("remark") String remark,
-                          @Param("version") int version);
+                          @Param("version") int version,
+                          @Param("expectedStatus") int expectedStatus);
 }

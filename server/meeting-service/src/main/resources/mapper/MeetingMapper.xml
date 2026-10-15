@@ -217,12 +217,14 @@
       乐观锁更新（T2.10）：WHERE version=#{version} 校验并发，影响 0 行 = 已被他人修改。
       只改非状态字段 + version 自增；status 变更（R-14 回退）单独走状态机保证日志一致。
     -->
+    <!-- 乐观锁更新：version 防"同一行的并发改"，status 防"改期与取消的交叉写"（后者只改 status、
+         version 不动，单靠 version 拦不住 → 已取消的会议会被改期，见评审 C4） -->
     <update id="updateWithVersion">
         UPDATE meeting
         SET title = #{title}, room_id = #{roomId},
             start_time = #{startTime}, end_time = #{endTime}, remark = #{remark},
             version = version + 1
-        WHERE id = #{id} AND version = #{version}
+        WHERE id = #{id} AND version = #{version} AND status = #{expectedStatus}
     </update>
 
 </mapper>

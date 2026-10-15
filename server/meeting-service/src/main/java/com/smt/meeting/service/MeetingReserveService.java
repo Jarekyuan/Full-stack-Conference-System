@@ -20,7 +20,6 @@ import com.smt.meeting.vo.MeetingConflictVO;
 import com.smt.meeting.vo.MeetingCreateVO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
@@ -85,8 +84,12 @@ public class MeetingReserveService {
     /**
      * 取消会议：归属校验（40004，数据权限）→ 取消截止（R-6，30005）→ 状态机迁移（10/20 → 50）→ 写取消信息。
      * 30 进行中禁止取消（迁移矩阵），由状态机拦 40002。
+     *
+     * 并发设计：取消**也**取房间锁 + 会议室行锁——它同样在改变"某时段是否被占用"（释放时段），
+     * 属 CLAUDE.md 红线 #9 的适用范围。不取锁时，取消提交与并发的冲突检测之间会出现窗口：
+     * 后来者读到"还没被取消"的旧快照 → 报一场已释放时段的假冲突（评审 Optional）。
+     * 锁序与 create/update 一致（先会议室行 → 后会议行），不引入新死锁面。
      */
-    @Transactional
     public void cancel(Long meetingId, String reason, Long operatorId) {
         Meeting meeting = meetingMapper.selectById(meetingId);
         if (meeting == null) {
@@ -105,10 +108,15 @@ public class MeetingReserveService {
                         "距会议开始不足 " + strategy.getCancelDeadlineMinutes() + " 分钟，不可取消");
             }
         }
-        // 状态变更走状态机唯一入口（校验迁移 + CAS 更新 + 写日志，同一事务）
-        stateMachine.transition(meetingId, MeetingEventEnum.CANCEL, operatorId, reason);
-        // 取消上下文（原因 + 时间）
-        meetingMapper.updateCancelInfo(meetingId, reason);
+        lockHelper.executeWithLock(meeting.getRoomId(), meeting.getStartTime(), meeting.getEndTime(), () ->
+                transactionTemplate.execute(tx -> {
+                    meetingRoomMapper.selectIdForUpdate(meeting.getRoomId()); // 数据库兜底，与 create/update 同一把
+                    // 状态变更走状态机唯一入口（校验迁移 + CAS 更新 + 写日志，同一事务）
+                    stateMachine.transition(meetingId, MeetingEventEnum.CANCEL, operatorId, reason);
+                    // 取消上下文（原因 + 时间）
+                    meetingMapper.updateCancelInfo(meetingId, reason);
+                    return null;
+                }));
     }
 
     // ---------- 修改（T2.10） ----------
@@ -163,12 +171,15 @@ public class MeetingReserveService {
 
     /** 乐观锁更新 + R-14 状态回退（必须在事务内调用） */
     private void applyUpdate(Long meetingId, MeetingUpdateDTO dto, Long operatorId, boolean backToApproval) {
-        // 乐观锁（只改非状态字段 + version 自增；version 不匹配 = 并发已改 → 40002）
+        // 乐观锁（只改非状态字段 + version 自增）；
+        // 同时校 status=RESERVED：改期与取消是两条不同的写路径（后者只改 status、不动 version），
+        // 只校 version 拦不住交叉写（评审 C4）。两个条件任一不满足都按 40002 提示刷新重试。
         int affected = meetingMapper.updateWithVersion(meetingId, dto.getTitle(), dto.getRoomId(),
-                dto.getStartTime(), dto.getEndTime(), dto.getRemark(), dto.getVersion());
+                dto.getStartTime(), dto.getEndTime(), dto.getRemark(), dto.getVersion(),
+                MeetingStatusEnum.RESERVED.getCode());
         if (affected == 0) {
             throw new BusinessException(ErrorCode.MEETING_STATUS_NOT_ALLOWED.getCode(),
-                    "会议已被他人修改，请刷新后重试");
+                    "会议状态已变化（可能已被取消或修改），请刷新后重试");
         }
         // R-14 状态回退：20 → 10（走状态机唯一入口，保证日志一致）
         if (backToApproval) {

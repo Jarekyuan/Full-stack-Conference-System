@@ -43,49 +43,62 @@ public class MeetingLockHelper {
 
     /**
      * 在锁保护下执行 action（锁覆盖 start~end 涉及的每个自然日）。
+     *
+     * 【为什么把 acquire 也放进 try】acquire 中途失败时必须释放"已拿到的那几把"——
+     * leaseTime=-1 走看门狗会自动续期，漏放一把就等于把该 (roomId, 日期) **永久**锁死
+     * （后续所有预约都在 3 秒后 10007，直到服务重启）。
+     * 原先只在 `catch (InterruptedException | BusinessException)` 里释放，
+     * 而跨天取锁途中 Redis 抖动抛的是 `RedisTimeoutException`（RuntimeException，两个 catch 都接不住）
+     * → 异常穿透、已持有的锁无人释放（评审 C3）。
+     *
      * @throws BusinessException 10007 抢锁失败（等待 3 秒仍未获得）
      */
     public <T> T executeWithLock(Long roomId, LocalDateTime start, LocalDateTime end, Supplier<T> action) {
-        List<RLock> locks = acquire(roomId, start, end);
+        List<RLock> locks = new ArrayList<>();
         try {
+            acquireInto(locks, roomId, start, end);
             return action.get();
         } finally {
-            release(locks);
+            release(locks); // 无论 acquire 中途失败还是 action 抛异常，都兜底释放已持有的锁
         }
     }
 
-    private List<RLock> acquire(Long roomId, LocalDateTime start, LocalDateTime end) {
+    /** 逐日取锁；取到几把就往 locks 里加几把（中途失败由调用方的 finally 统一释放） */
+    private void acquireInto(List<RLock> locks, Long roomId, LocalDateTime start, LocalDateTime end) {
         // 覆盖 [start 当天 .. end 当天]（端点日期也纳入：宁可多锁一天，避免半开区间的边界漏洞）
         SortedSet<LocalDate> dates = new TreeSet<>();
         for (LocalDate d = start.toLocalDate(); !d.isAfter(end.toLocalDate()); d = d.plusDays(1)) {
             dates.add(d);
         }
 
-        List<RLock> acquired = new ArrayList<>(dates.size());
-        try {
-            for (LocalDate date : dates) {
-                RLock lock = redisson.getLock(KEY_PREFIX + roomId + ":" + date);
+        for (LocalDate date : dates) {
+            RLock lock = redisson.getLock(KEY_PREFIX + roomId + ":" + date);
+            try {
                 if (!lock.tryLock(WAIT_SECONDS, -1, TimeUnit.SECONDS)) {
                     throw new BusinessException(ErrorCode.SYSTEM_BUSY);
                 }
-                acquired.add(lock);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new BusinessException(ErrorCode.SYSTEM_BUSY);
             }
-            log.debug("预约锁已获取: room={}, dates={}", roomId, dates);
-            return acquired;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            release(acquired); // 中断也要释放已持有的锁
-            throw new BusinessException(ErrorCode.SYSTEM_BUSY);
-        } catch (BusinessException e) {
-            release(acquired); // 中途某把锁失败：释放已获取的，避免残留占用
-            throw e;
+            locks.add(lock);
         }
+        log.debug("预约锁已获取: room={}, dates={}", roomId, dates);
     }
 
+    /**
+     * 释放已持有的锁。逐把 try/catch：
+     * 一把 unlock 失败（如连接已断）不能让后面几把漏放，也不能覆盖掉原始业务异常
+     * （否则 40001 会被变成 500）。
+     */
     private void release(List<RLock> locks) {
         for (RLock lock : locks) {
-            if (lock.isHeldByCurrentThread()) {
-                lock.unlock();
+            try {
+                if (lock.isHeldByCurrentThread()) {
+                    lock.unlock();
+                }
+            } catch (Exception e) {
+                log.warn("释放预约锁失败（已跳过，等待租约/看门狗兜底）: {}", lock.getName(), e);
             }
         }
     }
