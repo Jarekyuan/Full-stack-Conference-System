@@ -24,10 +24,11 @@ function RequireAuth() {
   return <Outlet />
 }
 
-/** 角色守卫：当前角色不在白名单内则回退到日历页 */
-function RequireRole({ roles, children }: { roles: string[]; children: ReactNode }) {
+/** 角色守卫：用户拥有的任一角色命中白名单即通过（RBAC 多角色）；否则回退到日历页 */
+function RequireRole({ roles: allowed, children }: { roles: string[]; children: ReactNode }) {
   const user = useUserStore((s) => s.user)
-  if (!user || !roles.includes(user.role)) {
+  const hasRole = !!user && (user.roles ?? []).some((role) => allowed.includes(role))
+  if (!hasRole) {
     return <Navigate to="/calendar" replace />
   }
   return <>{children}</>

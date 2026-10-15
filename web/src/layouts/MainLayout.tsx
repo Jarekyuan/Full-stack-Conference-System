@@ -39,9 +39,9 @@ export default function MainLayout() {
 
   const { token } = theme.useToken()
 
-  const role = user?.role ?? ''
-  const isAdmin = role === ROLE_ADMIN
-  const isApprover = role === ROLE_ADMIN || role === ROLE_APPROVER
+  const roles = user?.roles ?? []
+  const isAdmin = roles.includes(ROLE_ADMIN)
+  const isApprover = isAdmin || roles.includes(ROLE_APPROVER)
 
   // 角色化菜单：基础项全员可见，审批/管理按角色追加
   const menuItems: MenuItem[] = [

@@ -27,12 +27,16 @@ export interface PageQuery {
   size?: number
 }
 
-/** 登录响应中的用户简要信息（对应后端 UserVO） */
+/** 登录响应中的用户简要信息（对应后端 LoginResponse.User） */
 export interface LoginUser {
   id: number
   username: string
   realName: string
-  role: string
+  /** 角色 code 列表（RBAC 多角色，如 ["ADMIN","APPROVER"]）；前端按"任一匹配"做菜单与守卫 */
+  roles: string[]
+  /** 所属部门（可空 = 未分配） */
+  deptId: number | null
+  deptName: string | null
   avatar: string | null
 }
 
