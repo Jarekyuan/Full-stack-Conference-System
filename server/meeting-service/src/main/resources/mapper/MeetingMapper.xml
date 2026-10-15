@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 会议主表 SQL（手写 XML） -->
+<mapper namespace="com.smt.meeting.mapper.MeetingMapper">
+
+    <resultMap id="BaseResultMap" type="com.smt.meeting.entity.Meeting">
+        <id column="id" property="id"/>
+        <result column="title" property="title"/>
+        <result column="room_id" property="roomId"/>
+        <result column="organiser_id" property="organiserId"/>
+        <result column="start_time" property="startTime"/>
+        <result column="end_time" property="endTime"/>
+        <result column="status" property="status"/>
+        <result column="remark" property="remark"/>
+        <result column="cancel_reason" property="cancelReason"/>
+        <result column="cancel_time" property="cancelTime"/>
+        <result column="recurring_id" property="recurringId"/>
+        <result column="version" property="version"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="BaseColumns">
+        id, title, room_id, organiser_id, start_time, end_time, status,
+        remark, cancel_reason, cancel_time, recurring_id, version, created_at, updated_at
+    </sql>
+
+    <!-- 按主键查询：命中主键，走 PRIMARY -->
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM meeting
+        WHERE id = #{id}
+    </select>
+
+    <!--
+      CAS 状态更新：WHERE 带前态条件（status = #{fromStatus}），影响 0 行 = 状态已被并发变更。
+      updated_at 由表定义的 ON UPDATE CURRENT_TIMESTAMP 自动刷新，无需显式 SET。
+    -->
+    <update id="updateStatus">
+        UPDATE meeting
+        SET status = #{toStatus}
+        WHERE id = #{id} AND status = #{fromStatus}
+    </update>
+
+    <!-- 新增会议：created_at/updated_at 走数据库默认值；version 走默认 0 -->
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO meeting (title, room_id, organiser_id, start_time, end_time, status, remark, recurring_id)
+        VALUES (#{title}, #{roomId}, #{organiserId}, #{startTime}, #{endTime}, #{status}, #{remark}, #{recurringId})
+    </insert>
+
+</mapper>

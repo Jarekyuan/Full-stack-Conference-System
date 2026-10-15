@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 会议状态日志 SQL（手写 XML） -->
+<mapper namespace="com.smt.meeting.mapper.MeetingStatusLogMapper">
+
+    <resultMap id="BaseResultMap" type="com.smt.meeting.entity.MeetingStatusLog">
+        <id column="id" property="id"/>
+        <result column="meeting_id" property="meetingId"/>
+        <result column="from_status" property="fromStatus"/>
+        <result column="to_status" property="toStatus"/>
+        <result column="event" property="event"/>
+        <result column="operator_id" property="operatorId"/>
+        <result column="remark" property="remark"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <!-- 追加日志：创建场景 from_status/operator_id 可为 NULL -->
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO meeting_status_log (meeting_id, from_status, to_status, event, operator_id, remark)
+        VALUES (#{meetingId}, #{fromStatus}, #{toStatus}, #{event}, #{operatorId}, #{remark})
+    </insert>
+
+    <!-- 时间线：按会议查询，命中 idx_meeting；同秒产生的多条按 id 兜底排序 -->
+    <select id="selectByMeetingId" resultMap="BaseResultMap">
+        SELECT id, meeting_id, from_status, to_status, event, operator_id, remark, created_at
+        FROM meeting_status_log
+        WHERE meeting_id = #{meetingId}
+        ORDER BY created_at, id
+    </select>
+
+</mapper>
