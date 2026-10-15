@@ -14,6 +14,7 @@ import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.server.reactive.ServerHttpRequest;
@@ -28,9 +29,10 @@ import java.util.List;
 /**
  * 网关鉴权过滤器（全局）：
  * ① 剥离外部传入的 X-User-*（防伪造：信任边界在网关，见 docs/04 接口设计 7.3）
- * ② 白名单放行（登录/刷新/actuator）
- * ③ 校验 JWT → 解析 userId/roles → 重新注入 X-User-Id / X-User-Roles（逗号分隔多角色，v1.3）
- * ④ 失败统一返回 401 + {code:10002}
+ * ② CORS 预检（OPTIONS）放行——预检不带 Authorization
+ * ③ 白名单放行（登录/刷新/actuator）
+ * ④ 校验 JWT → 解析 userId/roles → 重新注入 X-User-Id / X-User-Roles（逗号分隔多角色，v1.3）
+ * ⑤ 失败统一返回 401 + {code:10002}
  */
 @Slf4j
 @Component
@@ -65,7 +67,14 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
                 })
                 .build();
 
-        // ② 白名单放行
+        // ② CORS 预检放行（评审 P1-17）：浏览器的 OPTIONS 预检**不带 Authorization 头**，
+        //    卡在下面 ③ 会让跨域前端在预检阶段就拿到 401——CORS 配了也不通。
+        //    安全性：身份头已在①剥离，OPTIONS 又只协商 CORS 元数据、不承载任何业务读/写。
+        if (HttpMethod.OPTIONS.equals(request.getMethod())) {
+            return chain.filter(exchange.mutate().request(stripped).build());
+        }
+
+        // ③ 白名单放行
         if (isWhitelisted(path)) {
             return chain.filter(exchange.mutate().request(stripped).build());
         }

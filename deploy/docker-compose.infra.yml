@@ -22,7 +22,9 @@ services:
     ports:
       - "127.0.0.1:3306:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: root123
+      # 口令可用环境变量覆盖：`MYSQL_ROOT_PASSWORD=xxx docker compose ... up -d`（或写进 deploy/.env）
+      # ⚠️ MySQL 只在**首次初始化数据卷**时读这个变量——改口令必须 `down -v` 重建（会清空数据）
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
       TZ: Asia/Shanghai
     command: >-
       --character-set-server=utf8mb4
@@ -31,7 +33,8 @@ services:
       - mysql-data:/var/lib/mysql
       - ../db:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot123"]
+      # CMD-SHELL 里用 $$ 让 compose 别插值、留给容器内 shell 展开（exec 形式没有 shell，展开不了）
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -42,15 +45,22 @@ services:
     image: redis:7-alpine
     container_name: smt-redis
     restart: unless-stopped
-    # 同 MySQL：只绑回环。Redis 里存的是会话凭证，且默认无密码——
-    # 暴露到局域网 = 任何人都能读走 refreshToken 直接接管账号（评审 C1 已实测该链路的可达性）
+    # 同 MySQL：只绑回环。Redis 里存的是会话凭证，暴露到局域网 = 任何人都能读走 refreshToken
+    # 直接接管账号（评审 C1 已实测该链路的可达性）
     ports:
       - "127.0.0.1:6379:6379"
-    command: redis-server --appendonly yes
+    # requirepass：纵深防御第二层。端口绑回环已经堵掉了"同网段直连"，
+    # 但一旦哪天有人为了演示把端口放开/加反代，免密 Redis 会立刻变成凭证泄露面（评审 C1 改法①）
+    # ⚠️ Redis 每次都读这个参数，改口令只需改这里 + 重启（数据在 AOF 卷里，不丢）
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis123}
+    environment:
+      # healthcheck 在同一容器里跑，这里把口令传进去供它使用（避免在命令行里硬编码第二份）
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # -a 从环境变量取；`$$` 转义让 shell 在容器内展开
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 10s
       timeout: 3s
       retries: 5

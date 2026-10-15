@@ -17,6 +17,8 @@ spring:
     redis:
       host: 127.0.0.1
       port: 6379
+      # 与 deploy/docker-compose.infra.yml 的 REDIS_PASSWORD 同源（评审 C1 改法①：Redis 不再免密）
+      password: ${REDIS_PASSWORD:redis123}
   cloud:
     nacos:
       discovery:

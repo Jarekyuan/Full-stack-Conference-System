@@ -16,6 +16,9 @@ spring:
     redis:
       host: 127.0.0.1
       port: 6379
+      # 与 deploy/docker-compose.infra.yml 的 REDIS_PASSWORD 同源（评审 C1 改法①：Redis 不再免密）
+      # 幂等（IdempotentAspect）与分布式锁（RedissonConfig）都连这个实例
+      password: ${REDIS_PASSWORD:redis123}
   cloud:
     nacos:
       discovery:
@@ -26,6 +29,18 @@ spring:
       # 开启后 @FeignClient 的 fallbackFactory 才生效（依赖 Resilience4j）
       circuitbreaker:
         enabled: true
+      client:
+        config:
+          # 超时必须配死（评审 P1-16）：Feign 默认 connect 10s / read **60s**，
+          # 一个假死的 auth-service 会把 meeting 的请求线程挂住 60 秒——
+          # "降级"根本来不及发生，核心链路先被拖死。auth 是内部调用 + 同机回环，给秒级足够。
+          default:
+            connect-timeout: 1000
+            read-timeout: 2000
+          # 与 @FeignClient(name = "auth-service") 对应
+          'auth-service':
+            connect-timeout: 500
+            read-timeout: 1500
 
 mybatis-plus:
   # SQL 手写 XML 为主（规范见 server/AI-RULES.md 第十一章），XML 扫描路径：

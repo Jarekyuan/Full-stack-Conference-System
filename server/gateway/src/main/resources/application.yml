@@ -42,6 +42,24 @@ spring:
           predicates:
             - Path=/ws/**
 
+      # 跨域（评审 P1-17 补齐，docs/02 选型 #6 网关职责之一）。
+      # 开发期前端走 Vite 代理（同源，不触发 CORS），但"局域网 IP 直连网关演示"这类场景需要它。
+      globalcors:
+        add-to-simple-url-handler-mapping: true
+        cors-configurations:
+          '[/**]':
+            # 允许任意来源是**有意的**：本系统用 Authorization: Bearer 鉴权、不用 Cookie，
+            # 且下面 allow-credentials 保持 false —— 陌生站点既读不到 localStorage 里的 token，
+            # 也无法借浏览器自动携带的凭证"搭车"调接口。
+            # 生产更严的做法是显式白名单 + HTTPS，见 docs/02。
+            allowed-origin-patterns: "*"
+            allowed-methods: [GET, POST, PUT, DELETE, OPTIONS]
+            allowed-headers: "*"
+            # 前端 ApiError.traceId 要读响应头，必须显式暴露（浏览器默认只给 6 个安全头）
+            exposed-headers: [X-Trace-Id]
+            allow-credentials: false
+            max-age: 3600
+
 management:
   endpoints:
     web:
