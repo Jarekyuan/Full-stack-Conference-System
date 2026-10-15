@@ -77,8 +77,12 @@ free_slot() { # free_slot <起始天数偏移>
 U1=$(login user1 user123); U2=$(login user2 user123)
 AP1=$(login approver1 user123); AP2=$(login approver2 user123)
 [ -n "$U1" ] && [ -n "$AP1" ] || { echo "登录失败，终止"; exit 1; }
-CREATED=""
-cleanup() { for m in $CREATED; do cancel "$U1" "$m"; done; }
+CREATED_U1=""   # user1 建的
+CREATED_U2=""   # user2 建的（**必须用 user2 自己取消**：归属校验只认组织人，用 user1 会 40004 静默失败）
+cleanup() {
+  for m in $CREATED_U1; do cancel "$U1" "$m"; done
+  for m in $CREATED_U2; do cancel "$U2" "$m"; done
+}
 trap cleanup EXIT
 
 echo
@@ -90,7 +94,7 @@ SLOT=$(free_slot 1) || exit 1
 S="${SLOT%%|*}"; E="${SLOT##*|}"
 echo "  （使用时段 ${S} ~ ${E}，红枫厅需审批）"
 
-M1=$(book "$U1" "M3审批-复检A" "$S" "$E") || exit 1; CREATED="$CREATED $M1"
+M1=$(book "$U1" "M3审批-复检A" "$S" "$E") || exit 1; CREATED_U1="$CREATED_U1 $M1"
 check "需审批会议室创建成功" "$([ -n "$M1" ] && echo ok)" "ok"
 check "创建后状态 = 10 待审批" "$(status_of "$U1" "$M1")" "10"
 check "待审批**不占用**时段（availability 仍可用）" "$(availability "$U1" "$S" "$E")" "True"
@@ -106,7 +110,7 @@ check "待办按会议开始时间升序" \
 
 echo
 echo "=== T3.2 复检：同一时段两场待审批，批掉一场后另一场必被拦 ==="
-M2=$(book "$U2" "M3审批-复检B" "$S" "$E") || exit 1; CREATED="$CREATED $M2"
+M2=$(book "$U2" "M3审批-复检B" "$S" "$E") || exit 1; CREATED_U2="$CREATED_U2 $M2"
 check "第二场同时段待审批也能提交（10 不占时段）" "$(status_of "$U2" "$M2")" "10"
 check "approver1 批准 M2 → 20" "$(pass_it "$AP1" "$M2" | j "d['data']['status']")" "20"
 check "批准后时段**变为占用**" "$(availability "$U1" "$S" "$E")" "False"
@@ -120,7 +124,7 @@ echo
 echo "=== T3.2 并发双人同审：恰好一个成功 ==="
 SLOT2=$(free_slot 3) || exit 1
 S2="${SLOT2%%|*}"; E2="${SLOT2##*|}"
-M3=$(book "$U1" "M3审批-并发" "$S2" "$E2") || exit 1; CREATED="$CREATED $M3"
+M3=$(book "$U1" "M3审批-并发" "$S2" "$E2") || exit 1; CREATED_U1="$CREATED_U1 $M3"
 R1=$(mktemp); R2=$(mktemp)
 ( pass_it "$AP1" "$M3" A | j "d['code']" > "$R1" ) &
 ( pass_it "$AP2" "$M3" B | j "d['code']" > "$R2" ) &
@@ -133,7 +137,7 @@ echo
 echo "=== T3.3 拒绝 ==="
 SLOT3=$(free_slot 5) || exit 1
 S3="${SLOT3%%|*}"; E3="${SLOT3##*|}"
-M4=$(book "$U1" "M3审批-拒绝" "$S3" "$E3") || exit 1; CREATED="$CREATED $M4"
+M4=$(book "$U1" "M3审批-拒绝" "$S3" "$E3") || exit 1; CREATED_U1="$CREATED_U1 $M4"
 check "无 comment 拒绝 → 10001" "$(reject_it "$AP1" "$M4" | j "d['code']")" "10001"
 check "纯空白 comment 也拦（10001）" "$(reject_it "$AP1" "$M4" "   " | j "d['code']")" "10001"
 check "带理由拒绝 → 60" "$(reject_it "$AP1" "$M4" "该时段已安排客户接待，请改期" | j "d['data']['status']")" "60"
@@ -154,10 +158,10 @@ check "approver2 的已办箱看不到 approver1 的处理" \
 echo
 echo "=== 清理 ==="
 cleanup
-echo "  已取消本次创建的会议：$CREATED"
+echo "  已取消本次创建的会议：user1 的 [$CREATED_U1] / user2 的 [$CREATED_U2]"
 check "清理后待办不再含本次数据" \
   "$(curl -s --noproxy '*' "$BASE/api/approvals/pending?page=1&size=50" -H "Authorization: Bearer $AP1" \
-     | j "any(str(x['meetingId']) in '$CREATED'.split() for x in d['data']['list'])")" "False"
+     | j "any(str(x['meetingId']) in '$CREATED_U1 $CREATED_U2'.split() for x in d['data']['list'])")" "False"
 
 echo
 echo "==================== 通过 $PASS / 失败 $FAIL ===================="
