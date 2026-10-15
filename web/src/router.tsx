@@ -10,6 +10,7 @@ import { createBrowserRouter, Navigate, Outlet, useLocation } from 'react-router
 import { getAccessToken } from '@/api/token'
 import Placeholder from '@/components/Placeholder'
 import MainLayout from '@/layouts/MainLayout'
+import Calendar from '@/pages/Calendar'
 import Login from '@/pages/Login'
 import RoomManage from '@/pages/admin/RoomManage'
 import { useUserStore } from '@/stores/userStore'
@@ -44,7 +45,7 @@ export const router = createBrowserRouter([
         element: <MainLayout />,
         children: [
           { index: true, element: <Navigate to="/calendar" replace /> },
-          { path: 'calendar', element: <Placeholder title="日历预约" /> },
+          { path: 'calendar', element: <Calendar /> },
           { path: 'meetings', element: <Placeholder title="我的会议" /> },
           { path: 'meetings/:id', element: <Placeholder title="会议详情" /> },
           { path: 'notifications', element: <Placeholder title="通知中心" /> },
