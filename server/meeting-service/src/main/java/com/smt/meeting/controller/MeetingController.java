@@ -4,6 +4,7 @@ import com.smt.common.context.UserContext;
 import com.smt.common.result.PageResult;
 import com.smt.common.result.Result;
 import com.smt.meeting.aop.Idempotent;
+import com.smt.meeting.dto.MeetingCancelDTO;
 import com.smt.meeting.dto.MeetingCreateDTO;
 import com.smt.meeting.dto.MeetingQueryDTO;
 import com.smt.meeting.service.MeetingQueryService;
@@ -45,6 +46,18 @@ public class MeetingController {
     @GetMapping("/{id}")
     public Result<MeetingDetailVO> detail(@PathVariable Long id) {
         return Result.success(queryService.detail(id));
+    }
+
+    /**
+     * 取消会议（组织人；docs/04 3.2）
+     * 校验：归属 40004 → 取消截止 R-6（30005）→ 状态机（10/20 → 50）
+     */
+    @PostMapping("/{id}/cancel")
+    public Result<Void> cancel(@PathVariable Long id,
+                               @Valid @RequestBody(required = false) MeetingCancelDTO dto) {
+        String reason = dto == null ? null : dto.getReason();
+        reserveService.cancel(id, reason, UserContext.getUserId());
+        return Result.success();
     }
 
     /**

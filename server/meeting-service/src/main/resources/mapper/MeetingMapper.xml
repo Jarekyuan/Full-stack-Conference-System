@@ -206,4 +206,11 @@
         WHERE m.id = #{id}
     </select>
 
+    <!-- 写取消信息（T2.9）：取消原因 + 取消时间（NOW()）；状态变更本身走状态机 CAS -->
+    <update id="updateCancelInfo">
+        UPDATE meeting
+        SET cancel_reason = #{reason}, cancel_time = NOW()
+        WHERE id = #{id}
+    </update>
+
 </mapper>

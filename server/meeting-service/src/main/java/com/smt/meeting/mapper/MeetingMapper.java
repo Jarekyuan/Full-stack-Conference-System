@@ -60,4 +60,7 @@ public interface MeetingMapper {
 
     /** 会议详情（JOIN room/organiser；participants/logs 由 Service 装配） */
     MeetingDetailVO selectDetailById(@Param("id") Long id);
+
+    /** 写取消信息（取消原因 + 取消时间；时间由 NOW() 落库）—T2.9 */
+    int updateCancelInfo(@Param("id") Long id, @Param("reason") String reason);
 }

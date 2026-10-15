@@ -7,6 +7,7 @@ import com.smt.meeting.entity.Meeting;
 import com.smt.meeting.entity.MeetingParticipant;
 import com.smt.meeting.entity.MeetingRoom;
 import com.smt.meeting.entity.RoomStrategy;
+import com.smt.meeting.enums.MeetingEventEnum;
 import com.smt.meeting.lock.MeetingLockHelper;
 import com.smt.meeting.mapper.MeetingMapper;
 import com.smt.meeting.mapper.MeetingParticipantMapper;
@@ -17,6 +18,7 @@ import com.smt.meeting.vo.MeetingConflictVO;
 import com.smt.meeting.vo.MeetingCreateVO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
@@ -73,6 +75,37 @@ public class MeetingReserveService {
                     return new MeetingCreateVO(meeting.getId(), status, needApproval,
                             needApproval ? "预约已提交，等待审批" : "预约成功");
                 }));
+    }
+
+    // ---------- 取消（T2.9） ----------
+
+    /**
+     * 取消会议：归属校验（40004，数据权限）→ 取消截止（R-6，30005）→ 状态机迁移（10/20 → 50）→ 写取消信息。
+     * 30 进行中禁止取消（迁移矩阵），由状态机拦 40002。
+     */
+    @Transactional
+    public void cancel(Long meetingId, String reason, Long operatorId) {
+        Meeting meeting = meetingMapper.selectById(meetingId);
+        if (meeting == null) {
+            throw new BusinessException(ErrorCode.MEETING_NOT_FOUND);
+        }
+        // 数据权限：只能操作自己组织的会议
+        if (!meeting.getOrganiserId().equals(operatorId)) {
+            throw new BusinessException(ErrorCode.NOT_MEETING_OWNER);
+        }
+        // R-6 取消截止：now > start - cancel_deadline 时不可取消
+        RoomStrategy strategy = roomStrategyMapper.selectByRoomId(meeting.getRoomId());
+        if (strategy != null && strategy.getCancelDeadlineMinutes() != null) {
+            LocalDateTime deadline = meeting.getStartTime().minusMinutes(strategy.getCancelDeadlineMinutes());
+            if (LocalDateTime.now().isAfter(deadline)) {
+                throw new BusinessException(ErrorCode.CANCEL_DEADLINE_PASSED.getCode(),
+                        "距会议开始不足 " + strategy.getCancelDeadlineMinutes() + " 分钟，不可取消");
+            }
+        }
+        // 状态变更走状态机唯一入口（校验迁移 + CAS 更新 + 写日志，同一事务）
+        stateMachine.transition(meetingId, MeetingEventEnum.CANCEL, operatorId, reason);
+        // 取消上下文（原因 + 时间）
+        meetingMapper.updateCancelInfo(meetingId, reason);
     }
 
     // ---------- 校验链 ----------
