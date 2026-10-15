@@ -212,7 +212,10 @@ CREATE TABLE IF NOT EXISTS meeting_approval (
   `comment`   VARCHAR(500) DEFAULT NULL            COMMENT '审批意见（拒绝时必填）',
   created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '审批时间',
   PRIMARY KEY (id),
-  KEY idx_meeting (meeting_id)
+  KEY idx_meeting (meeting_id),
+  -- 审批中心「已处理」列表：WHERE approver_id = ? ORDER BY created_at DESC（T3.1）
+  -- 没有它时该查询是 ALL + filesort（T3.1 实测 EXPLAIN），加索引后为 ref/range 且天然有序
+  KEY idx_approver_time (approver_id, created_at)
 ) ENGINE = InnoDB COMMENT = '会议审批记录表';
 
 -- ----------------------------------------------------------------------------

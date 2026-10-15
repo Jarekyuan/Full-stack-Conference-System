@@ -27,7 +27,10 @@ public class UserCreateDTO {
     @Size(max = 50, message = "姓名最长 50 字符")
     private String realName;
 
+    // @Size 必须与列宽对齐（sys_user.email 是 VARCHAR(100)）：只校验格式时，
+    // 一个"格式合法但很长"的邮箱（RFC 允许到 254）会让 INSERT 撞 1406 → 500（同类缺陷见 CLAUDE.md 踩坑 #11）
     @Email(message = "邮箱格式不正确")
+    @Size(max = 100, message = "邮箱最长 100 字符")
     private String email;
 
     /** 角色 ID 列表（sys_role.id，至少一个；如 [1] = USER） */

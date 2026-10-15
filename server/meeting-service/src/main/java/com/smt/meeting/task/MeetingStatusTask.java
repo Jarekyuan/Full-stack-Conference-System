@@ -35,11 +35,16 @@ import java.util.stream.Stream;
  * 状态变更必须同时写 `meeting_status_log`（谁在什么时候因为什么改的），否则详情页的时间线会缺一段。
  * 计划文档写在 M2 状态机落地之前，实现时按红线为准。（真需要批量 UPDATE 时，
  * 正确做法是"批量 UPDATE + 批量补日志"一起做，而不是只牺牲日志。）
+ *
+ * <h3>开关</h3>
+ * `meeting.task.enabled=false` 关掉本类**两个**任务（类级 @ConditionalOnProperty 只能管整个 Bean）；
+ * 想让"对账"单独停下请用 `meeting.task.reconcile.cron` 给一个不会触发的时间——
+ * 写 `meeting.task.reconcile.enabled` 是无效的（没有这个属性，别被名字骗了）。
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-@ConditionalOnProperty(name = "meeting.task.status.enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(name = "meeting.task.enabled", havingValue = "true", matchIfMissing = true)
 public class MeetingStatusTask {
 
     /** 任务锁 key（两个任务共用：都是写状态，没必要并行） */
@@ -109,14 +114,15 @@ public class MeetingStatusTask {
      * 不该由一段对账代码替产品做主——代码只负责让这类数据**可见**（ERROR + id 清单），由人决定怎么收尾。
      */
     private void warnStuckPending() {
-        List<Long> stuck = meetingMapper.selectStuckPending(LOG_ID_LIMIT);
-        if (stuck.isEmpty()) {
+        long total = meetingMapper.countStuckPending(); // 数量单独 COUNT：id 清单有上限，条数不能被它截断
+        if (total == 0) {
             return;
         }
-        log.error("[对账] 发现 {} 场【待审批但时间已过】的会议（仅列前 {} 条）：{}——"
+        List<Long> ids = meetingMapper.selectStuckPending(LOG_ID_LIMIT);
+        log.error("[对账] 发现 {} 场【待审批但时间已过】的会议，id 清单{}{}——"
                         + "10 不占时段、也不在自动流转范围内，这类申请不会有任何路径自动收尾；"
                         + "当前只告警不自动修，收尾策略（自动拒绝/作废）需产品决策，见 docs/05 T3.6",
-                stuck.size(), LOG_ID_LIMIT, stuck);
+                total, ids, total > ids.size() ? "（仅列前 " + ids.size() + " 条）" : "");
     }
 
     // ---------- 内部 ----------
@@ -163,6 +169,7 @@ public class MeetingStatusTask {
      */
     private List<Long> advance(MeetingEventEnum event, String label, IntFunction<List<Long>> fetchBatch) {
         List<Long> changed = new ArrayList<>();
+        int skipped = 0;
         for (int batch = 0; batch < MAX_BATCHES; batch++) {
             List<Long> ids = fetchBatch.apply(BATCH_SIZE);
             if (ids.isEmpty()) {
@@ -171,11 +178,18 @@ public class MeetingStatusTask {
             for (Long meetingId : ids) {
                 if (transitionQuietly(meetingId, event, label)) {
                     changed.add(meetingId);
+                } else {
+                    skipped++;
                 }
             }
             if (ids.size() < BATCH_SIZE) {
                 break; // 最后一批不满，说明已经扫完
             }
+        }
+        // 少量跳过是正常的（CAS 竞争/状态被人工改走）；**成片跳过**才是异常信号——
+        // 比如状态值不在迁移矩阵里、或数据被外部改成非法态。不报出来就永远查不到。
+        if (skipped > 0) {
+            log.warn("[定时任务] {} 本轮跳过 {} 场（CAS 未命中或状态不允许该事件，逐条原因见 DEBUG）", label, skipped);
         }
         return changed;
     }

@@ -210,8 +210,14 @@ public class MeetingReserveService {
      * 所以必须走同一把房间锁 + 会议室行锁（CLAUDE.md 红线 #9），否则"延长"与"别人订下一场"
      * 会各自读到旧快照、各自通过校验，落成两场重叠会议。
      *
-     * 上限算两遍（锁外一次快速失败、锁内一次作准）：锁外那次是为了让显然超限的请求早点结束，
-     * 锁内那次才是裁决——两次之间可能有人插进来一场，这正是 TOCTOU 的经典形态。
+     * 上限**与写入目标**都在锁内重算（锁外那份只用于"取锁键 + 快速失败"）：
+     * 锁外那次是为了让显然超限的请求早点结束，锁内那次才是裁决——两次之间可能有人插进来一场，
+     * 也可能**另一个延长请求已经把 end_time 推后了**，这正是 TOCTOU 的经典形态。
+     *
+     * ⚠️ 写入目标必须以锁内读到的 `locked.endTime` 为基准（而不是锁外的快照）：
+     * 否则两次并发延长（如双开页面各延 30/10 分钟）会串行执行、却各自以**旧基准**算新值，
+     * 后一个把 end_time 从 16:30 改回 16:10——不变量没破（不会重叠），但**时间倒退**、
+     * 审计日志写成"延长 10 分钟（16:30 → 16:10）"自相矛盾，用户也白点一次。
      */
     public void extend(Long meetingId, int minutes, Long operatorId) {
         Meeting meeting = meetingMapper.selectById(meetingId);
@@ -229,8 +235,9 @@ public class MeetingReserveService {
             throw new BusinessException(ErrorCode.EXTEND_LIMIT_EXCEEDED, Map.of("maxDelayMinutes", limitOutside));
         }
 
-        LocalDateTime newEnd = meeting.getEndTime().plusMinutes(minutes);
-        lockHelper.executeWithLock(meeting.getRoomId(), meeting.getStartTime(), newEnd, () ->
+        // 锁键要覆盖"延长后"的时间段，所以这里先按锁外快照算一个上界——它只用于取锁，不用于落库
+        LocalDateTime lockEndBound = meeting.getEndTime().plusMinutes(minutes);
+        lockHelper.executeWithLock(meeting.getRoomId(), meeting.getStartTime(), lockEndBound, () ->
                 transactionTemplate.execute(tx -> {
                     meetingRoomMapper.selectIdForUpdate(meeting.getRoomId());      // ① 会议室行（锁序第一步）
                     Meeting locked = meetingMapper.selectByIdForUpdate(meetingId); // ② 会议行
@@ -238,12 +245,21 @@ public class MeetingReserveService {
                         throw new BusinessException(ErrorCode.MEETING_NOT_FOUND);
                     }
                     requireOngoing(locked);
+                    requireNotEnded(locked);
 
                     // 锁内重算上限（作准）：锁外那次算完到这里之间，可能刚有人订了下一场
                     long limitInside = computeExtendLimit(locked).maxDelayMinutes();
                     if (minutes > limitInside) {
                         throw new BusinessException(ErrorCode.EXTEND_LIMIT_EXCEEDED,
                                 Map.of("maxDelayMinutes", limitInside));
+                    }
+
+                    // ★ 写入目标也在锁内算：基准是**锁内读到的** endTime，而不是锁外快照
+                    LocalDateTime newEnd = locked.getEndTime().plusMinutes(minutes);
+                    if (!newEnd.isAfter(locked.getEndTime())) {
+                        // 兜底：延长只能往后，任何"变短或不变"的情况都不该被静默接受
+                        throw new BusinessException(ErrorCode.EXTEND_LIMIT_EXCEEDED.getCode(),
+                                "延长后结束时间必须晚于当前结束时间");
                     }
 
                     // 冲突复检（排除自身）：上限已含缓冲，这里是第二道——防"上限是按旧数据算的"
@@ -262,8 +278,8 @@ public class MeetingReserveService {
                     stateMachine.logExtension(meetingId, operatorId, String.format(
                             "延长 %d 分钟（%s → %s）",
                             minutes,
-                            locked.getEndTime().format(DateTimeFormatter.ofPattern("HH:mm")),
-                            newEnd.format(DateTimeFormatter.ofPattern("HH:mm"))));
+                            locked.getEndTime().format(HHMM),
+                            newEnd.format(HHMM)));
                     return null;
                 }));
     }
@@ -301,6 +317,21 @@ public class MeetingReserveService {
         }
     }
 
+    /**
+     * 延长的额外前置：名义结束时间还没到。
+     *
+     * <p>为什么单加这一条：状态由**定时任务**推进，任务若停摆（服务重启期间、任务异常），
+     * 一场早就结束的会议会卡在 30 不动，此时它仍满足"进行中"，于是"延长"能把一场
+     * 下午三点的会议"复活"到第二天——状态与业务事实完全脱节。宁可 40002 让用户去改期，
+     * 也不接受这种复活。提前结束（finish）不需要这条：它正是用来提前收场的。
+     */
+    private void requireNotEnded(Meeting meeting) {
+        if (LocalDateTime.now().isAfter(meeting.getEndTime())) {
+            throw new BusinessException(ErrorCode.MEETING_STATUS_NOT_ALLOWED.getCode(),
+                    "会议已到结束时间，无法延长（可先提前结束，再重新预约）");
+        }
+    }
+
     /** R-15 上限计算：min(下一场开始 − 缓冲, 当日 24:00) − 当前 end，并解释"是谁卡住了你" */
     private ExtendLimitVO computeExtendLimit(Meeting meeting) {
         LocalDateTime end = meeting.getEndTime();
@@ -320,7 +351,8 @@ public class MeetingReserveService {
                                 nextStart.format(HHMM), buffer)
                         : String.format("下一场会议 %s 开始", nextStart.format(HHMM));
             } else {
-                reason = "下一场会议在次日，最多可延至 24:00";
+                // 不写"次日"：selectNextMeetingStart 不限日期，下一场也可能在后天
+                reason = "下一场会议不在当日，最多可延至 24:00";
             }
         }
         long maxDelay = Math.max(Duration.between(end, limit).toMinutes(), 0);

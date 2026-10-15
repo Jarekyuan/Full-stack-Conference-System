@@ -241,12 +241,16 @@
 
     <!-- 定时任务扫描（T3.5）：到点该开始 / 该结束的会议 id。
          时间用 DB 的 NOW()（docs/03 4.2 的既有写法），配合 idx_status_start / idx_status_end 走 range 扫描；
-         LIMIT 由调用方给（分批处理，单批不放大事务） -->
+         LIMIT 由调用方给（分批处理，单批不放大事务）。
+         ⚠️ "该开始"必须带 end_time > NOW()：否则一场"开始与结束时间都已过"的会议会被先推到
+         进行中(30)、再被结束任务推到 40，凭空多一条「会议开始」日志和一个瞬时 ONGOING 态；
+         docs/01 流程 4 的注脚写的正是"RESERVED 直接到 FINISHED" -->
     <select id="selectIdsToStart" resultType="long">
         SELECT id
         FROM meeting
         WHERE status = 20
           AND start_time &lt;= NOW()
+          AND end_time &gt; NOW()
         ORDER BY start_time
         LIMIT #{limit}
     </select>
@@ -268,6 +272,7 @@
         FROM meeting
         WHERE status = 20
           AND start_time &lt;= NOW() - INTERVAL 2 HOUR
+          AND end_time &gt; NOW()
         ORDER BY start_time
         LIMIT #{limit}
     </select>
@@ -289,6 +294,13 @@
           AND end_time &lt;= NOW()
         ORDER BY end_time
         LIMIT #{limit}
+    </select>
+
+    <select id="countStuckPending" resultType="long">
+        SELECT COUNT(*)
+        FROM meeting
+        WHERE status = 10
+          AND end_time &lt;= NOW()
     </select>
 
     <!-- 详情 VO（全字段 + 展示冗余；participants/logs 由 Service 另行装配） -->

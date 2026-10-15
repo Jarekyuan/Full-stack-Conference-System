@@ -4,6 +4,7 @@ import com.smt.meeting.entity.MeetingApproval;
 import com.smt.meeting.vo.ApprovalHistoryVO;
 import org.apache.ibatis.annotations.Param;
 
+
 import java.util.List;
 
 /**
@@ -13,9 +14,6 @@ public interface MeetingApprovalMapper {
 
     /** 追加一条审批记录（自增回填 id） */
     int insert(MeetingApproval approval);
-
-    /** 某会议的审批历史（按时间倒序；排障/审计用） */
-    List<MeetingApproval> selectByMeetingId(@Param("meetingId") Long meetingId);
 
     /** 当前审批人处理过的记录（分页，JOIN 会议与相关人直出展示字段） */
     List<ApprovalHistoryVO> selectHistoryPage(@Param("approverId") Long approverId,

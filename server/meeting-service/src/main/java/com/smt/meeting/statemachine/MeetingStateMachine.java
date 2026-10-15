@@ -1,5 +1,6 @@
 package com.smt.meeting.statemachine;
 
+import cn.hutool.core.util.StrUtil;
 import java.util.Map;
 
 import org.springframework.stereotype.Component;
@@ -111,6 +112,12 @@ public class MeetingStateMachine {
         insertLog(meetingId, fromStatus, toStatus, event, operatorId, remark);
     }
 
+    /** 日志 remark 列宽（db/01-schema.sql: meeting_status_log.remark VARCHAR(200)） */
+    private static final int REMARK_MAX_LENGTH = 200;
+    /** 截断后追加的省略号长度——hutool 的 maxLength 会**额外**拼上 "..."，
+     *  所以预算要把它算进去（第一版直接传 200，得到 203 字符，照样 1406 打回） */
+    private static final int ELLIPSIS_LENGTH = 3;
+
     private void insertLog(Long meetingId, Integer fromStatus, Integer toStatus,
             MeetingEventEnum event, Long operatorId, String remark) {
         MeetingStatusLog log = new MeetingStatusLog();
@@ -119,7 +126,13 @@ public class MeetingStateMachine {
         log.setToStatus(toStatus);
         log.setEvent(event.name());
         log.setOperatorId(operatorId);
-        log.setRemark(remark);
+        // 长度截断必须在这里（列宽的所有者这里最清楚）：
+        // 上游允许的长度可能与列宽不一致——审批意见 DTO 允许 500（meeting_approval.comment 也是 500），
+        // 但本表的 remark 只有 200；严格模式（STRICT_TRANS_TABLES）下超长会直接 1406 → 500，
+        // 整笔业务回滚（实测：写 250 字审批意见 → 审批直接失败）。
+        // 审计日志是**摘要**，全文留在业务表里（meeting_approval.comment），所以截断是安全的；
+        // 末尾的 "..." 顺带成为"这里被截断了"的可见标记。
+        log.setRemark(StrUtil.maxLength(remark, REMARK_MAX_LENGTH - ELLIPSIS_LENGTH));
         statusLogMapper.insert(log);
     }
 }

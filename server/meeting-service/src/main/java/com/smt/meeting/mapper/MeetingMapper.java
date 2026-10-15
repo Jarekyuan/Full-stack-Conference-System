@@ -123,6 +123,9 @@ public interface MeetingMapper {
      */
     List<Long> selectStuckPending(@Param("limit") int limit);
 
+    /** 待审批超时的**总数**（告警里的"发现 N 场"要说真话：id 清单有上限，数量不能跟着被截断） */
+    long countStuckPending();
+
     /**
      * 待审批列表（T3.1）：status=10 的会议 + 会议室名/组织人名/用途备注。
      * 与列表 VO 分开的原因：`MeetingVO` 按场景裁剪掉了 remark，而审批人正是靠它做判断（见 docs/04 3.2）。
