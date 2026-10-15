@@ -2,6 +2,7 @@ package com.smt.meeting.controller;
 
 import com.smt.common.context.UserContext;
 import com.smt.common.result.Result;
+import com.smt.meeting.aop.Idempotent;
 import com.smt.meeting.dto.MeetingCreateDTO;
 import com.smt.meeting.service.MeetingReserveService;
 import com.smt.meeting.vo.MeetingCreateVO;
@@ -25,9 +26,10 @@ public class MeetingController {
 
     /**
      * 创建预约（docs/04 4.4）
-     * 幂等头 X-Idempotency-Token 在 T2.5 由 AOP 接入；分布式锁在 T2.6 接入。
+     * 幂等：@Idempotent 读取 X-Idempotency-Token（T2.5）；分布式锁在 T2.6 接入。
      */
     @PostMapping
+    @Idempotent("meeting")
     public Result<MeetingCreateVO> create(@Valid @RequestBody MeetingCreateDTO dto) {
         Long organiserId = UserContext.getUserId();
         return Result.success(reserveService.create(dto, organiserId));
