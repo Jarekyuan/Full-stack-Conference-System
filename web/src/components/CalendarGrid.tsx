@@ -68,31 +68,42 @@ function clampMinutes(minutes: number): number {
   return Math.min(Math.max(minutes, DAY_START_MINUTES), DAY_END_MINUTES)
 }
 
-/** 会议块的 top/height 百分比（裁剪到时间轴窗口内） */
-function blockStyle(meeting: CalendarMeeting) {
+/** 会议块的几何：top/height 百分比（裁剪到时间轴窗口内）+ 时长分钟数（决定文字排几行） */
+function blockGeometry(meeting: CalendarMeeting) {
   const start = clampMinutes(toMinutes(meeting.startTime))
   const end = dayjs(meeting.endTime).isSame(dayjs(meeting.startTime), 'day')
     ? clampMinutes(toMinutes(meeting.endTime))
     : DAY_END_MINUTES
-  const top = ((start - DAY_START_MINUTES) / TOTAL_MINUTES) * 100
-  const height = (Math.max(end - start, 0) / TOTAL_MINUTES) * 100
-  return { top: `${top}%`, height: `${height}%` }
+  const minutes = Math.max(end - start, 0)
+  return {
+    style: {
+      top: `${((start - DAY_START_MINUTES) / TOTAL_MINUTES) * 100}%`,
+      height: `${(minutes / TOTAL_MINUTES) * 100}%`,
+    },
+    minutes,
+  }
 }
 
 function MeetingBlock({ meeting, onClick }: { meeting: CalendarMeeting; onClick: (m: CalendarMeeting) => void }) {
   const cls = STATUS_BLOCK_CLASS[meeting.status] ?? FALLBACK_BLOCK_CLASS
+  const { style, minutes } = blockGeometry(meeting)
+  const startText = dayjs(meeting.startTime).format('HH:mm')
   return (
     <div
       className={`absolute inset-x-0.5 overflow-hidden rounded border-l-2 px-1 text-[11px] leading-tight ${cls}`}
-      style={blockStyle(meeting)}
-      title={`${dayjs(meeting.startTime).format('HH:mm')}-${dayjs(meeting.endTime).format('HH:mm')} ${meeting.title}（${meeting.organiserName}）`}
+      style={style}
+      title={`${startText}-${dayjs(meeting.endTime).format('HH:mm')} ${meeting.title}（${meeting.organiserName}）`}
       onClick={(e) => {
         e.stopPropagation() // 关键：点会议块不能冒泡成"点空白格 → 发起预约"
         onClick(meeting)
       }}
     >
-      <div className="truncate font-medium">{meeting.title}</div>
-      <div className="truncate opacity-70">{dayjs(meeting.startTime).format('HH:mm')}</div>
+      {/* 主行恒为单行"时间 + 主题"：1 小时块仅约 20px 高，两行必被裁掉 */}
+      <div className="truncate font-medium">
+        {startText} {meeting.title}
+      </div>
+      {/* 时长够（≥90 分钟）才加副行，展示组织人 */}
+      {minutes >= 90 && <div className="truncate opacity-70">{meeting.organiserName}</div>}
     </div>
   )
 }
