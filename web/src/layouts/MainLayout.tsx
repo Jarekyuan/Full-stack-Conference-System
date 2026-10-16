@@ -6,7 +6,7 @@
  */
 import { useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { Avatar, Dropdown, Layout, Menu, theme, type MenuProps } from 'antd'
+import { Avatar, Badge, Dropdown, Layout, Menu, theme, type MenuProps } from 'antd'
 import {
   Bell,
   Building2,
@@ -20,6 +20,8 @@ import {
   Users,
 } from 'lucide-react'
 import { logout as logoutApi } from '@/api/auth'
+import { useNotificationSocket } from '@/hooks/useWebSocket'
+import { useNotificationStore } from '@/stores/notificationStore'
 import { useUserStore } from '@/stores/userStore'
 
 const { Sider, Header, Content } = Layout
@@ -35,7 +37,11 @@ export default function MainLayout() {
   const location = useLocation()
   const user = useUserStore((s) => s.user)
   const logoutStore = useUserStore((s) => s.logout)
+  const unreadCount = useNotificationStore((s) => s.unreadCount)
   const [loggingOut, setLoggingOut] = useState(false)
+
+  // 通知长连接挂在这里：登录后的**整个会话**都保持连接（切页不重连），角标才能随时更新
+  useNotificationSocket()
 
   const { token } = theme.useToken()
 
@@ -114,7 +120,15 @@ export default function MainLayout() {
           style={{ background: token.colorBgContainer, padding: '0 24px' }}
         >
           <div className="flex items-center gap-4">
-            <Bell size={18} className="cursor-pointer text-slate-500" />
+            {/* 铃铛角标（T4.F1）：未读数来自 notificationStore——首屏 REST 拉一次，
+                之后由 WS 的权威值实时覆盖（见 hooks/useWebSocket） */}
+            <Badge count={unreadCount} size="small" offset={[2, -2]}>
+              <Bell
+                size={18}
+                className="cursor-pointer text-slate-500"
+                onClick={() => navigate('/notifications')}
+              />
+            </Badge>
             <Dropdown menu={{ items: userMenu }} placement="bottomRight">
               <div className="flex cursor-pointer items-center gap-2">
                 <Avatar size="small" icon={<UserIcon size={14} />} />

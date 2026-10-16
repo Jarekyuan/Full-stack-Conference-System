@@ -7,6 +7,7 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom'
 import Placeholder from '@/components/Placeholder'
 import { RequireAuth, RequireRole } from '@/components/RouteGuards'
+import NotificationList from '@/pages/NotificationList'
 import MainLayout from '@/layouts/MainLayout'
 import ApprovalCenter from '@/pages/ApprovalCenter'
 import Calendar from '@/pages/Calendar'
@@ -28,7 +29,7 @@ export const router = createBrowserRouter([
           { path: 'calendar', element: <Calendar /> },
           { path: 'meetings', element: <MeetingList /> },
           { path: 'meetings/:id', element: <MeetingDetail /> },
-          { path: 'notifications', element: <Placeholder title="通知中心" /> },
+          { path: 'notifications', element: <NotificationList /> },
           {
             path: 'approvals',
             element: (

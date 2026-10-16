@@ -25,6 +25,14 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
       },
+      // WebSocket 也代理（T4.F1）：让前端在开发期就用**同源**的 ws://localhost:5173/ws/notifications，
+      // 与生产（Nginx 反代同一域名）形态一致——否则前端要写死 :8080，
+      // 而且 Chrome 的本地网络访问保护对"跨源→localhost"另有拦截（T4.6 踩过）。
+      '/ws': {
+        target: 'ws://localhost:8080',
+        ws: true,
+        changeOrigin: true,
+      },
     },
   },
   build: {
