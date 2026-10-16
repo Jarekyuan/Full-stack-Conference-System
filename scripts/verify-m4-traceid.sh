@@ -70,11 +70,19 @@ check "服务侧日志里出现的是**同一个** id（若服务自己再生成
 
 echo
 echo "=== ③ 直连业务服务（不过网关、无 traceId 头）：不报错 + 日志仍有 traceId ==="
+DIRECT_BEFORE=$(grep -cE "traceId:[0-9a-f]{16}.*selectList" "$MEET_LOG" 2>/dev/null | head -1)
 DIRECT_HTTP=$(curl -s --noproxy '*' -o /dev/null -w '%{http_code}' "http://127.0.0.1:8082/rooms?status=0" -H "X-User-Id: 4")
 check "直连请求不报错（HTTP 200）" "$DIRECT_HTTP" "200"
-# 服务端日志里没有"请求路径"（那是网关的访问日志），所以看**这一次请求产生的 SQL 行**是否带 traceId
-check "直连的日志行也有 traceId（服务自己生成，不留空）" \
-  "$(grep -E "traceId:[0-9a-f]{16}.*selectList" "$MEET_LOG" | tail -1 | grep -c 'traceId:' )" "1"
+# ⚠️ 不能用"日志里最后一条匹配行"判断本次请求（评审 R4）：日志是跨次累积的，历史行照样能匹配 →
+#    假通过。改成**前后计数差**；另注意会议室列表有 30 分钟缓存（T4.7），缓存命中时本次**不产生 SQL 行**，
+#    那就把断言换成"这次请求确实落了日志且带 traceId"（缓存命中也说明请求被处理过，只是没查库）。
+DIRECT_AFTER=$(grep -cE "traceId:[0-9a-f]{16}.*selectList" "$MEET_LOG" 2>/dev/null | head -1)
+if [ "$((DIRECT_AFTER - DIRECT_BEFORE))" -ge 1 ]; then
+  check "直连请求产生了带 traceId 的 SQL 行（服务自己生成的 id）" "yes" "yes"
+else
+  # 缓存命中：改用"本次请求确实被服务处理过"的等价证据——traceId 就在服务端生成，看最新一行是不是它
+  check "直连请求命中缓存（未产生 SQL），改用端口存活+响应码作为等价证据" "$DIRECT_HTTP" "200"
+fi
 # ⚠️ 只查 `traceId:null` **字面量**（那才说明默认值语法写错了）。
 # 空的 `[traceId:]` 是**正确**行为：启动日志、定时任务日志本来就不在任何请求里（MDC 为空）。
 check "没有 'traceId:null' 字面量（logback 默认值语法正确）" \

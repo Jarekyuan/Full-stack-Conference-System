@@ -19,6 +19,17 @@
 # 退出码：0 = 全部断言通过。
 # ============================================================================
 set -u
+
+# ---------------------------------------------------------------------------
+# 限流开关（T4.8 起"创建预约"带用户级限流：默认 10 次/分钟）
+# 本脚本为验证**别的**功能会连发多次预约，不开这一刀就会撞 10005——
+# 报出来却是"创建失败 code=10005"，看着像功能坏了（整轮串跑时踩到过）。
+# 限流本身由 `verify-m4-ratelimit.sh` 专门验证；这里只借用同一个开关（含读回确认与退出恢复）。
+# 注：会与本脚本自己的 EXIT trap 链式共存（lib 里做了链式安装，不覆盖调用方的清理）。
+# ---------------------------------------------------------------------------
+source "$(dirname "$0")/lib/ratelimit.sh"
+ratelimit_disable_for_script
+
 BASE="${BASE_URL:-http://localhost:8080}"
 MYSQL='docker exec smt-mysql mysql --default-character-set=utf8mb4 -uroot -proot123 -N -e'
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -123,6 +134,9 @@ curl -s --noproxy '*' -o /dev/null -X POST "$BASE/api/approvals/$AP_MID/pass" -H
 sleep 1
 check "APPROVAL_PASS 有审计行且 target = 会议 id" "$(audit_lines APPROVAL_PASS "$AP_MID")" "1"
 
+# ⚠️ 与 MEETING_CREATE 同理：**要先记基线再比对**（审计文件是跨次累积的，
+# 直接用 `grep -c` 会把历史运行的行也数进来——它就红过一次）
+ROOM_UPD_BEFORE=$(grep -c "AUDIT .*action=ROOM_UPDATE target=$ROOM " "$AUDIT" | head -1)
 ROOM_OLD_NAME=$(sql "SELECT name FROM smt_meeting.meeting_room WHERE id=$ROOM;")
 ROOM_JSON=$(curl -s --noproxy '*' "$BASE/api/rooms/$ROOM" -H "Authorization: Bearer $ADMIN")
 UPD=$(python3 -c "
@@ -134,7 +148,8 @@ print(json.dumps({'name':'审计验证厅','groupId':d['groupId'],'capacity':d['
 curl -s --noproxy '*' -o /dev/null -X PUT "$BASE/api/rooms/$ROOM" -H "Authorization: Bearer $ADMIN" \
   -H 'Content-Type: application/json' -d "$UPD"
 sleep 1
-check "ROOM_UPDATE 有审计行" "$(grep -c "AUDIT .*action=ROOM_UPDATE target=$ROOM " "$AUDIT" | head -1)" "1"
+check "ROOM_UPDATE 新增了 1 条审计行（与基线比）" \
+  "$(( $(grep -c "AUDIT .*action=ROOM_UPDATE target=$ROOM " "$AUDIT" | head -1) - ROOM_UPD_BEFORE ))" "1"
 
 echo
 echo "=== ④ 不记全文：正文（标题/备注内容）不出现在审计文件里 ==="
@@ -148,8 +163,9 @@ trap - EXIT
 ID_LIST=$(echo $IDS | tr ' ' ',')
 check "库里已无本次数据" "$(sql "SELECT COUNT(*) FROM smt_meeting.meeting WHERE id IN ($ID_LIST);")" "0"
 check "会议室名字已复原" "$(sql "SELECT name FROM smt_meeting.meeting_room WHERE id=$ROOM;")" "$ROOM_OLD_NAME"
+# 用本次的 target（会议 id 唯一）精确定位，别用"历史上任何一次"凑数（评审 O9）
 check "审计文件仍保留着本次记录（审计不随测试清理）" \
-  "$([ "$(grep -c 'action=MEETING_CREATE' "$AUDIT")" -gt 0 ] && echo kept || echo lost)" "kept"
+  "$([ "$(grep -c "action=MEETING_CREATE target=$MID " "$AUDIT")" -ge 1 ] && echo kept || echo lost)" "kept"
 
 echo
 echo "==================== 通过 $PASS / 失败 $FAIL ===================="

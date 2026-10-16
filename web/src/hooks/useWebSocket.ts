@@ -12,8 +12,12 @@
  *    重连成功后**再拉一次 REST** 兜底——断线期间漏掉的推送只有这样才补得回来。
  * ② **重连用指数退避 + 抖动**：断线往往是服务端整体不可用（重启/发版），固定 1 秒重试
  *    会让所有在线客户端在同一秒一起回来（惊群）。抖动把它们的重试时刻打散。
- * ③ **token 每次重连都现取**：accessToken 只有 30 分钟，长连接迟早会遇到它过期——
- *    现取（而不是闭包里抓住连接时的那个）才能用刷新后的新 token 重连。
+ * ③ **重连前先"踢一脚"刷新**（2026-10-16 评审 R1 修正）：只做到"现取"是不够的——
+ *    token 过了 30 分钟，`getAccessToken()` 拿到的**还是那个过期的**，重连会被网关 401 拒掉，
+ *    然后无限退避重试、角标静默停更（表现为"最近没人找我"，而不是报错）。
+ *    而浏览器的 WebSocket API **读不到握手失败的 HTTP 状态码**，没法"失败后再去刷新"。
+ *    所以必须在重连前主动发一次 REST（refreshUnread）——它会走 axios 的 401 拦截器触发
+ *    无感刷新（刷新失败会自动跳登录），刷新完再连。
  */
 import { useEffect } from 'react'
 import { getAccessToken } from '@/api/token'
@@ -56,9 +60,11 @@ export function useNotificationSocket(): void {
     let closedByUs = false
 
     const refreshUnread = async () => {
+      // 记下发请求前的 version：响应回来的路上若 WS 推来了新值，这次结果就该丢（见 store 注释）
+      const versionBefore = useNotificationStore.getState().version
       try {
         const { unreadCount } = await fetchUnreadCount()
-        setUnreadCount(unreadCount)
+        setUnreadCount(unreadCount, versionBefore)
       } catch {
         // 拉不到就保持原值：角标不是关键路径，别为它弹错误提示
       }
@@ -77,7 +83,8 @@ export function useNotificationSocket(): void {
       attempt += 1
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null
-        connect()
+        // 先刷新 token 再连（见类注释 ③）：这次 REST 顺带把"断线期间漏掉的未读变化"也补齐了
+        void refreshUnread().finally(connect)
       }, delay)
     }
 
@@ -128,7 +135,9 @@ export function useNotificationSocket(): void {
       }
     }
 
-    void refreshUnread() // 首屏先拿一次真实未读数
+    // 挂载时先拿一次（**即使 WS 连不上，角标也是对的**——推送只是加速）；
+    // onopen 时再拿一次（覆盖"断线期间的未读变化"）。两次重复请求是有意的，代价可忽略。
+    void refreshUnread()
     connect()
 
     return () => {

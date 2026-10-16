@@ -10,6 +10,7 @@ import { persist } from 'zustand/middleware'
 import { immer } from 'zustand/middleware/immer'
 import type { LoginUser, TokenResult } from '@/api/types'
 import { clearSession, setTokens, USER_STORAGE_KEY } from '@/api/token'
+import { useNotificationStore } from '@/stores/notificationStore'
 
 interface UserState {
   user: LoginUser | null
@@ -31,6 +32,9 @@ export const useUserStore = create<UserState>()(
       },
       logout: () => {
         clearSession()
+        // 顺带清掉通知角标：不清的话，下一个用户登录时会先看到上一个人的未读数
+        // （要等首次 REST 返回才被覆盖；那次请求失败就一直显示错误数字）
+        useNotificationStore.getState().reset()
         set((state) => {
           state.user = null
         })

@@ -11,6 +11,17 @@
 # 退出码：0 = 全部断言通过。
 # ============================================================================
 set -u
+
+# ---------------------------------------------------------------------------
+# 限流开关（T4.8 起"创建预约"带用户级限流：默认 10 次/分钟）
+# 本脚本为验证**别的**功能会连发多次预约，不开这一刀就会撞 10005——
+# 报出来却是"创建失败 code=10005"，看着像功能坏了（整轮串跑时踩到过）。
+# 限流本身由 `verify-m4-ratelimit.sh` 专门验证；这里只借用同一个开关（含读回确认与退出恢复）。
+# 注：会与本脚本自己的 EXIT trap 链式共存（lib 里做了链式安装，不覆盖调用方的清理）。
+# ---------------------------------------------------------------------------
+source "$(dirname "$0")/lib/ratelimit.sh"
+ratelimit_disable_for_script
+
 BASE="${BASE_URL:-http://localhost:8080}"
 AMQP_API="http://127.0.0.1:15672/api"
 AUTH="guest:guest"
@@ -141,8 +152,14 @@ check "审批通过接口返回 20" "$(curl -s --noproxy '*' -X POST "$BASE/api/
   -H "Authorization: Bearer $AP1" -H 'Content-Type: application/json' -d '{"comment":"同意"}' | j "d['data']['status']")" "20"
 sleep 1
 check "meeting.approved 收到 1 条" "$(drain meeting.approved)" "1"
-check "approved 消息的 operatorId 是审批人" \
-  "$(drained "json.loads(msgs[0]['payload'])['data']['operatorId'] is not None and 'yes'")" "yes"
+# ⚠️ 原来是"非空即通过"——organiserId 也在 payload 里，两者写反了照样绿（评审 R6）。
+# 取 approver1 的真实 id 来比，顺带把 organiserId 也钉住。
+AP1_ID=$(sql "SELECT id FROM smt_meeting.sys_user WHERE username='approver1';")
+U1_ID=$(sql "SELECT id FROM smt_meeting.sys_user WHERE username='user1';")
+check "approved 消息的 operatorId == approver1 的 id" \
+  "$(drained "json.loads(msgs[0]['payload'])['data']['operatorId']")" "$AP1_ID"
+check "approved 消息的 organiserId == user1 的 id（两者没写反）" \
+  "$(drained "json.loads(msgs[0]['payload'])['data']['organiserId']")" "$U1_ID"
 
 SLOT3=$(free_slot $ROOM_APPROVAL 3) || exit 1
 M3=$(book "$U1" "T41-待审B" "$ROOM_APPROVAL" "${SLOT3%%|*}" "${SLOT3##*|}") || exit 1; IDS="$IDS $M3"

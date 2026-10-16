@@ -12,6 +12,17 @@
 # 退出码：0 = 全部断言通过。
 # ============================================================================
 set -u
+
+# ---------------------------------------------------------------------------
+# 限流开关（T4.8 起"创建预约"带用户级限流：默认 10 次/分钟）
+# 本脚本为验证**别的**功能会连发多次预约，不开这一刀就会撞 10005——
+# 报出来却是"创建失败 code=10005"，看着像功能坏了（整轮串跑时踩到过）。
+# 限流本身由 `verify-m4-ratelimit.sh` 专门验证；这里只借用同一个开关（含读回确认与退出恢复）。
+# 注：会与本脚本自己的 EXIT trap 链式共存（lib 里做了链式安装，不覆盖调用方的清理）。
+# ---------------------------------------------------------------------------
+source "$(dirname "$0")/lib/ratelimit.sh"
+ratelimit_disable_for_script
+
 BASE="${BASE_URL:-http://localhost:8080}"
 AMQP_API="http://127.0.0.1:15672/api"
 AUTH="guest:guest"
@@ -148,10 +159,10 @@ for i in $(seq 1 20); do
 import sys,json
 qs=json.load(sys.stdin)
 print(sum(1 for q in qs if q['name'].startswith('meeting.') and q['name']!='meeting.dlq' and (q.get('consumers') or 0)>0))")
-  [ "$CONSUMERS" = "5" ] && break
+  [ "$CONSUMERS" = "6" ] && break
   sleep 1
 done
-check "5 个事件队列各有 1 个消费者（remind 归 T4.5 接线，此时无消费者是对的）" "$CONSUMERS" "5"
+check "6 个事件队列都有消费者（T4.5 起 remind 也接上了）" "$CONSUMERS" "6"
 
 echo
 echo "=== 1. 清空历史消息（只留本次产生的）==="
@@ -237,7 +248,15 @@ IDEM_MSG=$(printf '{"msgId":"t43-idem-0001","occurredAt":"2026-10-16T12:00:00","
 check "第一次投递被路由" "$(publish meeting.created "$IDEM_MSG")" "True"
 check "第一次投递产生 1 条通知" "$(wait_count 1 "SELECT COUNT(*) FROM smt_meeting.notification WHERE meeting_id=$SYNTH_MEETING;")" "1"
 check "第二次投递（同 msgId）被路由" "$(publish meeting.created "$IDEM_MSG")" "True"
-sleep 3
+# ⚠️ 不用"睡 3 秒再数行"（评审 O3）：那分不清"去重生效"与"第二条还没消费完"。
+# 等**消费端的证据日志**（"重复投递，丢弃"）出现，才算真的走了去重分支
+IDEM_EVIDENCE=0
+for i in $(seq 1 20); do
+  IDEM_EVIDENCE=$(grep -c "重复投递，丢弃.*t43-idem-0001" "$LOG" 2>/dev/null | head -1)
+  [ "$IDEM_EVIDENCE" -ge 1 ] && break
+  sleep 1
+done
+check "日志出现"重复投递，丢弃"（证明走的是去重分支，不是还没消费）" "$IDEM_EVIDENCE" "1"
 check "重复 msgId 后仍是 1 条（幂等生效）" "$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE meeting_id=$SYNTH_MEETING;")" "1"
 IDEM_MSG2=$(printf '%s' "$IDEM_MSG" | sed 's/t43-idem-0001/t43-idem-0002/')
 check "换一个 msgId 的同样内容被路由（证明去重按 msgId 而非内容）" "$(publish meeting.created "$IDEM_MSG2")" "True"
@@ -278,6 +297,9 @@ check "只有一条消息重试耗尽" "$(grep -c 'Retry failed last attempt' "$
 check "退避睡了两次（指数退避生效）" "$(grep -c 'Sleeping for' "$LOG")" "2"
 check "日志能看到'已重试 3 次'（模式不含全角括号，避免又写成对不上的字面量）" \
   "$(grep -c '已重试 3 次.*t43-poison-0002' "$LOG")" "1"
+# 失败的毒消息**不能留下幂等标记**（否则将来重放死信会被自己的标记挡住、白攒）
+check "业务失败的毒消息没有留下幂等标记（重放死信时能重新处理）" \
+  "$(docker exec -e REDISCLI_AUTH="${REDIS_PASSWORD:-redis123}" smt-redis redis-cli EXISTS mq:idem:t43-poison-0002 2>/dev/null | tr -d '\r')" "0"
 check "两条毒消息都没有产生通知" "$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE meeting_id IN (900001,900002) AND title LIKE '%毒%';")" "0"
 
 echo

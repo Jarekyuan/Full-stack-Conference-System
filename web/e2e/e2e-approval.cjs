@@ -8,6 +8,7 @@
  * 可重复运行：跑完把造出来的会议取消/结束掉。
  */
 const { chromium } = require('playwright');
+const { disableRateLimit } = require('./lib/ratelimit.cjs');
 
 const BASE = 'http://localhost:5173';
 const ROOM_ID = 5;          // 红枫厅：need_approval=1
@@ -63,7 +64,9 @@ const dayAfter = (n) => new Date(Date.now() + n * 86400000);
     }
   };
 
+  let restoreRateLimit = async () => {};
   try {
+    restoreRateLimit = await disableRateLimit();
     await login(page, 'user1', 'user123');
     await login(page2, 'approver1', 'user123');
 
@@ -177,6 +180,7 @@ const dayAfter = (n) => new Date(Date.now() + n * 86400000);
   } catch (e) {
     check(`脚本异常：${e.message}`, false);
   } finally {
+    await restoreRateLimit();
     await cleanup();
     await browser.close();
     const failed = results.filter((r) => !r.ok);

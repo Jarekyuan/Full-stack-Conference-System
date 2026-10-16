@@ -9,8 +9,7 @@ import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { App, Button, Empty, List, Space, Tag, Typography } from 'antd'
 import { CheckCheck } from 'lucide-react'
-import { fetchNotifications, markAllRead, markRead, type NotificationItem } from '@/api/notification'
-import { fetchUnreadCount } from '@/api/notification'
+import { fetchNotifications, fetchUnreadCount, markAllRead, markRead, type NotificationItem } from '@/api/notification'
 import { useAppRequest } from '@/hooks/useAppRequest'
 import { useNotificationStore } from '@/stores/notificationStore'
 
@@ -43,27 +42,47 @@ export default function NotificationList() {
   /** 操作完刷新列表 + 用 REST 的权威值刷新角标（不靠"本地 -1"推算，见 notificationStore 注释） */
   const reload = useCallback(async () => {
     setRefreshKey((k) => k + 1)
+    const versionBefore = useNotificationStore.getState().version
     try {
       const { unreadCount } = await fetchUnreadCount()
-      setUnreadCount(unreadCount)
+      setUnreadCount(unreadCount, versionBefore)
     } catch {
       /* 角标刷新失败不影响列表 */
     }
   }, [setUnreadCount])
 
-  const handleRead = async (item: NotificationItem) => {
-    if (item.readFlag === 1) {
-      if (item.meetingId) navigate(`/meetings/${item.meetingId}`)
-      return
+  /**
+   * 点击一条通知：**先标记已读（未读时），再看有没有关联会议可跳**。
+   * 此前是"未读只标已读、不跳转，要点第二下才跳"——点击通知的预期本来就是"去看它说的是什么"。
+   * 错误处理：docs/04 3.3 说 60001（别人的/不存在的通知）要**静默 + 刷新列表**；
+   * 此前没有 try/catch，网络抖动时是"点了没反应 + 控制台一条 unhandled rejection"（评审 O5）。
+   */
+  const handleClick = async (item: NotificationItem) => {
+    try {
+      if (item.readFlag === 0) {
+        await markRead(item.id)
+        await reload()
+      }
+    } catch (e) {
+      const code = (e as { code?: number }).code
+      if (code === 60001) {
+        await reload() // 静默：列表刷新后这条自然消失（可能已被别的端标过 / 已被清理）
+      } else {
+        message.error('操作失败，请稍后重试')
+        return
+      }
     }
-    await markRead(item.id)
-    await reload()
+    if (item.meetingId) navigate(`/meetings/${item.meetingId}`)
   }
 
   const handleReadAll = async () => {
-    const { updated } = await markAllRead()
-    message.success(updated > 0 ? `已把 ${updated} 条标为已读` : '没有未读通知')
-    await reload()
+    try {
+      const { updated } = await markAllRead()
+      message.success(updated > 0 ? `已把 ${updated} 条标为已读` : '没有未读通知')
+      await reload()
+    } catch {
+      message.error('操作失败，请稍后重试')
+    }
   }
 
   const list = data?.list ?? []
@@ -98,7 +117,7 @@ export default function NotificationList() {
           return (
             <List.Item
               className={`cursor-pointer rounded px-3 hover:bg-slate-50 ${unread ? 'bg-blue-50/40' : ''}`}
-              onClick={() => void handleRead(item)}
+              onClick={() => void handleClick(item)}
               actions={[
                 unread ? (
                   <Text type="secondary" className="text-xs">

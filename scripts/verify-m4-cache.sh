@@ -19,6 +19,17 @@
 # 退出码：0 = 全部断言通过。
 # ============================================================================
 set -u
+
+# ---------------------------------------------------------------------------
+# 限流开关（T4.8 起"创建预约"带用户级限流：默认 10 次/分钟）
+# 本脚本为验证**别的**功能会连发多次预约，不开这一刀就会撞 10005——
+# 报出来却是"创建失败 code=10005"，看着像功能坏了（整轮串跑时踩到过）。
+# 限流本身由 `verify-m4-ratelimit.sh` 专门验证；这里只借用同一个开关（含读回确认与退出恢复）。
+# 注：会与本脚本自己的 EXIT trap 链式共存（lib 里做了链式安装，不覆盖调用方的清理）。
+# ---------------------------------------------------------------------------
+source "$(dirname "$0")/lib/ratelimit.sh"
+ratelimit_disable_for_script
+
 BASE="${BASE_URL:-http://localhost:8080}"
 MYSQL='docker exec smt-mysql mysql --default-character-set=utf8mb4 -uroot -proot123 -N -e'
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -58,8 +69,10 @@ cleanup() {
   # 复原被改名的会议室
   [ -n "${ROOM_OLD_NAME:-}" ] && sql "UPDATE smt_meeting.meeting_room SET name='$ROOM_OLD_NAME' WHERE id=$ROOM;" > /dev/null
   # 本次造出来的缓存键（其余让它自然过期）
-  redis --scan --pattern "cache:calendar:${ROOM}:*" 2>/dev/null | tr -d '\r' | while read -r k; do
-    [ -n "$k" ] && redis DEL "$k" > /dev/null 2>&1
+  for r in "$ROOM" ${ROOM_OTHER:-}; do
+    redis --scan --pattern "cache:calendar:${r}:*" 2>/dev/null | tr -d '\r' | while read -r k; do
+      [ -n "$k" ] && redis DEL "$k" > /dev/null 2>&1
+    done
   done
   if [ "$TOOK_OVER" = "1" ]; then
     kill "$(lsof -nP -iTCP:$PORT -sTCP:LISTEN -t 2>/dev/null | head -1)" 2>/dev/null
@@ -215,6 +228,33 @@ ids=[m['meetingId'] for day in d['days'] for m in day['meetings']]
 print('$MID' in [str(i) for i in ids])")" "True"
 
 echo
+echo "=== 5.5 改期换房：**旧房间**的日历缓存也必须删（评审 R2 的修复点）==="
+# 评审前的实现只删"新房间 + 新周"（事件里只有新值）→ 旧房间的日历会一直挂着一场已经搬走的会。
+# 这里就验这条：在 4 号房造一场 → 烘热 4 号房的周缓存 → 把它改到 6 号房 → 4 号房的缓存必须消失。
+ROOM_OTHER=4
+MOVE_DAY=$(python3 -c "import datetime;print(datetime.date.today()+datetime.timedelta(days=16))")
+MOVE_START="${MOVE_DAY} 13:00:00"; MOVE_END="${MOVE_DAY} 14:00:00"
+MOVE_BODY=$(printf '{"title":"T47-换房验证","roomId":%s,"startTime":"%s","endTime":"%s"}' "$ROOM_OTHER" "$MOVE_START" "$MOVE_END")
+MOVE_MID=$(api "$U1" POST "/api/meetings" "$MOVE_BODY" | j "d['data']['meetingId']")
+[ -n "$MOVE_MID" ] && [ "$MOVE_MID" != "None" ] || { echo "❌ 4 号房造会失败（时段被占？）: $(api "$U1" POST "/api/meetings" "$MOVE_BODY")"; exit 1; }
+IDS="$IDS $MOVE_MID"
+MOVE_WEEK_CAL=$(api "$U1" GET "/api/rooms/$ROOM_OTHER/calendar?week=$MOVE_DAY")
+MOVE_WEEK=$(echo "$MOVE_WEEK_CAL" | j "d['data']['weekStart']")
+OLD_KEY="cache:calendar:${ROOM_OTHER}:${MOVE_WEEK}"
+api "$U1" GET "/api/rooms/$ROOM_OTHER/calendar?week=$MOVE_DAY" > /dev/null   # 烘热
+check "旧房间（$ROOM_OTHER）该周缓存已建立" "$(redis EXISTS "$OLD_KEY" | tr -d '\r')" "1"
+MOVE_UPD=$(printf '{"title":"T47-换房验证","roomId":%s,"startTime":"%s","endTime":"%s","version":0}' "$ROOM" "$MOVE_START" "$MOVE_END")
+check "改期到 $ROOM 号房成功" "$(api "$U1" PUT "/api/meetings/$MOVE_MID" "$MOVE_UPD" | j "d['code']")" "0"
+sleep 1
+check "**旧房间**的周缓存已被删除（不是只删新房间）" "$(redis EXISTS "$OLD_KEY" | tr -d '\r')" "0"
+check "新房间（$ROOM）的周缓存也已失效" "$(redis EXISTS "cache:calendar:${ROOM}:${MOVE_WEEK}" | tr -d '\r')" "0"
+check "再查旧房间日历，那场会已经不在了" \
+  "$(api "$U1" GET "/api/rooms/$ROOM_OTHER/calendar?week=$MOVE_DAY" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)['data']
+print('$MOVE_MID' in [str(m['meetingId']) for day in d['days'] for m in day['meetings']])")" "False"
+
+echo
 echo "=== 6. 并发 miss：只回源一次（single-flight 防击穿）==="
 redis DEL "$CKEY" > /dev/null
 CONC_BEFORE=$(sql_count "selectByRoomAndRange")
@@ -237,7 +277,8 @@ LEFT=0
 for m in $IDS; do LEFT=$(( LEFT + $(sql "SELECT COUNT(*) FROM smt_meeting.meeting WHERE id=$m;") )); done
 check "库里已无本次数据" "$LEFT" "0"
 check "会议室名字已复原" "$(sql "SELECT name FROM smt_meeting.meeting_room WHERE id=$ROOM;")" "$ROOM_OLD_NAME"
-check "本次造的日历缓存已清" "$(redis --scan --pattern "cache:calendar:${ROOM}:*" 2>/dev/null | grep -c .)" "0"
+check "本次造的日历缓存已清（两个房间）" \
+  "$(( $(redis --scan --pattern "cache:calendar:${ROOM}:*" 2>/dev/null | grep -c .) + $(redis --scan --pattern "cache:calendar:${ROOM_OTHER}:*" 2>/dev/null | grep -c .) ))" "0"
 
 echo
 echo "==================== 通过 $PASS / 失败 $FAIL ===================="

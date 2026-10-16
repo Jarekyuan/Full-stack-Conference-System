@@ -7,6 +7,7 @@
  * 验收完就地取消掉，不堆积数据。
  */
 const { chromium } = require('playwright');
+const { disableRateLimit } = require('./lib/ratelimit.cjs');
 
 const BASE = 'http://localhost:5173';
 const TS = Date.now();
@@ -24,6 +25,8 @@ const SUN = dayOf(6); // 周日（未来），避免"今天已过去的钟点"�
 
 (async () => {
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  /** 本轮造的会议（finally 里兜底取消）：中途失败时它可能还停在 20，会占着时段把下一轮堵死 */
+  let createdId = null;
   const page = await browser.newPage({ viewport: { width: 1512, height: 1100 } });
   const results = [];
   const check = (name, ok, detail = '') => {
@@ -54,7 +57,9 @@ const SUN = dayOf(6); // 周日（未来），避免"今天已过去的钟点"�
 
   const firstRowTitle = () => page.locator('.ant-table-tbody tr').first().locator('td').first().textContent();
 
+  let restoreRateLimit = async () => {};
   try {
+    restoreRateLimit = await disableRateLimit();
     await login(page, 'user1', 'user123');
 
     // 准备一场本次专用的会议（②③ 的目标；挑周日空闲整点）
@@ -89,6 +94,7 @@ const SUN = dayOf(6); // 周日（未来），避免"今天已过去的钟点"�
     });
     check('前置：创建待验收会议', created.code === 0, `id=${created.data?.meetingId}`);
     const meetingId = created.data?.meetingId;
+    createdId = meetingId ?? null; // finally 里兜底用
 
     // ---------- ① 列表筛选 + 分页 ----------
     await page.goto(`${BASE}/meetings`, { waitUntil: 'networkidle' });
@@ -157,11 +163,21 @@ const SUN = dayOf(6); // 周日（未来），避免"今天已过去的钟点"�
     await page2.close();
   } catch (e) {
     console.error('验证中断:', e.message);
+    results.push({ name: '执行异常', ok: false });
+  } finally {
+    await restoreRateLimit();
+    // ⚠️ 兜底清理放 finally（2026-10-16 评审 O8）：正常路径里"取消"本身就是用例的一步，
+    // 但**中途失败**时会停在 20 占着时段——playwright 最常见的失败就是某步超时，
+    // 多失败两次就把下一轮自己的"预检挑空闲"堵死。已取消（50）的会再取消会被状态机拒，忽略即可。
+    if (createdId) {
+      try {
+        await api(`/meetings/${createdId}/cancel`, { method: 'POST', body: JSON.stringify({ reason: 'E2E 兜底清理' }) });
+      } catch {
+        /* 已经是终态/已取消，忽略 */
+      }
+    }
     await browser.close();
-    process.exit(1);
   }
-
-  await browser.close();
   const failed = results.filter((r) => !r.ok);
   console.log(`\n结果：${results.length - failed.length}/${results.length} 通过`);
   process.exit(failed.length ? 1 : 0);

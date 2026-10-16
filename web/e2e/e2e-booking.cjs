@@ -7,6 +7,7 @@
  * 否则第二次跑会撞上一轮自己创建的会议。
  */
 const { chromium } = require('playwright');
+const { disableRateLimit } = require('./lib/ratelimit.cjs');
 
 const BASE = 'http://localhost:5173';
 const TS = Date.now();
@@ -35,6 +36,8 @@ const hourRatio = (hour) => (hour * 60 - DAY_START_MIN) / DAY_TOTAL_MIN;
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
   const page = await browser.newPage({ viewport: { width: 1512, height: 1100 } });
   const results = [];
+  /** 本轮造出来的会议标题：finally 里按它逐一取消（try 里的 const 在 finally 中不可见） */
+  const cleanupTitles = [];
   const check = (name, ok, detail = '') => {
     results.push({ name, ok });
     console.log(`${ok ? '✓' : '✗'} ${name}${detail ? '  → ' + detail : ''}`);
@@ -73,7 +76,9 @@ const hourRatio = (hour) => (hour * 60 - DAY_START_MIN) / DAY_TOTAL_MIN;
     return r.data?.items?.[0]?.available === true;
   };
 
+  let restoreRateLimit = async () => {};
   try {
+    restoreRateLimit = await disableRateLimit();
     await page.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
     await page.getByPlaceholder('请输入用户名').fill('user1');
     await page.getByPlaceholder('请输入密码').fill('user123');
@@ -101,6 +106,7 @@ const hourRatio = (hour) => (hour * 60 - DAY_START_MIN) / DAY_TOTAL_MIN;
 
     // ---------- ① 正常创建成功并刷新日历 ----------
     const title1 = `E2E预约A-${TS}`;
+    cleanupTitles.push(title1);
     await page.mouse.click(clickX, yAtRatio(hourRatio(hour) + 0.02)); // 该整点格内、略微内缩避开相邻块边界
     await page.waitForTimeout(600);
     check('点空格打开预约 Drawer', await page.getByText('预约会议').first().isVisible());
@@ -153,6 +159,7 @@ const hourRatio = (hour) => (hour * 60 - DAY_START_MIN) / DAY_TOTAL_MIN;
 
     // 机制级：用同一个 X-Idempotency-Token 直打两次创建接口
     const title3 = `E2E幂等-${TS}`;
+    cleanupTitles.push(title3);
     const sameToken = `e2e-${TS}-fixed`;
     const body = JSON.stringify({
       title: title3,
@@ -169,6 +176,7 @@ const hourRatio = (hour) => (hour * 60 - DAY_START_MIN) / DAY_TOTAL_MIN;
     // UI 级：打开表单后双击提交按钮
     const sunHeader = await page.getByText(new RegExp(`^${md(SUN)}$`)).first().boundingBox();
     const title4 = `E2E双击-${TS}`;
+    cleanupTitles.push(title4);
     await page.mouse.click(centerX(sunHeader), yAtRatio(hourRatio(dblHour) + 0.02)); // 周日动态空闲整点
     await page.waitForTimeout(600);
     await page.getByPlaceholder('如：产品评审会').fill(title4);
@@ -176,24 +184,31 @@ const hourRatio = (hour) => (hour * 60 - DAY_START_MIN) / DAY_TOTAL_MIN;
     await page.waitForTimeout(2200);
     check('双击提交只创建一场', (await countByTitle(title4)) === 1, `落库 ${await countByTitle(title4)} 场`);
 
+  } catch (e) {
+    console.error('验证中断:', e.message);
+    results.push({ name: '执行异常', ok: false });
+  } finally {
+    await restoreRateLimit();
     // ---------- 收尾自清理：取消本轮造出来的会议，释放时段 ----------
-    // 否则每跑一轮就往库里堆 3-4 场，几轮之后预检就找不到空闲时段了（已踩过）
-    for (const t of [title1, title3, title4]) {
-      const found = await api(`/meetings?scope=mine&keyword=${encodeURIComponent(t)}&page=1&size=20`);
-      for (const m of found.data?.list ?? []) {
-        if (m.status === 10 || m.status === 20) {
-          await api(`/meetings/${m.id}/cancel`, { method: 'POST', body: JSON.stringify({ reason: 'E2E 自清理' }) });
+    // 否则每跑一轮就往库里堆 3-4 场，几轮之后预检就找不到空闲时段了（已踩过）。
+    // ⚠️ 必须放 finally（2026-10-16 评审 O8）：原来只在成功路径清——
+    // playwright 最常见的失败就是某步超时抛异常，那样本轮造的会全留在库里，
+    // 多失败两次就把下一轮自己的"预检找空闲时段"堵死（e2e-notify-center 已经这么改过）。
+    for (const t of cleanupTitles) {
+      try {
+        const found = await api(`/meetings?scope=mine&keyword=${encodeURIComponent(t)}&page=1&size=20`);
+        for (const m of found.data?.list ?? []) {
+          if (m.status === 10 || m.status === 20) {
+            await api(`/meetings/${m.id}/cancel`, { method: 'POST', body: JSON.stringify({ reason: 'E2E 自清理' }) });
+          }
         }
+      } catch (cleanupErr) {
+        console.error('自清理失败:', cleanupErr.message);
       }
     }
     console.log('（本轮产生的会议已取消，时段已释放）');
-  } catch (e) {
-    console.error('验证中断:', e.message);
     await browser.close();
-    process.exit(1);
   }
-
-  await browser.close();
   const failed = results.filter((r) => !r.ok);
   console.log(`\n结果：${results.length - failed.length}/${results.length} 通过`);
   process.exit(failed.length ? 1 : 0);

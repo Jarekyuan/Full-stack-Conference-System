@@ -13,6 +13,17 @@
 # 退出码：0 = 全部断言通过。
 # ============================================================================
 set -u
+
+# ---------------------------------------------------------------------------
+# 限流开关（T4.8 起"创建预约"带用户级限流：默认 10 次/分钟）
+# 本脚本为验证**别的**功能会连发多次预约，不开这一刀就会撞 10005——
+# 报出来却是"创建失败 code=10005"，看着像功能坏了（整轮串跑时踩到过）。
+# 限流本身由 `verify-m4-ratelimit.sh` 专门验证；这里只借用同一个开关（含读回确认与退出恢复）。
+# 注：会与本脚本自己的 EXIT trap 链式共存（lib 里做了链式安装，不覆盖调用方的清理）。
+# ---------------------------------------------------------------------------
+source "$(dirname "$0")/lib/ratelimit.sh"
+ratelimit_disable_for_script
+
 BASE="${BASE_URL:-http://localhost:8080}"
 MYSQL='docker exec smt-mysql mysql --default-character-set=utf8mb4 -uroot -proot123 -N -e'
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -45,6 +56,16 @@ login() {
   local body; body=$(printf '{"username":"%s","password":"%s"}' "$1" "$2")
   curl -s --noproxy '*' -X POST "$BASE/api/auth/login" -H 'Content-Type: application/json' -d "$body" | j "d['data']['accessToken']"
 }
+# 轮询等某个计数达到期望值（通知是异步消费的，不能睡固定时间就断言）
+wait_count() { # wait_count <expected> <sql> [timeout_seconds]
+  local want=$1 query=$2 timeout=${3:-20} i got
+  for i in $(seq 1 "$timeout"); do
+    got=$(sql "$query")
+    [ "$got" = "$want" ] && { echo "$got"; return 0; }
+    sleep 1
+  done
+  echo "$got"
+}
 api() { # api <token> <method> <path> [body]
   local token=$1 method=$2 path=$3 body=${4:-}
   if [ -n "$body" ]; then
@@ -54,9 +75,17 @@ api() { # api <token> <method> <path> [body]
     curl -s --noproxy '*' -X "$method" "$BASE$path" -H "Authorization: Bearer $token"
   fi
 }
-book() { # book <token> <title> <roomId> <start> <end>
+book() { # book <token> <title> <roomId> <start> <end> [userIds-csv]
   local body resp code mid
-  body=$(printf '{"title":"%s","roomId":%s,"startTime":"%s","endTime":"%s"}' "$2" "$3" "$4" "$5")
+  if [ -z "${6:-}" ]; then
+    body=$(printf '{"title":"%s","roomId":%s,"startTime":"%s","endTime":"%s"}' "$2" "$3" "$4" "$5")
+  else
+    # ⚠️ 可选参会人：此前这个函数**没有**这个分支，传进来的第 6 个参数被静默忽略——
+    # 于是"给 user2 造一条未读"那段其实造了一场没有参会人的会，取消通知自然发不出去
+    # （排查时最费时间的一类：参数传了、不报错、也没生效）
+    body=$(printf '{"title":"%s","roomId":%s,"startTime":"%s","endTime":"%s","participants":{"userIds":[%s]}}' \
+      "$2" "$3" "$4" "$5" "$6")
+  fi
   resp=$(curl -s --noproxy '*' -X POST "$BASE/api/meetings" -H "Authorization: Bearer $1" \
     -H 'Content-Type: application/json' -H "X-Idempotency-Token: $(uuidgen)" -d "$body")
   code=$(echo "$resp" | j "d['code']"); mid=$(echo "$resp" | j "d['data']['meetingId']")
@@ -177,8 +206,26 @@ check "未读数归零" "$(api "$U1" GET "/api/notifications/unread-count" | j "
 check "重复 read-all 返回 0（幂等）" "$(api "$U1" POST "/api/notifications/read-all" | j "d['data']['updated']")" "0"
 check "本次 3 条都已读" \
   "$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE meeting_id IN ($ID_LIST) AND read_flag=1;")" "3"
-check "user2 的未读数不受影响（未读是 per-user 的）" \
-  "$(api "$U2" GET "/api/notifications/unread-count" | j "d['data']['unreadCount'] >= 0")" "True"
+# ⚠️ 原来是 `>= 0`——**恒真**（任何非负整数都过），根本验不了"read-all 没波及别人"（评审 R5）。
+# 改成前后取值比对；并且先给 user2 造一条未读，否则 0 == 0 同样说明不了问题。
+U2_BEFORE=$(api "$U2" GET "/api/notifications/unread-count" | j "d['data']['unreadCount']")
+check "user2 自己有一条未读（作为对照基线）" "$([ "$U2_BEFORE" -ge 1 ] && echo yes || echo no)" "yes"
+check "user1 的 read-all 没有波及 user2（未读数前后一致）" \
+  "$(api "$U2" GET "/api/notifications/unread-count" | j "d['data']['unreadCount']")" "$U2_BEFORE"
+
+echo
+echo "=== 4.5 给 user2 造一条未读（下面要验"别人的 read-all 不影响我"）==="
+SLOT4=$(free_slot $ROOM_OPEN 6) || exit 1
+M4=$(book "$U1" "T44-对照" "$ROOM_OPEN" "${SLOT4%%|*}" "${SLOT4##*|}" "$U2_ID") || exit 1; IDS="$IDS $M4"
+# ⚠️ 别等 user2 的"创建通知"——MEETING_CREATED 只发给**组织人**（docs/04 5.3），
+# 之前在这里白等了 20 秒（那 20 秒还会把后面断言的时间预算吃掉）。
+# 要让 user2 有未读，走**取消**这条路：MEETING_CANCELLED 发给参会人 ✓
+CANCEL_CODE=$(curl -s --noproxy '*' -X POST "$BASE/api/meetings/$M4/cancel" -H "Authorization: Bearer $U1" \
+  -H 'Content-Type: application/json' -d '{"reason":"对照用"}' | j "d['code']")
+# 取消的返回值必须显式断言：丢了它的话，"没通知"到底是功能坏了还是这次取消失败了，无从判断
+check "取消接口返回 0（不然下面的断言无从谈起）" "$CANCEL_CODE" "0"
+check "user2 收到了取消通知（未读 +1）" \
+  "$(wait_count 1 "SELECT COUNT(*) FROM smt_meeting.notification WHERE meeting_id=$M4 AND user_id=$U2_ID AND read_flag=0;" 30)" "1"
 
 echo
 echo "=== 5. 身份只认网关注入（fail closed）==="

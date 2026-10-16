@@ -15,6 +15,7 @@
  * 退出码：0 = 全部断言通过。
  */
 const { chromium } = require('playwright');
+const { disableRateLimit } = require('./lib/ratelimit.cjs');
 const { execSync, spawn } = require('child_process');
 
 const ROOT = require('path').resolve(__dirname, '../..');
@@ -95,7 +96,9 @@ async function waitBadge(page, predicate, timeoutMs = 15000, label = '') {
   const created = [];
   let browser;
   let notifyProc = null;
+  let restoreRateLimit = async () => {};
   try {
+    restoreRateLimit = await disableRateLimit();
     // ---------- 前置：notification-service 必须在跑（没有它就没有消费、没有推送）----------
     // 脚本自己校验并补齐：上一轮如果把它停了、或启动失败，直接跑会得到一堆"推送没来"的假失败
     const healthOf = async () => {
@@ -213,6 +216,7 @@ async function waitBadge(page, predicate, timeoutMs = 15000, label = '') {
   } catch (e) {
     check(`执行异常: ${e.message}`, false);
   } finally {
+    await restoreRateLimit();
     // 清理放 finally：**异常路径同样要清**——第一次跑失败时数据留在了库里，
     // 下一次跑就被自己的残留堵住（"脚本要自清理"不只是跑成功时的事）
     for (const id of created) {

@@ -128,9 +128,25 @@ check "第 5 次 = 10005" "$(echo $CODES3 | tr ' ' '\n' | sed -n '5p')" "10005"
 
 echo
 echo "=== 4. 阈值 0 = 关闭限流（演示/压测开关）==="
+# ⚠️ 换一个**新的空闲时段**：前面几节把 $START 那一场订掉了，同一个 slot 在这里只会拿 40001，
+# "至少一发成功"就永远不会成立（第一版就是这么红的——断言没错，是我复用了脏时段）
+SLOT4=$(python3 -c "
+import datetime
+d = datetime.date.today() + datetime.timedelta(days=13)
+print(f'{d} 09:00:00|{d} 10:00:00')")
+START4="${SLOT4%%|*}"; END4="${SLOT4##*|}"
 publish_limit 0; sleep 5
-CODES0=$(burst "$U3" 6 "$START" "$END")
-check "连发 6 次全部放行（一次 10005 都没有）" "$(echo $CODES0 | tr ' ' '\n' | grep -c '^10005$')" "0"
+CODES0=$(burst "$U3" 6 "$START4" "$END4")
+echo "  codes:$CODES0"
+# ⚠️ 只断言"没有 10005"是不够的（评审 O2）：这 6 发若因为别的原因全失败（服务没起/10001/空响应），
+# `grep -c '^10005$'` 同样是 0 → 假通过。改成断言 **code 分布**：每发都是 0 或 40001（都算"进了业务"），
+# 且至少一发为 0（真的建成了会）。
+check "连发 6 次'没有一次被限流'" "$(echo $CODES0 | tr ' ' '\n' | grep -c '^10005$')" "0"
+check "且 6 发**都真的进了业务**（0 或 40001，没有空响应/参数错）" \
+  "$(echo $CODES0 | tr ' ' '\n' | grep -cE '^(0|40001)$')" "6"
+check "其中至少一发成功（0）" "$([ "$(echo $CODES0 | tr ' ' '\n' | grep -c '^0$')" -ge 1 ] && echo yes || echo no)" "yes"
+MID4=$(sql "SELECT id FROM smt_meeting.meeting WHERE room_id=$ROOM AND start_time='$START4';")
+[ -n "$MID4" ] && IDS="$IDS $MID4"   # 收尾要连第 4 节造的会一起清（否则残留在库里堵下一轮）
 
 echo
 echo "=== 5. 恢复默认阈值并读回确认 ==="

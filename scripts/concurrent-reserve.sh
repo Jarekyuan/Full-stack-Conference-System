@@ -21,35 +21,12 @@
 # ============================================================================
 set -u
 
-# ---------------------------------------------------------------------------
-# 限流开关（T4.8 起"创建预约"带用户级限流：默认 10 次/分钟）
-#
-# 本脚本单轮就要发几十次预约请求、且都是**同一个用户**，必然撞限流——那时脚本报的是
-# "大量 10005"，看着像并发锁失效，其实是被自己的防刷保护拦了（验错了对象）。
-# 所以：开跑前通过 **Nacos 配置中心**把阈值改成 0（0 = 关闭限流），退出时恢复原值。
-# 顺带也是配置中心的运维价值演示——压测/演示时临时关掉保护，不用改代码、不用重启。
-# ---------------------------------------------------------------------------
-NACOS_CFG_URL="${NACOS_CFG_URL:-http://127.0.0.1:8848/nacos/v1/cs/configs}"
-RATELIMIT_BAK="/tmp/ratelimit-backup.$$"; RATELIMIT_TMP="/tmp/ratelimit-new.$$"
+# 限流开关：本脚本单轮要发几十次预约请求、全是同一个用户，必然撞限流——
+# 那验的就不是锁了（失败信息还恰好指向锁）。通过 Nacos 临时关掉，退出时自动恢复。
+# 实现抽在 scripts/lib/ratelimit.sh（两个并发脚本共用一份；含"读回确认"与多信号恢复，见该文件注释）
+source "$(dirname "$0")/lib/ratelimit.sh"
+ratelimit_disable_for_script
 
-ratelimit_publish() {  # ratelimit_publish <per-minute>
-  printf 'meeting:\n  ratelimit:\n    reserve-per-minute: %s\n    window-seconds: 60\n' "$1" > "$RATELIMIT_TMP"
-  curl -s --noproxy '*' -X POST "$NACOS_CFG_URL" -d "dataId=meeting-service.yml" \
-    -d "group=DEFAULT_GROUP" -d "type=yaml" --data-urlencode "content@$RATELIMIT_TMP" > /dev/null 2>&1 || true
-}
-ratelimit_restore() {
-  if [ -s "$RATELIMIT_BAK" ] && ! grep -q "config data not exist" "$RATELIMIT_BAK"; then
-    curl -s --noproxy '*' -X POST "$NACOS_CFG_URL" -d "dataId=meeting-service.yml" \
-      -d "group=DEFAULT_GROUP" -d "type=yaml" --data-urlencode "content@$RATELIMIT_BAK" > /dev/null 2>&1 || true
-    echo "[限流] 已恢复原阈值"
-  fi
-  rm -f "$RATELIMIT_BAK" "$RATELIMIT_TMP"
-}
-curl -s --noproxy '*' "$NACOS_CFG_URL?dataId=meeting-service.yml&group=DEFAULT_GROUP" > "$RATELIMIT_BAK" 2>/dev/null || true
-trap ratelimit_restore EXIT
-ratelimit_publish 0
-sleep 2
-echo "[限流] 本脚本已临时关闭预约限流（Nacos: reserve-per-minute=0），结束自动恢复"
 
 
 CONCURRENCY="${1:-5}"

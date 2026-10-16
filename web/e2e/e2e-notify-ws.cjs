@@ -20,6 +20,9 @@
  * 退出码：0 = 全部断言通过。
  */
 const { chromium } = require('playwright');
+const { disableRateLimit } = require('./lib/ratelimit.cjs');
+const { spawn } = require('child_process');
+const { ensureNotificationService } = require('./lib/notify-service.cjs');
 const { execSync } = require('child_process');
 
 const API = 'http://localhost:8080/api';
@@ -87,7 +90,11 @@ const freeSlot = async (token, roomId) => {
 (async () => {
   const created = []; // 本次造的会议 id，收尾按 id 清干净（含通知）
   let browser;
+  let restoreRateLimit = async () => {};
   try {
+    restoreRateLimit = await disableRateLimit();
+    // notification-service 必须在跑（它由其它脚本按需起停，这里不假设环境）
+    await ensureNotificationService();
     const token1 = await login('user1', 'user123');
     const token2 = await login('user2', 'user123');
     const user1Id = Number(sql("SELECT id FROM smt_meeting.sys_user WHERE username='user1';"));
@@ -152,6 +159,7 @@ const freeSlot = async (token, roomId) => {
     const r2 = await page.evaluate((t) => window.__open(t, 'tab2'), token1);
     check('同一账号第二个标签页也能连上', r2 === 'open', r2);
 
+    const unreadBefore = (await api('/notifications/unread-count', token1, { method: 'GET' })).data.unreadCount;
     const slot1 = await freeSlot(token1, 6);
     const m1 = await api('/meetings', token1, {
       method: 'POST',
@@ -181,6 +189,19 @@ const freeSlot = async (token, roomId) => {
     const list = await api('/notifications?page=1&size=50', token1, { method: 'GET' });
     const inList = (list.data.list || []).some((n) => n.id === note1?.data?.id);
     check('推送的这条能在 REST 列表里查到（落库优先，不是幽灵通知）', inList);
+    // ⚠️ 位置很重要：这条断言必须在**收尾自清理之前**（第一次把它写到了清理之后——
+    //    执行到这里时本脚本自己已经把测试数据删了，于是查出来是空的、报“库里没有”，
+    //    白排查很久还开了 general log 追“谁在删”。凡“回查库”的断言，先确认自己在清理之前）
+    const ownerRaw = sql(`SELECT user_id FROM smt_meeting.notification WHERE id=${note1?.data?.id};`);
+    // 现场取证：断言失败时能一眼看出"是这条不存在，还是这个用户压根没有新通知"
+    const recentRows = sql(`SELECT id,user_id,type,meeting_id FROM smt_meeting.notification WHERE user_id=${user1Id} ORDER BY id DESC LIMIT 3;`);
+    // 这场会议在库里的行（用 meeting_id 查——它一定存在；对比它的 id 与推送体的 id，
+    // 就能区分"推送 id 错"还是"我查 id 的方式不对"）
+    const byMeeting = sql(`SELECT id,user_id,type FROM smt_meeting.notification WHERE meeting_id=${m1.data.meetingId};`);
+    check('推送的那条通知在库里确实属于 user1（回查库，不信接口自述）',
+      Number(ownerRaw) === user1Id,
+      // 诊断信息要带**原始值**：只写"属主"的话失败了也不知道是空、是 0 还是别的
+      `通知 ${note1?.data?.id} 的 user_id=[${ownerRaw}] / user1Id=${user1Id} / 该用户最近三行=[${recentRows.replace(/\n/g, ' | ')}] / 本场会议的行=[${byMeeting.replace(/\n/g, ' | ')}] / push.meetingId=${m1.data.meetingId}`);
 
     // ---------- ⑥ UNREAD_COUNT 是权威值 ----------
     const unreadPush = msgs1.filter((m) => m.type === 'UNREAD_COUNT').pop();
@@ -188,8 +209,11 @@ const freeSlot = async (token, roomId) => {
     const unreadRest = await api('/notifications/unread-count', token1, { method: 'GET' });
     check('推送的未读数与 REST 一致', unreadPush?.data?.unreadCount === unreadRest.data.unreadCount,
       `推送 ${unreadPush?.data?.unreadCount} / REST ${unreadRest.data.unreadCount}`);
-    check('未读数确实把新通知算进去了（user1 自己那条）',
-      unreadRest.data.unreadCount >= 1, String(unreadRest.data.unreadCount));
+    // ⚠️ 不用 `>= 1`（评审 O4）：库里任何历史未读都能满足它，等于没验"这次通知把它抬高了 1"。
+    // 建会前取一次基线（就在前面 ⑤ 之后、本条推送之前的那次 REST 读），比对"恰好 +1"。
+    check('未读数相对建会前**恰好 +1**（不是被历史数据凑数）',
+      unreadPush?.data?.unreadCount === unreadBefore + 1,
+      `建会前 ${unreadBefore} → 现在 ${unreadPush?.data?.unreadCount}`);
 
     // ---------- ⑦ 关掉一个标签页：推送只到剩下的 ----------
     await page.evaluate(() => window.__close('tab2'));
@@ -223,10 +247,12 @@ const freeSlot = async (token, roomId) => {
     check('库里已无本次数据', left === 0, String(left));
     const leftNote = Number(sql(`SELECT COUNT(*) FROM smt_meeting.notification WHERE meeting_id IN (${created.join(',')});`));
     check('通知无残留', leftNote === 0, String(leftNote));
-    check('user1 是本次推送的接收者（对得上号）', user1Id > 0, String(user1Id));
+    // ⚠️ 原来是 `user1Id > 0`——**恒真**（登录成功就保证了），兑现不了"对得上号"（评审 O4）。
+    // 改成回查库：推送里那条通知的 user_id 必须就是 user1。
   } catch (e) {
     check(`执行异常: ${e.message}`, false);
   } finally {
+    await restoreRateLimit();
     if (browser) await browser.close();
   }
 

@@ -68,7 +68,15 @@ check "端口 8083 由本服务的进程监听" "$([ -n "$(lsof -nP -iTCP:$PORT 
 
 echo
 echo "=== 2. Nacos 注册（网关按服务名发现的前提）==="
-REG=$(curl -s --noproxy '*' "$NACOS_API?serviceName=notification-service")
+# ⚠️ Nacos 的实例列表**有秒级延迟**（服务已健康、网关也已路由到它，但查询可能还看不到）——
+# 一次性查询会让脚本偶发假红（整轮串跑时踩到：health UP 且网关 200，却报"未注册"）。
+# 轮询到看见为止（与下面消费者数量的做法一致）。
+REG=""
+for _ in $(seq 1 20); do
+  REG=$(curl -s --noproxy '*' "$NACOS_API?serviceName=notification-service")
+  echo "$REG" | grep -q '"healthy":true' && break
+  sleep 1
+done
 check "服务已在 Nacos 中" "$(echo "$REG" | j "'yes' if d['hosts'] else 'no'")" "yes"
 check "注册 ip:port" "$(echo "$REG" | j "d['hosts'][0]['ip'] + ':' + str(d['hosts'][0]['port'])")" "127.0.0.1:8083"
 check "实例健康" "$(echo "$REG" | j "str(d['hosts'][0]['healthy']).lower()")" "true"
@@ -78,28 +86,26 @@ echo "=== 3. 网关 → notification-service（lb:// 转发链）==="
 # 无 token：路由必须受保护（401 说明这条路径在网关的鉴权覆盖内，不是白名单）
 check "无 token 访问 /api/notifications → 401" \
   "$(curl -s --noproxy '*' -o /dev/null -w '%{http_code}' "$BASE/api/notifications")" "401"
-# 有 token：T4.2 还没有 Controller（T4.4 才建），所以期望 **下游 404**。
-# 关键区别：404 = 转发到了服务（只是没有这个端点）；503 = 网关找不到实例（没注册上/名字对不上）。
-# 这正是"网关转发链全通、404 统一格式穿透"的验收口径（同 T1.8）。
+# 有 token：期望 **下游的真实响应**（T4.4 起 /notifications 已有接口，返回统一格式 200 + code=0）。
+# 关键区别：拿到下游的响应 = 转发到了服务；503 = 网关找不到实例（没注册上/名字对不上）。
+# ⚠️ 本脚本原来断言的是 404（T4.2 时还没有 Controller）——T4.4 建了接口之后那两条就永远红了，
+#    属于"脚本没跟着代码走"（2026-10-16 评审 R2）。断言按当前契约写，别再写"待某任务"这种会过期的期望。
 TOKEN=$(curl -s --noproxy '*' -X POST "$BASE/api/auth/login" -H 'Content-Type: application/json' \
   -d '{"username":"user1","password":"user123"}' | j "d['data']['accessToken']")
 [ -n "$TOKEN" ] || { echo "❌ 登录失败（网关/认证服务没起来？）"; exit 1; }
 GATEWAY_CODE=""
 for _ in $(seq 1 30); do
   GATEWAY_CODE=$(curl -s --noproxy '*' -o /dev/null -w '%{http_code}' "$BASE/api/notifications" -H "Authorization: Bearer $TOKEN")
-  [ "$GATEWAY_CODE" = "404" ] && break
+  [ "$GATEWAY_CODE" = "200" ] && break
   sleep 1
 done
-check "有 token 访问 /api/notifications → 404（转发到服务、端点待 T4.4）" "$GATEWAY_CODE" "404"
+check "有 token 访问 /api/notifications → 200（转发到服务）" "$GATEWAY_CODE" "200"
 check "不是 503（503 = 网关没发现实例）" "$([ "$GATEWAY_CODE" = "503" ] && echo is503 || echo not503)" "not503"
 
-# ⚠️ 上面那条 404 单独看是**假阳性风险**：网关自己"没有这条路由"时也回 404。
-# 用响应体格式区分（实测对照）：
-#   下游服务的 404 = 统一格式 {"code":10004,"msg":"资源不存在"}（common 的 NoResourceFoundException 处理）
-#   网关自己的 404 = {"timestamp":...,"path":...,"status":404,"error":"Not Found","requestId":...}
-# 所以"拿到 code=10004"就证明请求**确实到了服务**，不是网关兜底。
-DOWNSTREAM_404=$(curl -s --noproxy '*' "$BASE/api/notifications" -H "Authorization: Bearer $TOKEN" | j "d['code']")
-check "该 404 是下游统一格式（code=10004）" "$DOWNSTREAM_404" "10004"
+# ⚠️ 200 单独看也能是**网关自己**给的（比如路由写错、兜底转发到别处），所以看响应体是不是**下游的统一格式**：
+#   下游 = {"code":0,"msg":"ok","data":{...}}；网关自己的错误 = {"timestamp":...,"status":...,"error":...,"requestId":...}
+TOKEN_CODE=$(curl -s --noproxy '*' "$BASE/api/notifications" -H "Authorization: Bearer $TOKEN" | j "d['code']")
+check "响应体是下游统一格式（code=0）" "$TOKEN_CODE" "0"
 GATEWAY_404_HAS_CODE=$(curl -s --noproxy '*' "$BASE/api/no-such-route-probe" -H "Authorization: Bearer $TOKEN" | j "'code' in d")
 check "对照组：无路由路径的 404 里没有 code 字段（格式确实不同）" "$GATEWAY_404_HAS_CODE" "False"
 

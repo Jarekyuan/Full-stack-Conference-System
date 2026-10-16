@@ -2,6 +2,17 @@
 # 第 4 批修复的逐条实测（R7/R8/P1-6/9/10/11/13/16/17 + Redis 口令）
 # 只看 body 的 code（业务错误是 HTTP 200 + 非 0 code），协议层错误才看 HTTP 状态码
 set -u
+
+# ---------------------------------------------------------------------------
+# 限流开关（T4.8 起"创建预约"带用户级限流：默认 10 次/分钟）
+# 本脚本为验证**别的**功能会连发多次预约，不开这一刀就会撞 10005——
+# 报出来却是"创建失败 code=10005"，看着像功能坏了（整轮串跑时踩到过）。
+# 限流本身由 `verify-m4-ratelimit.sh` 专门验证；这里只借用同一个开关（含读回确认与退出恢复）。
+# 注：会与本脚本自己的 EXIT trap 链式共存（lib 里做了链式安装，不覆盖调用方的清理）。
+# ---------------------------------------------------------------------------
+source "$(dirname "$0")/lib/ratelimit.sh"
+ratelimit_disable_for_script
+
 BASE="http://localhost:8080"
 DIRECT="http://127.0.0.1:8081"
 PASS=0; FAIL=0
@@ -28,25 +39,36 @@ echo
 echo "=== R7 roomIds 入参（上限 / 去重 / 元素校验）==="
 # ⚠️ 构造 JSON 必须带 import json：漏了会得到空请求体，而空体也回 10001——
 #    "碰巧通过"但验的是另一条路径（本次执行就踩到了，故这里显式留痕）
-BIG=$(python3 -c "import json;print(json.dumps({'roomIds':list(range(1,53)),'startTime':'2026-10-20 10:00:00','endTime':'2026-10-20 11:00:00'}))")
+# ⚠️ 时间跟着今天算（评审 O10）：写死日期的话，过了那天用例会因"不可预约过去的时间"变红——
+# 红的原因与它要验的修复无关，排查时非常误导
+CHECK_DAY=$(python3 -c "import datetime;print((datetime.date.today()+datetime.timedelta(days=3)))")
+BIG=$(python3 -c "import json,sys;d=sys.argv[1];print(json.dumps({'roomIds':list(range(1,53)),'startTime':d+' 10:00:00','endTime':d+' 11:00:00'}))" "$CHECK_DAY")
 check "51 个 roomIds 被拒（上限 50，且是上限而非解析失败）" \
   "$(curl -s --noproxy '*' -X POST "$BASE/api/rooms/availability" -H "$UH" -H 'Content-Type: application/json' -d "$BIG" | j "d['msg'].split(' ')[1]")" "一次最多查询"
-EXACT=$(python3 -c "import json;print(json.dumps({'roomIds':list(range(1,51)),'startTime':'2026-10-20 10:00:00','endTime':'2026-10-20 11:00:00'}))")
+EXACT=$(python3 -c "import json,sys;d=sys.argv[1];print(json.dumps({'roomIds':list(range(1,51)),'startTime':d+' 10:00:00','endTime':d+' 11:00:00'}))" "$CHECK_DAY")
 check "恰好 50 个仍放行（边界）" \
   "$(curl -s --noproxy '*' -X POST "$BASE/api/rooms/availability" -H "$UH" -H 'Content-Type: application/json' -d "$EXACT" | j "d['code']")" "0"
 check "重复 id [3,3,3] 去重成 1 条" \
-  "$(curl -s --noproxy '*' -X POST "$BASE/api/rooms/availability" -H "$UH" -H 'Content-Type: application/json' -d '{"roomIds":[3,3,3],"startTime":"2026-10-20 10:00:00","endTime":"2026-10-20 11:00:00"}' | j "len(d['data']['items'])")" "1"
+  "$(curl -s --noproxy '*' -X POST "$BASE/api/rooms/availability" -H "$UH" -H 'Content-Type: application/json' -d "{\"roomIds\":[3,3,3],\"startTime\":\"$CHECK_DAY 10:00:00\",\"endTime\":\"$CHECK_DAY 11:00:00\"}" | j "len(d['data']['items'])")" "1"
 check "负数 id 被拒" \
-  "$(curl -s --noproxy '*' -X POST "$BASE/api/rooms/availability" -H "$UH" -H 'Content-Type: application/json' -d '{"roomIds":[-1],"startTime":"2026-10-20 10:00:00","endTime":"2026-10-20 11:00:00"}' | j "d['code']")" "10001"
+  "$(curl -s --noproxy '*' -X POST "$BASE/api/rooms/availability" -H "$UH" -H 'Content-Type: application/json' -d "{\"roomIds\":[-1],\"startTime\":\"$CHECK_DAY 10:00:00\",\"endTime\":\"$CHECK_DAY 11:00:00\"}" | j "d['code']")" "10001"
 check "正常单个 id 仍可用" \
-  "$(curl -s --noproxy '*' -X POST "$BASE/api/rooms/availability" -H "$UH" -H 'Content-Type: application/json' -d '{"roomIds":[1],"startTime":"2026-10-20 10:00:00","endTime":"2026-10-20 11:00:00"}' | j "d['code']")" "0"
+  "$(curl -s --noproxy '*' -X POST "$BASE/api/rooms/availability" -H "$UH" -H 'Content-Type: application/json' -d "{\"roomIds\":[1],\"startTime\":\"$CHECK_DAY 10:00:00\",\"endTime\":\"$CHECK_DAY 11:00:00\"}" | j "d['code']")" "0"
 
 echo
 echo "=== R8 详情不再返回参会人 email ==="
-MID=$(curl -s --noproxy '*' "$BASE/api/meetings?scope=all&page=1&size=1" -H "$AH" | j "d['data']['list'][0]['id']")
-echo "  （取样会议 id=$MID）"
-check "participants 无 email 字段" \
-  "$(curl -s --noproxy '*' "$BASE/api/meetings/$MID" -H "$AH" | j "'email' in (d['data']['participants'][0] if d['data']['participants'] else {})")" "False"
+# ⚠️ 取样的会议**必须有参会人**，否则下一条断言在空字典上求值、恒为 False → 空转通过（评审 O10）。
+# 做法：先按"有参会人"筛一场（列表接口带 participantCount），取不到就明确报错而不是静默放行。
+MID=$(curl -s --noproxy '*' "$BASE/api/meetings?scope=all&page=1&size=50" -H "$AH" \
+  | python3 -c "import sys,json;print(next((m['id'] for m in json.load(sys.stdin)['data']['list'] if m.get('participantCount')), ''))")
+if [ -z "$MID" ]; then
+  echo "  ❌ 找不到带参会人的会议——本条断言无从验证（不能当通过）"
+  FAIL=$((FAIL+1))
+else
+  echo "  （取样会议 id=$MID，含参会人）"
+  check "participants 无 email 字段" \
+    "$(curl -s --noproxy '*' "$BASE/api/meetings/$MID" -H "$AH" | j "'email' in (d['data']['participants'][0] if d['data']['participants'] else {})")" "False"
+fi
 
 echo
 echo "=== P1-13 /users/search 只回 id/realName/deptName ==="
