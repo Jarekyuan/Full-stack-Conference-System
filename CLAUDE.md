@@ -17,11 +17,11 @@
   - 前端：React 18 + TS + Vite + antd + Zustand + React Hook Form + zod
   - 后端：Java 17 + Spring Boot 3 + Spring Cloud（Gateway / Nacos / OpenFeign）+ MyBatis（**手写 XML**）+ Redisson
   - 中间件：MySQL 8 + Redis + RabbitMQ（M4 才接入）+ Nacos
-- 微服务 4 个（notification-service 尚未创建，M4 建）：
+- 微服务 4 个：
   - `gateway`（:8080）—— 统一入口 + JWT 鉴权 + 身份头注入
   - `auth-service`（:8081）—— 登录/双 token/用户/部门/角色
   - `meeting-service`（:8082）—— 会议/会议室/预约/审批（核心）
-  - `notification-service`（:8083）—— 未开发
+  - `notification-service`（:8083）—— 骨架已建（T4.2），消费/站内信/提醒/WS 见 M4 T4.3+
 
 ---
 
@@ -50,7 +50,7 @@
 | M2 后端（预约核心） | ✅ **10/10** | 状态机 → 冲突检测 → 可用性/日历 → 创建预约 → 幂等 → Redisson 锁 → 并发脚本 → 列表详情 → 取消 → 修改（乐观锁） |
 | M2 前端 | ✅ **3/3** | ✅ T2.F1 日历页（时间轴定位 + memo 行级组件化）｜✅ T2.F2 预约表单 Drawer（防抖冲突提示 + 幂等提交）｜✅ T2.F3 我的会议列表 + 详情（筛选分页 + 状态时间线 + 取消） |
 | M3 审批+生命周期 | ✅ **8/8** | ✅ T3.1 待办/已办列表｜✅ T3.2 审批通过（复检+行锁）｜✅ T3.3 拒绝｜✅ T3.4 延长 + 提前结束｜✅ T3.5 定时流转｜✅ T3.6 对账补偿｜✅ T3.F1 审批中心（前端）｜✅ T3.F2 详情页延长/结束（前端） |
-| M4 通知+MQ+打磨 | ⬜ | 12 任务 |
+| M4 通知+MQ+打磨 | 🟡 **2/12** | ✅ T4.1 事件发布（`meeting.events` topic + 事务提交后投递）｜✅ T4.2 notification-service 骨架（:8083） |
 | M5 进阶+部署 | ⬜ | 7 任务 |
 
 **当前聚焦：M4 通知 + MQ + 打磨**（M2/M3 已全部完成并逐条实测）。
@@ -74,6 +74,18 @@
 >   每小时对账补偿（E-4）修"时间过了状态没推进"，并**只告警不自动修** status=10 的超时待审批。
 > - 工具：`scripts/verify-m3-*.sh` 三个验证脚本（审批 / 延长 / 定时任务），每个都自起/自清数据。
 > - ⚠️ `verify-m3-scheduler.sh` 会**接管 8082**（起两个实例抢任务锁），跑完要按默认配置重启服务。
+>
+> **M4 进度与交接（2026-10-16）**：
+> - ✅ T4.1 事件发布 / ✅ T4.2 骨架（:8083）已完成，**下一个是 T4.3 消费（幂等 + 手动 ACK + 死信队列）**。
+> - ⚠️ **T4.3 的死信队列有个必踩的坑**：MQ 里队列的参数是"建立时定死"的，
+>   消费端若给同名队列声明**不同参数**（加 `x-dead-letter-exchange`），与生产端已声明的会冲突（`PRECONDITION_FAILED`）。
+>   要么两边声明**完全同参**（改参数后必须**删掉已有队列重建**，管理台/RabbitConfig 都行），
+>   要么只让一端声明、另一端纯消费。别一边加 DLX 一边不动另一边。
+> - ⚠️ **T4.5 提醒不要照抄 02 文档 5.4 的结论**：那句"固定提前量天然规避队头阻塞"**推理站不住**
+>   ——TTL 队列只在队头判过期，排在下周的会议堵在队头时，后面今天的提醒出不来。
+>   正解是分桶延迟队列（按时段分队列）或定时扫描，02 文档已记此坑。
+> - ⚠️ 生产端（meeting-service）是**懒连接**，所以 `RabbitConfig` 里有 `ApplicationRunner` 主动声明拓扑；
+>   消费端（notification-service）**连接是启动即建**的（要在启动时注册监听器），不存在这个问题。
 
 ### M2 前端三件套（均已完成为存档，详见 05 文档 T2.F1~F3）
 
@@ -187,6 +199,7 @@ cd server && mvn -q -DskipTests clean install
 cd server && env -u SERVER__PORT java -jar gateway/target/gateway-1.0.0-SNAPSHOT.jar
 cd server && env -u SERVER__PORT java -jar auth-service/target/auth-service-1.0.0-SNAPSHOT.jar
 cd server && env -u SERVER__PORT java -jar meeting-service/target/meeting-service-1.0.0-SNAPSHOT.jar
+cd server && env -u SERVER__PORT java -jar notification-service/target/notification-service-1.0.0-SNAPSHOT.jar
 
 # 3. 前端
 cd web && npm run dev    # http://localhost:5173
@@ -202,8 +215,12 @@ bash scripts/verify-review-batch4.sh               # 第 4 批修复的 33 条�
 bash scripts/verify-m3-approval.sh                # T3.1~T3.3：待办/已办、复检 50001、并发双人同审、拒绝
 bash scripts/verify-m3-extend.sh                  # T3.4：延长上限两场景、40006、复检兜底、提前结束
 bash scripts/verify-m3-scheduler.sh               # T3.5/T3.6：定时流转、多实例互斥、幂等、对账补偿（⚠️ 会接管 8082，跑完需自行重启服务）
-cd server && mvn -q test -Dtest='!AuthFeignClientTest#batchUsersShouldDegradeWhenAuthDown'  # 单测（那条降级用例需 auth 停机时单独跑）
+bash scripts/verify-m4-mq.sh                       # T4.1：五类领域事件真投到 broker（routingKey/payload 核对，自清理）
+bash scripts/verify-m4-notification-skeleton.sh     # T4.2：notification-service 骨架（自起自收 8083，跑完不留进程）
+cd server && mvn -q test -Dtest='!AuthFeignClientTest#batchUsersShouldDegradeWhenAuthDown' -Dsurefire.failIfNoSpecifiedTests=false  # 单测 47 例（那条降级用例需 auth 停机时单独跑）
 #   ⚠️ 别用 `mvn ... | tail`：管道会把退出码换成 tail 的（见踩坑 #11）
+#   ⚠️ `-Dtest='!...'` 必须配 `-Dsurefire.failIfNoSpecifiedTests=false`：否则**没有测试的模块**（gateway）
+#      会以 "No tests matching pattern" 判定失败——看着像构建挂了，其实只是过滤器没匹配到任何用例
 
 # 前端
 cd web && npm run check     # = tsc --noEmit + eslint + vitest（26 例）

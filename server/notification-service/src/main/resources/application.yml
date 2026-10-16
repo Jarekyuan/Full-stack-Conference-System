@@ -1,0 +1,55 @@
+server:
+  port: 8083
+  # 只绑回环（与另三个服务同一处置，评审 C2）：本服务的身份一律取自网关注入的 X-User-Id，
+  # 直连本端口即可伪造身份头读别人的站内信。真实部署改为绑内网网卡 + 安全组。
+  address: 127.0.0.1
+
+spring:
+  application:
+    name: notification-service
+  datasource:
+    # 当前是**单库**：notification 表与会议表同在 smt_meeting（03 文档 5.7 的"未来分库目标"是 smt_notify）。
+    # 单库不等于没有边界——本服务只碰 notification 表，跨服务数据（会议/参会人）通过 MQ 事件获得，
+    # 这正是"将来能原地分库而不用上分布式事务"的前提，所以这里不去 join 会议表。
+    url: jdbc:mysql://127.0.0.1:3306/smt_meeting?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: root
+    password: ${DB_PASSWORD:root123}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      # 与 deploy/docker-compose.infra.yml 的 REDIS_PASSWORD 同源（评审 C1：Redis 不再免密）
+      # T4.3 的消费幂等 SETNX(mq:idem:{msgId}) 走这个实例
+      password: ${REDIS_PASSWORD:redis123}
+  # RabbitMQ：**消费端**（T4.3 起）。队列与交换机拓扑在 meeting-service/RabbitConfig 里声明，
+  # 本服务 T4.3 会声明同一份（同名同参数重复声明是幂等的）——谁先启动谁创建，不存在时序问题。
+  rabbitmq:
+    host: 127.0.0.1
+    port: 5672
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 127.0.0.1:8848
+        # 本地开发固定回环注册（踩坑 #6）：休眠/换网后局域网 IP 会变，否则网关按旧 IP 连不上
+        ip: 127.0.0.1
+
+mybatis-plus:
+  # SQL 手写 XML 为主（规范见 server/AI-RULES.md 第十一章），XML 扫描路径：
+  mapper-locations: classpath:mapper/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+    # 开发期打印 SQL（手写 SQL 需可见执行语句）
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    com.smt: debug

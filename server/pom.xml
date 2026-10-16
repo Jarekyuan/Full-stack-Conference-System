@@ -22,7 +22,7 @@
         <module>gateway</module>
         <module>auth-service</module>
         <module>meeting-service</module>
-        <!-- 后续追加：notification-service -->
+        <module>notification-service</module>
     </modules>
 
     <properties>
