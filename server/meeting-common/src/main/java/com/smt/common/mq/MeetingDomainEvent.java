@@ -88,11 +88,17 @@ public record MeetingDomainEvent(
                 startTime, endTime, status, operatorId, null);
     }
 
-    /** 会议即将开始（T4.5 延迟消息投递过来时用） */
+    /**
+     * 会议即将开始（T4.5 提醒，由定时扫描在"开始前 15 分钟窗口"内发出）。
+     *
+     * <p>status 取会议**当时的真实状态**（扫描出来的多是 20；30 已经开过的不会被扫到，
+     * 因为窗口条件是 `start_time > now`）。不写死一个常量：事件字段一旦说谎，
+     * 消费端基于它做的判断就全是错的（哪怕当前没人用）。
+     */
     public static MeetingDomainEvent remind(Long meetingId, String title, Long roomId, Long organiserId,
-                                            LocalDateTime startTime, LocalDateTime endTime) {
+                                           LocalDateTime startTime, LocalDateTime endTime, Integer status) {
         return new MeetingDomainEvent(MeetingEventType.REMIND, meetingId, title, roomId, organiserId,
-                startTime, endTime, 20, null, null);
+                startTime, endTime, status, null, null);
     }
 
     /** 是否待审批（消费端据此决定要不要通知审批人） */

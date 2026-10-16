@@ -255,6 +255,21 @@
         LIMIT #{limit}
     </select>
 
+    <!-- 提醒窗口（T4.5）：status=20 AND start_time ∈ (now, deadline]。
+         时间边界由 Java 传入而不是 SQL 里 NOW()+INTERVAL：与应用同一个时钟，
+         也便于验证脚本把窗口调小来跑（不改 SQL 就能测）。
+         ORDER BY start_time 让"最先开始的先发"；命中 idx_status_start(status, start_time) -->
+    <select id="selectToRemind" resultMap="BaseResultMap">
+        SELECT id, title, room_id, organiser_id, start_time, end_time, status,
+               remark, cancel_reason, cancel_time, recurring_id, version, created_at, updated_at
+        FROM meeting
+        WHERE status = 20
+          AND start_time &gt; #{now}
+          AND start_time &lt;= #{deadline}
+        ORDER BY start_time
+        LIMIT #{limit}
+    </select>
+
     <select id="selectIdsToFinish" resultType="long">
         SELECT id
         FROM meeting

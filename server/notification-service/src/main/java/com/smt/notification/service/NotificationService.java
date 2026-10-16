@@ -72,7 +72,8 @@ public class NotificationService {
             case UPDATED -> onUpdated(event);
             case APPROVED, REJECTED -> onApprovalResult(event);
             case CANCELLED -> onCancelled(event);
-            // REMIND（T4.5 接线）与将来新增的事件类型
+            case REMIND -> onRemind(event);
+            // 将来新增的事件类型
             default -> log.warn("[通知] 未接线的事件类型，已忽略: type={}, meetingId={}", event.type(), event.meetingId());
         }
     }
@@ -126,6 +127,23 @@ public class NotificationService {
         }
         save(NotificationType.MEETING_CANCELLED, "会议已取消", content.toString(), e,
                 recipientMapper.selectParticipantIds(e.meetingId()));
+    }
+
+    /**
+     * 提醒（T4.5）：收件人 = **组织人 + 参会人**。
+     *
+     * <p>⚠️ 与 docs/04 5.3 原表（只写"参会人"）不同，2026-10-16 改过并已在文档留痕：
+     * 组织人也要参加自己组织的会——按原口径"组织人自己订、没拉参会人"的会议**谁都收不到提醒**，
+     * 而那是最常见的用法。这里用 LinkedHashSet 去重（组织人可能同时是参会人）。
+     */
+    private void onRemind(MeetingDomainEvent e) {
+        LinkedHashSet<Long> recipients = new LinkedHashSet<>();
+        if (e.organiserId() != null) {
+            recipients.add(e.organiserId());
+        }
+        recipients.addAll(recipientMapper.selectParticipantIds(e.meetingId()));
+        String content = "「" + e.title() + "」将于 " + TIME_FORMAT.format(e.startTime()) + " 开始，请准时参加。";
+        save(NotificationType.MEETING_REMIND, "会议即将开始", content, e, new ArrayList<>(recipients));
     }
 
     private void notifyApprovers(MeetingDomainEvent e) {

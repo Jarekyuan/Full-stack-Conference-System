@@ -104,6 +104,19 @@ public interface MeetingMapper {
     List<Long> selectIdsToFinish(@Param("limit") int limit);
 
     /**
+     * 提醒窗口内待提醒的会议（T4.5）：`status=20 AND start_time ∈ (now, deadline]`。
+     *
+     * <p>取整行（不像上面两个任务只取 id）：提醒文案要用标题与起止时间，
+     * 拿 id 再回查一遍纯属多一次往返。
+     *
+     * <p>为什么只扫 20：**10（待审批）还没被确认**，提醒一场可能根本没成行的会议是噪音；
+     * 30 已经开始了，而窗口条件是 `start_time > now`，天然扫不到。
+     */
+    List<Meeting> selectToRemind(@Param("now") LocalDateTime now,
+                                 @Param("deadline") LocalDateTime deadline,
+                                 @Param("limit") int limit);
+
+    /**
      * 对账用（T3.6 / E-4）：**开始时间已过 2 小时**却还停在待开始态的会议。
      * 正常轮询每分钟就跑一次，所以这类记录只可能来自"任务停摆/异常"——是告警线索，不只是脏数据。
      * 阈值写死在 SQL 里（而不是让调用方传时间）：口径统一走 DB 时钟，避免 JVM 与 DB 双时钟漂移。

@@ -19,7 +19,7 @@ import com.smt.notification.mq.ConsumeIdempotency.AcquireResult;
 import com.smt.notification.service.NotificationService;
 
 /**
- * 会议事件消费者（T4.3）：幂等 → 重试 → 落库站内信 → 手动 ACK / 失败进死信。
+ * 会议事件消费者（T4.3；T4.5 接上 remind 队列）：幂等 → 重试 → 落库站内信 → 手动 ACK / 失败进死信。
  *
  * <h3>为什么手动 ACK（而不是让容器自动 ack）</h3>
  * 自动模式下容器在**监听方法返回时就 ack**——方法内部如果"catch 了异常只打日志"，
@@ -60,7 +60,8 @@ public class MeetingEventConsumer {
             MeetingMqTopology.QUEUE_APPROVED,
             MeetingMqTopology.QUEUE_REJECTED,
             MeetingMqTopology.QUEUE_CANCELLED,
-            MeetingMqTopology.QUEUE_UPDATED})
+            MeetingMqTopology.QUEUE_UPDATED,
+            MeetingMqTopology.QUEUE_REMIND})
     public void onMeetingEvent(MeetingEventMessage message, Channel channel,
                                @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
         // 结构不合法的消息：重试多少次都不会变好，直接进死信等人工看。

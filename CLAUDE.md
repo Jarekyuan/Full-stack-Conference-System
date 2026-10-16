@@ -21,7 +21,7 @@
   - `gateway`（:8080）—— 统一入口 + JWT 鉴权 + 身份头注入
   - `auth-service`（:8081）—— 登录/双 token/用户/部门/角色
   - `meeting-service`（:8082）—— 会议/会议室/预约/审批（核心）
-  - `notification-service`（:8083）—— 消费事件 → 站内信 → REST 查读（T4.3/T4.4 已通）；提醒/WS 见 T4.5/T4.6
+  - `notification-service`（:8083）—— 消费事件 → 站内信 → REST 查读（T4.3/T4.4 已通）；WS 见 T4.6
 
 ---
 
@@ -50,7 +50,7 @@
 | M2 后端（预约核心） | ✅ **10/10** | 状态机 → 冲突检测 → 可用性/日历 → 创建预约 → 幂等 → Redisson 锁 → 并发脚本 → 列表详情 → 取消 → 修改（乐观锁） |
 | M2 前端 | ✅ **3/3** | ✅ T2.F1 日历页（时间轴定位 + memo 行级组件化）｜✅ T2.F2 预约表单 Drawer（防抖冲突提示 + 幂等提交）｜✅ T2.F3 我的会议列表 + 详情（筛选分页 + 状态时间线 + 取消） |
 | M3 审批+生命周期 | ✅ **8/8** | ✅ T3.1 待办/已办列表｜✅ T3.2 审批通过（复检+行锁）｜✅ T3.3 拒绝｜✅ T3.4 延长 + 提前结束｜✅ T3.5 定时流转｜✅ T3.6 对账补偿｜✅ T3.F1 审批中心（前端）｜✅ T3.F2 详情页延长/结束（前端） |
-| M4 通知+MQ+打磨 | 🟡 **4/12** | ✅ T4.1 事件发布（`meeting.events` topic + 事务提交后投递）｜✅ T4.2 notification-service 骨架（:8083）｜✅ T4.3 消费落库站内信（幂等 + 手动 ACK + 死信）｜✅ T4.4 通知 REST（列表/未读/已读，契约补登 docs/04 3.3） |
+| M4 通知+MQ+打磨 | 🟡 **5/12** | ✅ T4.1 事件发布（`meeting.events` topic + 事务提交后投递）｜✅ T4.2 notification-service 骨架（:8083）｜✅ T4.3 消费落库站内信（幂等 + 手动 ACK + 死信）｜✅ T4.4 通知 REST（列表/未读/已读，契约补登 docs/04 3.3）｜✅ T4.5 会议提醒（扫描 + 幂等 key） |
 | M5 进阶+部署 | ⬜ | 7 任务 |
 
 **当前聚焦：M4 通知 + MQ + 打磨**（M2/M3 已全部完成并逐条实测）。
@@ -76,16 +76,18 @@
 > - ⚠️ `verify-m3-scheduler.sh` 会**接管 8082**（起两个实例抢任务锁），跑完要按默认配置重启服务。
 >
 > **M4 进度与交接（2026-10-16）**：
-> - ✅ T4.1 事件发布 / ✅ T4.2 骨架 / ✅ T4.3 消费（幂等 + 手动 ACK + 死信）/ ✅ T4.4 通知 REST 已完成，**下一个是 T4.5 延迟提醒**。
+> - ✅ T4.1~T4.5 已完成（事件发布 / 骨架 / 消费 / 通知 REST / 会议提醒），**下一个是 T4.6 WebSocket 推送**。
 > - 🔧 **死信拓扑已由 `MeetingMqTopology`（meeting-common）统一声明**，生产端/消费端都引用它——
 >   队列参数（含 `x-dead-letter-exchange`）不可能漂移。⚠️ 若将来**再改**队列参数：
 >   RabbitMQ 的参数是建立时定死的，必须**删掉老队列重建**（且两边同源改），否则 `PRECONDITION_FAILED`。
 > - 📌 消息契约（`MeetingEventType`/`MeetingDomainEvent`/`MeetingEventMessage`）也在 `com.smt.common.mq`：
 >   它们是**跨服务契约**，别把它们搬回 meeting-service。消费端用 `TypePrecedence.INFERRED` 反序列化
 >   （类型取监听方法签名、不信任消息头 `__TypeId__`），所以消费端不依赖 FQCN，但共享模块保证字段不会漂移。
-> - ⚠️ **T4.5 提醒不要照抄 02 文档 5.4 的结论**：那句"固定提前量天然规避队头阻塞"**推理站不住**
->   ——TTL 队列只在队头判过期，排在下周的会议堵在队头时，后面今天的提醒出不来。
->   正解是分桶延迟队列（按时段分队列）或定时扫描，02 文档已记此坑。
+> - 🔄 **T4.5 已按"定时扫描"实现**（TTL+DLX 在这类延迟分布下不可用：预约可提前 30 天 → 同队列 TTL 相差 30 天，
+>   队头必堵；分桶在桶内同样堵；延迟插件本机镜像没有）。**原因与三方案对比已写进 docs/02 5.4**，
+>   提醒的幂等 key 是 `remind:sent:{meetingId}:{开始时刻}`（改期自动重新武装）。
+>   ⚠️ 提醒任务与状态任务**共用 `meeting.task.enabled` 开关**；间隔分别是
+>   `meeting.task.remind.delay-ms`（默认 60s）与 `meeting.task.status.delay-ms`。
 > - ⚠️ 生产端（meeting-service）是**懒连接**，所以 `RabbitConfig` 里有 `ApplicationRunner` 主动声明拓扑；
 >   消费端（notification-service）**连接是启动即建**的（要在启动时注册监听器），不存在这个问题。
 
@@ -209,6 +211,21 @@
     **没选库**时会报 `1046 No database selected`，而我把 stderr 扔进了 /dev/null → 看到的是"删除成功 11 行"的假象，
     实际一行没删。**验证类命令别吞 stderr**。② 日志断言别把全角括号写进模式（"已重试 3 次）"对不上"已重试 3 次，"）。
 
+15. **RabbitMQ 管理 API 的队列路径必须带 vhost 段**（2026-10-16，同一个坑踩了两次）：
+    `/api/queues/%2F/meeting.created` ✅ ／ `/api/queues/meeting.created` ❌（404）。
+    危险之处在于它**不报错**——`curl | python -c "d.get('consumers') or 0"` 把 404 体解析成 `0`，
+    于是"URL 写错了"看起来完全像"消费者没接上"，排查方向直接跑偏。
+    T4.3 的脚本里踩过一次、T4.5 重写时又漏了 → **结论：这种带固定前缀的调用别每次手写 URL**，
+    抽成一个函数，错只可能错一次。
+16. **验证脚本的"相对时间"会随脚本自身的运行时长漂移**（2026-10-16）：
+    T4.5 的负例是"20 分钟后开始的会议不该被提醒"，而脚本自己跑 4 分钟——跑到后段那场会已经漂进
+    15 分钟提醒窗口、领到一条**完全正确**的提醒，负例断言于是失败（看起来像产品坏了）。
+    **规矩**：给时间敏感的负例留出**大于脚本总时长**的余量；或者断言前重新校准基准时间。
+17. **通知表的断言必须带 `type` 过滤**（2026-10-16，同一类错犯了三次）：
+    同一场会在同一用户那里有多条通知（MEETING_CREATED + MEETING_REMIND…），
+    只按 `meeting_id` 查会把"预约成功"当成"会议提醒"来核标题/内容/已读位。
+    写通知相关断言时，`type` 与 `meeting_id` 一起写。
+
 ---
 
 ## 7. 怎么跑起来
@@ -242,6 +259,8 @@ bash scripts/verify-m4-mq.sh                       # T4.1：五类领域事件�
 bash scripts/verify-m4-notification-skeleton.sh     # T4.2：notification-service 骨架（自起自收 8083，跑完不留进程）
 bash scripts/verify-m4-notify-consume.sh           # T4.3：五类事件落站内信、幂等、两条失败路径进死信（自起自收 8083）
 bash scripts/verify-m4-notify-api.sh               # T4.4：列表倒序/分页、未读数、已读幂等、跨用户越权 60001（自起自收 8083）
+bash scripts/verify-m4-remind.sh                   # T4.5：提醒窗口/收件人/幂等/窗口外与待审批不提醒/改期重新武装
+#   ⚠️ 本脚本用**默认 60 秒扫描间隔**跑，全程约 4 分钟（要等两三轮扫描）——慢是有意的，验的就是真实配置
 #   ⚠️ verify-m4-mq.sh 与上面两个脚本**不能同时跑**：MQ 脚本要求 8083 停着（消费者会把待断言的消息吃掉），
 #      脚本已加守卫会明确报错——这属于设计，不是 bug
 cd server && mvn -q test -Dtest='!AuthFeignClientTest#batchUsersShouldDegradeWhenAuthDown' -Dsurefire.failIfNoSpecifiedTests=false  # 单测 47 例（那条降级用例需 auth 停机时单独跑）
