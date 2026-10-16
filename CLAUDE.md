@@ -21,7 +21,7 @@
   - `gateway`（:8080）—— 统一入口 + JWT 鉴权 + 身份头注入
   - `auth-service`（:8081）—— 登录/双 token/用户/部门/角色
   - `meeting-service`（:8082）—— 会议/会议室/预约/审批（核心）
-  - `notification-service`（:8083）—— 消费事件 → 站内信（T4.3 已通）；REST/提醒/WS 见 T4.4~T4.6
+  - `notification-service`（:8083）—— 消费事件 → 站内信 → REST 查读（T4.3/T4.4 已通）；提醒/WS 见 T4.5/T4.6
 
 ---
 
@@ -50,7 +50,7 @@
 | M2 后端（预约核心） | ✅ **10/10** | 状态机 → 冲突检测 → 可用性/日历 → 创建预约 → 幂等 → Redisson 锁 → 并发脚本 → 列表详情 → 取消 → 修改（乐观锁） |
 | M2 前端 | ✅ **3/3** | ✅ T2.F1 日历页（时间轴定位 + memo 行级组件化）｜✅ T2.F2 预约表单 Drawer（防抖冲突提示 + 幂等提交）｜✅ T2.F3 我的会议列表 + 详情（筛选分页 + 状态时间线 + 取消） |
 | M3 审批+生命周期 | ✅ **8/8** | ✅ T3.1 待办/已办列表｜✅ T3.2 审批通过（复检+行锁）｜✅ T3.3 拒绝｜✅ T3.4 延长 + 提前结束｜✅ T3.5 定时流转｜✅ T3.6 对账补偿｜✅ T3.F1 审批中心（前端）｜✅ T3.F2 详情页延长/结束（前端） |
-| M4 通知+MQ+打磨 | 🟡 **3/12** | ✅ T4.1 事件发布（`meeting.events` topic + 事务提交后投递）｜✅ T4.2 notification-service 骨架（:8083）｜✅ T4.3 消费落库站内信（幂等 + 手动 ACK + 死信） |
+| M4 通知+MQ+打磨 | 🟡 **4/12** | ✅ T4.1 事件发布（`meeting.events` topic + 事务提交后投递）｜✅ T4.2 notification-service 骨架（:8083）｜✅ T4.3 消费落库站内信（幂等 + 手动 ACK + 死信）｜✅ T4.4 通知 REST（列表/未读/已读，契约补登 docs/04 3.3） |
 | M5 进阶+部署 | ⬜ | 7 任务 |
 
 **当前聚焦：M4 通知 + MQ + 打磨**（M2/M3 已全部完成并逐条实测）。
@@ -76,7 +76,7 @@
 > - ⚠️ `verify-m3-scheduler.sh` 会**接管 8082**（起两个实例抢任务锁），跑完要按默认配置重启服务。
 >
 > **M4 进度与交接（2026-10-16）**：
-> - ✅ T4.1 事件发布 / ✅ T4.2 骨架 / ✅ T4.3 消费（幂等 + 手动 ACK + 死信）已完成，**下一个是 T4.4 通知 REST 接口**。
+> - ✅ T4.1 事件发布 / ✅ T4.2 骨架 / ✅ T4.3 消费（幂等 + 手动 ACK + 死信）/ ✅ T4.4 通知 REST 已完成，**下一个是 T4.5 延迟提醒**。
 > - 🔧 **死信拓扑已由 `MeetingMqTopology`（meeting-common）统一声明**，生产端/消费端都引用它——
 >   队列参数（含 `x-dead-letter-exchange`）不可能漂移。⚠️ 若将来**再改**队列参数：
 >   RabbitMQ 的参数是建立时定死的，必须**删掉老队列重建**（且两边同源改），否则 `PRECONDITION_FAILED`。
@@ -241,6 +241,7 @@ bash scripts/verify-m3-scheduler.sh               # T3.5/T3.6：定时流转、�
 bash scripts/verify-m4-mq.sh                       # T4.1：五类领域事件真投到 broker（routingKey/payload 核对，自清理）
 bash scripts/verify-m4-notification-skeleton.sh     # T4.2：notification-service 骨架（自起自收 8083，跑完不留进程）
 bash scripts/verify-m4-notify-consume.sh           # T4.3：五类事件落站内信、幂等、两条失败路径进死信（自起自收 8083）
+bash scripts/verify-m4-notify-api.sh               # T4.4：列表倒序/分页、未读数、已读幂等、跨用户越权 60001（自起自收 8083）
 #   ⚠️ verify-m4-mq.sh 与上面两个脚本**不能同时跑**：MQ 脚本要求 8083 停着（消费者会把待断言的消息吃掉），
 #      脚本已加守卫会明确报错——这属于设计，不是 bug
 cd server && mvn -q test -Dtest='!AuthFeignClientTest#batchUsersShouldDegradeWhenAuthDown' -Dsurefire.failIfNoSpecifiedTests=false  # 单测 47 例（那条降级用例需 auth 停机时单独跑）

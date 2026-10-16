@@ -14,6 +14,16 @@
         <result column="created_at" property="createdAt"/>
     </resultMap>
 
+    <resultMap id="VOMap" type="com.smt.notification.vo.NotificationVO">
+        <id column="id" property="id"/>
+        <result column="type" property="type"/>
+        <result column="title" property="title"/>
+        <result column="content" property="content"/>
+        <result column="meeting_id" property="meetingId"/>
+        <result column="read_flag" property="readFlag"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
     <!-- 一次事件通知多个收件人：一条多值 INSERT，而不是循环单条——
          同一次消费的 N 条通知必须在**同一事务**里落库（通知要么都发、要么都不发），
          合并成一条 SQL 顺便省掉 N-1 次往返。
@@ -25,4 +35,43 @@
             (#{item.userId}, #{item.type}, #{item.title}, #{item.content}, #{item.meetingId}, 0)
         </foreach>
     </insert>
+
+    <!-- 我的通知列表：命中 idx_user_read(user_id, read_flag, created_at) 的最左前缀 user_id。
+         排序用 (created_at DESC, id DESC)：一次事件给多人发的通知 created_at 精确到秒**完全相同**，
+         只按时间排的话 MySQL 没有义务保持稳定顺序，翻页会出现重复/漏项。
+         ⚠️ 这个索引是为"未读优先"的场景建的（user_id + read_flag），按 user_id 单独过滤也能用（最左前缀）。 -->
+    <select id="selectPage" resultMap="VOMap">
+        SELECT id, type, title, content, meeting_id, read_flag, created_at
+        FROM notification
+        WHERE user_id = #{userId}
+        ORDER BY created_at DESC, id DESC
+        LIMIT #{offset}, #{size}
+    </select>
+
+    <select id="countByUser" resultType="long">
+        SELECT COUNT(*) FROM notification WHERE user_id = #{userId}
+    </select>
+
+    <!-- 未读数：WHERE user_id=? AND read_flag=0，正好是 idx_user_read 的完整前缀 -->
+    <select id="countUnread" resultType="long">
+        SELECT COUNT(*) FROM notification WHERE user_id = #{userId} AND read_flag = 0
+    </select>
+
+    <!-- 单条已读：带 user_id 是**越权防线**（不能靠调用方先查后判）。
+         MySQL 默认（JDBC 未开 useAffectedRows）返回的是**匹配行数**，所以"已经读过"仍返回 1，
+         重复标记天然幂等；返回 0 只可能是"不是我的/不存在"。 -->
+    <update id="markRead">
+        UPDATE notification SET read_flag = 1
+        WHERE id = #{id} AND user_id = #{userId}
+    </update>
+
+    <update id="markAllRead">
+        UPDATE notification SET read_flag = 1
+        WHERE user_id = #{userId} AND read_flag = 0
+    </update>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT id, user_id, type, title, content, meeting_id, read_flag, created_at
+        FROM notification WHERE id = #{id}
+    </select>
 </mapper>

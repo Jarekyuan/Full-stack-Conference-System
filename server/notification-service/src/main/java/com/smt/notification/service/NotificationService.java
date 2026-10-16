@@ -13,12 +13,17 @@ import cn.hutool.core.util.StrUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
+import com.smt.common.exception.BusinessException;
 import com.smt.common.mq.MeetingDomainEvent;
 import com.smt.common.mq.MeetingEventType;
+import com.smt.common.result.ErrorCode;
+import com.smt.common.result.PageResult;
+import com.smt.common.util.PageBounds;
 import com.smt.notification.entity.Notification;
 import com.smt.notification.enums.NotificationType;
 import com.smt.notification.mapper.NotificationMapper;
 import com.smt.notification.mapper.RecipientMapper;
+import com.smt.notification.vo.NotificationVO;
 
 /**
  * 通知生成（T4.3）：把一条会议事件翻译成"N 条站内信"。
@@ -126,6 +131,51 @@ public class NotificationService {
     private void notifyApprovers(MeetingDomainEvent e) {
         String content = "「" + e.title() + "」（" + timeRange(e) + "）等待审批。";
         save(NotificationType.APPROVAL_TODO, "待审批会议", content, e, recipientMapper.selectApproverIds());
+    }
+
+    // ---------- T4.4 查询与已读 ----------
+
+    /** 我的通知（分页，时间倒序） */
+    public PageResult<NotificationVO> page(Long userId, Integer page, Integer size) {
+        PageBounds bounds = PageBounds.of(page, size);
+        long total = notificationMapper.countByUser(userId);
+        List<NotificationVO> list = total == 0 ? List.of()
+                : notificationMapper.selectPage(userId, bounds.offset(), bounds.size());
+        return PageResult.of(list, total, bounds.page(), bounds.size());
+    }
+
+    /** 未读数（顶栏红点，前端只认这一个数） */
+    public long unreadCount(Long userId) {
+        return notificationMapper.countUnread(userId);
+    }
+
+    /**
+     * 标记单条已读（**幂等**：重复标记同一条仍算成功）。
+     *
+     * <p>返回 0 行有两种原因，必须分开对待：
+     * ① 这条不是我的（或不存在）→ 60001，前端静默处理；
+     * ② 是我的、但**已经读过**了 → 仍然成功。
+     *
+     * <p>为什么不直接靠"影响行数 == 0 就是失败"：那取决于连接是否开了 `useAffectedRows`
+     * （MySQL 的 affected-rows 有"匹配行数"与"实际改动行数"两种语义，JDBC 默认是前者）。
+     * 让幂等性依赖一个驱动开关的默认值，是那种"换个人改配置就静默失效"的写法；
+     * 这里显式回查一次（只在 0 行的分支上多花一次查询），语义就与驱动无关了。
+     */
+    public void markRead(Long id, Long userId) {
+        if (notificationMapper.markRead(id, userId) > 0) {
+            return;
+        }
+        Notification existing = notificationMapper.selectById(id);
+        if (existing == null || !userId.equals(existing.getUserId())) {
+            throw new BusinessException(ErrorCode.NOTIFICATION_NOT_FOUND);
+        }
+        // 是我的且已读过：幂等成功（不报错、不重复更新）
+        log.debug("[通知] 重复标记已读，忽略: id={}, userId={}", id, userId);
+    }
+
+    /** 全部已读；返回更新行数（前端可用它做"少了几个红点"的提示） */
+    public int markAllRead(Long userId) {
+        return notificationMapper.markAllRead(userId);
     }
 
     // ---------- 内部 ----------
