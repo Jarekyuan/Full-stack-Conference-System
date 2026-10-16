@@ -42,6 +42,8 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
     /** 角色列表头（逗号分隔；v1.3 起替代原单值 X-User-Role） */
     public static final String HEADER_USER_ROLES = "X-User-Roles";
     private static final String BEARER_PREFIX = "Bearer ";
+    /** WebSocket 路径前缀（只有这条路径接受 ?token=，理由见 resolveToken） */
+    private static final String WS_PATH_PREFIX = "/ws/";
 
     private final AuthProperties authProperties;
     private final ObjectMapper objectMapper;
@@ -102,10 +104,26 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
         return authProperties.getWhitelist().stream().anyMatch(pattern -> pathMatcher.match(pattern, path));
     }
 
+    /**
+     * 取 token：优先 `Authorization: Bearer`，**仅 WebSocket 路径**额外接受 `?token=`。
+     *
+     * <p>为什么 ws 要开这个口子：浏览器的 `new WebSocket(url)` **不允许自定义请求头**
+     * （WebSocket 构造函数只有 url 与 protocols 两个参数），`Authorization` 根本传不出去。
+     * 通行做法就是把凭证放进 query。
+     *
+     * <p>为什么**只**给 ws 开：query 里的凭证会进访问日志、浏览器历史、Referer。
+     * 业务接口没有这个限制，就一律走请求头——开口子只开在真正需要它的那一条路径上。
+     */
     private String resolveToken(ServerHttpRequest request) {
         String header = request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
-        return StrUtil.isNotBlank(header) && header.startsWith(BEARER_PREFIX)
-                ? header.substring(BEARER_PREFIX.length()) : null;
+        if (StrUtil.isNotBlank(header) && header.startsWith(BEARER_PREFIX)) {
+            return header.substring(BEARER_PREFIX.length());
+        }
+        if (request.getURI().getPath().startsWith(WS_PATH_PREFIX)) {
+            String queryToken = request.getQueryParams().getFirst("token");
+            return StrUtil.isBlank(queryToken) ? null : queryToken;
+        }
+        return null;
     }
 
     private Mono<Void> unauthorized(ServerWebExchange exchange, String reason) {

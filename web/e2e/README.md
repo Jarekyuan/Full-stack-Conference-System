@@ -27,6 +27,11 @@ node e2e/e2e-approval.cjs       # T3.F1+F2：审批中心（待办→通过→�
 > 由定时任务推进到"进行中"，才能验证延长/提前结束——所以跑它时**定时任务必须开着**
 > （`meeting.task.status.enabled` 默认 true；跑完 `verify-m3-scheduler.sh` 后记得把服务按默认间隔重启）。
 
+`e2e-notify-ws.cjs` 与其它几个不同：它**不点界面**，而是从真实前端源（`http://localhost:5173`）起页面、
+在里面直接开 WebSocket，验证"网关 `?token=` 鉴权 → 握手 → 秒级推送 → 会话注销"整条链路。
+⚠️ 它必须从**真实前端源**起页面：`about:blank` 会被 Chrome 的本地网络访问保护拦掉
+（`ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS`），而且会让"不带 token 连不上"这条断言假阳性通过。
+
 退出码 `0` = 全部断言通过，非 0 = 有失败（可直接接 CI）。
 
 ## 约定（踩过的坑，改脚本前先看）

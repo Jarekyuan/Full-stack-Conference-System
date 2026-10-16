@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,6 +25,7 @@ import com.smt.notification.enums.NotificationType;
 import com.smt.notification.mapper.NotificationMapper;
 import com.smt.notification.mapper.RecipientMapper;
 import com.smt.notification.vo.NotificationVO;
+import com.smt.notification.ws.NotificationCreatedEvent;
 
 /**
  * 通知生成（T4.3）：把一条会议事件翻译成"N 条站内信"。
@@ -55,6 +57,8 @@ public class NotificationService {
 
     private final NotificationMapper notificationMapper;
     private final RecipientMapper recipientMapper;
+    /** 通知落库后发布事件，由 ws 包在**提交后**推送（T4.6） */
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * 处理一条会议事件（消费者在**重试模板内**调用，失败会整体重试；故本方法必须可重入）。
@@ -227,6 +231,9 @@ public class NotificationService {
             rows.add(n);
         }
         notificationMapper.insertBatch(rows);
+        // 事务内发布：监听器挂在 AFTER_COMMIT 上（推送不可回滚，见 NotificationCreatedEvent 注释）。
+        // rows 里的 id 由 insertBatch 的 useGeneratedKeys 回填——推送体要带 id，前端"标记已读"要用
+        eventPublisher.publishEvent(new NotificationCreatedEvent(rows));
     }
 
     /**

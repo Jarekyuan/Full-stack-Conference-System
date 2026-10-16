@@ -49,6 +49,17 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
+        <!--
+          WebSocket（T4.6：通知实时推送）。
+          用**原生 WebSocket**（WebSocketConfigurer + TextWebSocketHandler）而不是 STOMP：
+          docs/04 六章定义的是一条自有的极简 JSON 协议，不需要 STOMP 的目的地/订阅模型；
+          引 STOMP 只会让前端多背一个客户端库。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-websocket</artifactId>
+        </dependency>
+
         <!-- Nacos 服务发现（网关按服务名 lb:// 转发 /api/notifications/**） -->
         <dependency>
             <groupId>com.alibaba.cloud</groupId>
