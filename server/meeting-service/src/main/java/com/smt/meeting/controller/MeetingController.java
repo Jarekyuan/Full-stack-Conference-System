@@ -9,13 +9,16 @@ import com.smt.meeting.dto.MeetingCancelDTO;
 import com.smt.meeting.dto.MeetingCreateDTO;
 import com.smt.meeting.dto.MeetingExtendDTO;
 import com.smt.meeting.dto.MeetingQueryDTO;
+import com.smt.meeting.dto.RecurringCreateDTO;
 import com.smt.meeting.dto.MeetingUpdateDTO;
 import com.smt.meeting.service.MeetingQueryService;
 import com.smt.meeting.service.MeetingReserveService;
+import com.smt.meeting.service.RecurringService;
 import com.smt.meeting.vo.ExtendLimitVO;
 import com.smt.meeting.vo.MeetingCreateVO;
 import com.smt.meeting.vo.MeetingDetailVO;
 import com.smt.meeting.vo.MeetingVO;
+import com.smt.meeting.vo.RecurringCreateVO;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -37,6 +40,7 @@ public class MeetingController {
 
     private final MeetingReserveService reserveService;
     private final MeetingQueryService queryService;
+    private final RecurringService recurringService;
 
     /**
      * 会议列表（docs/04 4.5）：scope(mine/all)+status+roomId+日期范围+keyword+分页
@@ -85,6 +89,20 @@ public class MeetingController {
     public Result<MeetingCreateVO> create(@Valid @RequestBody MeetingCreateDTO dto) {
         Long organiserId = UserContext.getUserId();
         return Result.success(reserveService.create(dto, organiserId));
+    }
+
+    /**
+     * 创建周期会议（T5.1，契约 docs/04 4.9）：展开 N 场 → 逐场检测 → 任一冲突整体失败（40005 + 场次清单）。
+     *
+     * <p>幂等令牌在这条路径上**更要紧**：重复提交一次单场顶多多一场会，重复提交一次系列
+     * 会一次多出 N 场（而且都要逐个取消）。所以同样挂 @Idempotent。
+     * 限流与单场共用一个桶（默认 "reserve"）：刷系列和刷单场都是同一件"防刷"的事。
+     */
+    @PostMapping("/recurring")
+    @Idempotent("recurring")
+    @RateLimit
+    public Result<RecurringCreateVO> createRecurring(@Valid @RequestBody RecurringCreateDTO dto) {
+        return Result.success(recurringService.create(dto, UserContext.getUserId()));
     }
 
     /** 可延长上限（docs/04 4.6，T3.4）：R-15 的计算在服务端，前端只负责展示 maxDelayMinutes + reason */

@@ -420,7 +420,12 @@ public class MeetingReserveService {
     }
 
     /** 时间合法性 + 策略窗口（R-2 时长 / R-5 提前天数）；策略为空时只做基础校验 */
-    private void validateTime(LocalDateTime start, LocalDateTime end, RoomStrategy strategy) {
+    /**
+     * 时间校验链（私有 → **包内可见**，T5.1 周期会议复用同一份）。
+     * 之所以共用而不是抄一份：这条链会随业务变（新增窗口/节假日规则…），
+     * 两处各写一份必然漂移——"单场能订、周期不能订"这种不一致最难解释。
+     */
+    void validateTime(LocalDateTime start, LocalDateTime end, RoomStrategy strategy) {
         if (!start.isBefore(end)) {
             throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(), "结束时间必须晚于开始时间");
         }

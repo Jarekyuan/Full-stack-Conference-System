@@ -63,6 +63,27 @@ public class MeetingLockHelper {
         }
     }
 
+    /**
+     * 在锁保护下执行 action，**锁覆盖给定的这批自然日**（T5.1 周期会议用）。
+     *
+     * <p>为什么需要这个重载：周期会议一次创建 N 场，日期是**不连续**的（每周一场）。
+     * 用"覆盖首末区间"的版本会把中间每一天都锁上——那些天根本没有本系列的会议，
+     * 却会让别人的单场预约白等 3 秒（严重时并发高就直接 10007）。
+     * 只锁"真的要写的那几天"，锁的语义才与"改变这几天的占用"对齐。
+     *
+     * <p>日期必须是同一把锁体系里的 key（`lock:meeting:{roomId}:{date}`）——
+     * 与单场创建共用，系列创建与并发单场预约才会互斥（红线的要求）。
+     */
+    public <T> T executeWithLockOnDates(Long roomId, SortedSet<LocalDate> dates, Supplier<T> action) {
+        List<RLock> locks = new ArrayList<>();
+        try {
+            acquireInto(locks, roomId, dates);
+            return action.get();
+        } finally {
+            release(locks);
+        }
+    }
+
     /** 逐日取锁；取到几把就往 locks 里加几把（中途失败由调用方的 finally 统一释放） */
     private void acquireInto(List<RLock> locks, Long roomId, LocalDateTime start, LocalDateTime end) {
         // 覆盖 [start 当天 .. end 当天]（端点日期也纳入：宁可多锁一天，避免半开区间的边界漏洞）
@@ -70,6 +91,12 @@ public class MeetingLockHelper {
         for (LocalDate d = start.toLocalDate(); !d.isAfter(end.toLocalDate()); d = d.plusDays(1)) {
             dates.add(d);
         }
+        acquireInto(locks, roomId, dates);
+    }
+
+    /** 逐日取锁（日期已定）：TreeSet 再排一次，保证**无论调用方怎么传**都按升序取，避免死锁 */
+    private void acquireInto(List<RLock> locks, Long roomId, SortedSet<LocalDate> inputDates) {
+        SortedSet<LocalDate> dates = new TreeSet<>(inputDates);
 
         for (LocalDate date : dates) {
             RLock lock = redisson.getLock(KEY_PREFIX + roomId + ":" + date);

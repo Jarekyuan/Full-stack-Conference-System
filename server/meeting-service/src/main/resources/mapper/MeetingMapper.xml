@@ -57,6 +57,19 @@
         VALUES (#{title}, #{roomId}, #{organiserId}, #{startTime}, #{endTime}, #{status}, #{remark}, #{recurringId})
     </insert>
 
+    <!-- 周期会议批量落库（T5.1）：一条多值 INSERT + 回填自增 id（useGeneratedKeys 对"单值集合参数"按顺序回填）。
+         同一事务里的 N 场要么都成、要么都不成——半截的系列比"整批失败"更难收拾
+         （用户看到"创建失败"却已经多了三场会议）。 -->
+    <insert id="insertBatch" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO meeting
+            (title, room_id, organiser_id, start_time, end_time, status, remark, recurring_id)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (#{item.title}, #{item.roomId}, #{item.organiserId}, #{item.startTime}, #{item.endTime},
+             #{item.status}, #{item.remark}, #{item.recurringId})
+        </foreach>
+    </insert>
+
     <!-- 冲突会议简报（JOIN sys_user 直出组织人名；同库只读展示字段） -->
     <resultMap id="ConflictVOMap" type="com.smt.meeting.vo.MeetingConflictVO">
         <id column="meeting_id" property="meetingId"/>

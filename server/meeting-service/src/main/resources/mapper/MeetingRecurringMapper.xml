@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 周期会议规则 SQL（手写 XML；规则表是历史记录，只增不改：改规则等于新建一个系列） -->
+<mapper namespace="com.smt.meeting.mapper.MeetingRecurringMapper">
+
+    <resultMap id="BaseResultMap" type="com.smt.meeting.entity.MeetingRecurring">
+        <id column="id" property="id"/>
+        <result column="organiser_id" property="organiserId"/>
+        <result column="room_id" property="roomId"/>
+        <result column="title" property="title"/>
+        <result column="day_of_week" property="dayOfWeek"/>
+        <result column="start_minutes" property="startMinutes"/>
+        <result column="duration_minutes" property="durationMinutes"/>
+        <result column="start_date" property="startDate"/>
+        <result column="end_date" property="endDate"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO meeting_recurring
+            (organiser_id, room_id, title, day_of_week, start_minutes, duration_minutes, start_date, end_date)
+        VALUES
+            (#{organiserId}, #{roomId}, #{title}, #{dayOfWeek}, #{startMinutes}, #{durationMinutes},
+             #{startDate}, #{endDate})
+    </insert>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT id, organiser_id, room_id, title, day_of_week, start_minutes, duration_minutes,
+               start_date, end_date, created_at
+        FROM meeting_recurring
+        WHERE id = #{id}
+    </select>
+</mapper>

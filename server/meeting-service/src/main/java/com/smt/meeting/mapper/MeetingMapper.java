@@ -39,6 +39,12 @@ public interface MeetingMapper {
     int insert(Meeting meeting);
 
     /**
+     * 批量插入（T5.1 周期会议：一次创建 N 场，同一事务）。
+     * 带 {@code useGeneratedKeys}：场次 id 要回填——响应里要返回它们、也要写状态日志。
+     */
+    int insertBatch(@Param("list") List<Meeting> meetings);
+
+    /**
      * 冲突检测核心查询（对照 docs/03 4.1）：扫描区间 [scanStart, scanEnd) 内该会议室的占用会议。
      * 调用方（ConflictChecker）负责按锁定缓冲扩展扫描区间；此处只做纯区间判重。
      * 占用状态：20 已预约 / 30 进行中（R-4：10 待审批不占用）。
