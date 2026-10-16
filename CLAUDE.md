@@ -21,7 +21,7 @@
   - `gateway`（:8080）—— 统一入口 + JWT 鉴权 + 身份头注入
   - `auth-service`（:8081）—— 登录/双 token/用户/部门/角色
   - `meeting-service`（:8082）—— 会议/会议室/预约/审批（核心）
-  - `notification-service`（:8083）—— 骨架已建（T4.2），消费/站内信/提醒/WS 见 M4 T4.3+
+  - `notification-service`（:8083）—— 消费事件 → 站内信（T4.3 已通）；REST/提醒/WS 见 T4.4~T4.6
 
 ---
 
@@ -50,7 +50,7 @@
 | M2 后端（预约核心） | ✅ **10/10** | 状态机 → 冲突检测 → 可用性/日历 → 创建预约 → 幂等 → Redisson 锁 → 并发脚本 → 列表详情 → 取消 → 修改（乐观锁） |
 | M2 前端 | ✅ **3/3** | ✅ T2.F1 日历页（时间轴定位 + memo 行级组件化）｜✅ T2.F2 预约表单 Drawer（防抖冲突提示 + 幂等提交）｜✅ T2.F3 我的会议列表 + 详情（筛选分页 + 状态时间线 + 取消） |
 | M3 审批+生命周期 | ✅ **8/8** | ✅ T3.1 待办/已办列表｜✅ T3.2 审批通过（复检+行锁）｜✅ T3.3 拒绝｜✅ T3.4 延长 + 提前结束｜✅ T3.5 定时流转｜✅ T3.6 对账补偿｜✅ T3.F1 审批中心（前端）｜✅ T3.F2 详情页延长/结束（前端） |
-| M4 通知+MQ+打磨 | 🟡 **2/12** | ✅ T4.1 事件发布（`meeting.events` topic + 事务提交后投递）｜✅ T4.2 notification-service 骨架（:8083） |
+| M4 通知+MQ+打磨 | 🟡 **3/12** | ✅ T4.1 事件发布（`meeting.events` topic + 事务提交后投递）｜✅ T4.2 notification-service 骨架（:8083）｜✅ T4.3 消费落库站内信（幂等 + 手动 ACK + 死信） |
 | M5 进阶+部署 | ⬜ | 7 任务 |
 
 **当前聚焦：M4 通知 + MQ + 打磨**（M2/M3 已全部完成并逐条实测）。
@@ -76,11 +76,13 @@
 > - ⚠️ `verify-m3-scheduler.sh` 会**接管 8082**（起两个实例抢任务锁），跑完要按默认配置重启服务。
 >
 > **M4 进度与交接（2026-10-16）**：
-> - ✅ T4.1 事件发布 / ✅ T4.2 骨架（:8083）已完成，**下一个是 T4.3 消费（幂等 + 手动 ACK + 死信队列）**。
-> - ⚠️ **T4.3 的死信队列有个必踩的坑**：MQ 里队列的参数是"建立时定死"的，
->   消费端若给同名队列声明**不同参数**（加 `x-dead-letter-exchange`），与生产端已声明的会冲突（`PRECONDITION_FAILED`）。
->   要么两边声明**完全同参**（改参数后必须**删掉已有队列重建**，管理台/RabbitConfig 都行），
->   要么只让一端声明、另一端纯消费。别一边加 DLX 一边不动另一边。
+> - ✅ T4.1 事件发布 / ✅ T4.2 骨架 / ✅ T4.3 消费（幂等 + 手动 ACK + 死信）已完成，**下一个是 T4.4 通知 REST 接口**。
+> - 🔧 **死信拓扑已由 `MeetingMqTopology`（meeting-common）统一声明**，生产端/消费端都引用它——
+>   队列参数（含 `x-dead-letter-exchange`）不可能漂移。⚠️ 若将来**再改**队列参数：
+>   RabbitMQ 的参数是建立时定死的，必须**删掉老队列重建**（且两边同源改），否则 `PRECONDITION_FAILED`。
+> - 📌 消息契约（`MeetingEventType`/`MeetingDomainEvent`/`MeetingEventMessage`）也在 `com.smt.common.mq`：
+>   它们是**跨服务契约**，别把它们搬回 meeting-service。消费端用 `TypePrecedence.INFERRED` 反序列化
+>   （类型取监听方法签名、不信任消息头 `__TypeId__`），所以消费端不依赖 FQCN，但共享模块保证字段不会漂移。
 > - ⚠️ **T4.5 提醒不要照抄 02 文档 5.4 的结论**：那句"固定提前量天然规避队头阻塞"**推理站不住**
 >   ——TTL 队列只在队头判过期，排在下周的会议堵在队头时，后面今天的提醒出不来。
 >   正解是分桶延迟队列（按时段分队列）或定时扫描，02 文档已记此坑。
@@ -186,6 +188,27 @@
     `CommonWebAutoConfigurationTest` 编译不过 → 构建其实失败了，却因为看的是管道退出码而误判为成功，
     导致后面"用旧 jar 启动服务 + 连新 Redis"打出一堆 `NOAUTH` 假故障。
 
+12. **`mvn -pl <下游模块> package` 不带 `-am` 会静默链上 `~/.m2` 里的旧共享库**（2026-10-16 踩到，构建全绿、启动即崩）：
+    给 `meeting-common` 加了新包后，用 `mvn -q -pl notification-service -DskipTests package` 打包 ——
+    编译"成功"（**增量编译跳过了没变的源码**，复用了上次的 target/classes），`package` 却把 `~/.m2` 里的**旧**
+    meeting-common jar 塞进了 fat jar，于是运行时炸 `NoClassDefFoundError: com/smt/common/mq/MeetingEventMessage`。
+    **规矩**：改了共享库就用根目录的 `mvn -q -DskipTests clean install`（或至少给上游模块补 `-am`/先 install），
+    别对下游模块单点 `package`。与踩坑 #7（桩类时间戳）是同一类："构建绿"不等于"跑的是新代码"。
+    自检：`unzip -l <fat.jar> | grep meeting-common` 看出嵌套 jar 的时间戳，或解开看类在不在。
+13. **验证脚本之间会互相破坏前提（消费者 vs 生产者断言）**（2026-10-16）：
+    `verify-m4-mq.sh` 断言"消息**还留在队列里**"，而 notification-service 就是这些队列的消费者——
+    它一在跑，消息在断言前就被 ack 掉了，脚本表现成"生产端没发消息"（实测 5/11，失败信息完全指向错误的方向）。
+    已加前置守卫：脚本检测到 8083 在监听就直接报错退出，并提示改跑 `verify-m4-notify-consume.sh`（那个自起自收 8083）。
+    **推广**：加了消费者之后，任何"读队列做断言"的脚本都要先想清楚"此刻谁在消费"。
+14. **脚本的残留不止在数据库里，还在 Redis**（2026-10-16）：
+    `verify-m4-notify-consume.sh` 第一次重跑时三条断言全红，原因是**上一轮**留下的 `mq:idem:{msgId}`（TTL 24h）
+    让同 msgId 的消息被正确判成"重复"、脚本却期待"新插入"。数据库清了不等于干净。
+    规矩：自清理要覆盖**它自己写过的每一个存储**（MySQL 行 / Redis 键 / MQ 队列与死信）；
+    脚本开头也要把自己弄到干净状态，而不是指望上一次跑完清过。
+    ⚠️ 顺带两条小坑：① 清孤儿数据时 `DELETE n FROM a n LEFT JOIN b`（多表 DELETE）在 mysql 客户端
+    **没选库**时会报 `1046 No database selected`，而我把 stderr 扔进了 /dev/null → 看到的是"删除成功 11 行"的假象，
+    实际一行没删。**验证类命令别吞 stderr**。② 日志断言别把全角括号写进模式（"已重试 3 次）"对不上"已重试 3 次，"）。
+
 ---
 
 ## 7. 怎么跑起来
@@ -217,6 +240,9 @@ bash scripts/verify-m3-extend.sh                  # T3.4：延长上限两场景
 bash scripts/verify-m3-scheduler.sh               # T3.5/T3.6：定时流转、多实例互斥、幂等、对账补偿（⚠️ 会接管 8082，跑完需自行重启服务）
 bash scripts/verify-m4-mq.sh                       # T4.1：五类领域事件真投到 broker（routingKey/payload 核对，自清理）
 bash scripts/verify-m4-notification-skeleton.sh     # T4.2：notification-service 骨架（自起自收 8083，跑完不留进程）
+bash scripts/verify-m4-notify-consume.sh           # T4.3：五类事件落站内信、幂等、两条失败路径进死信（自起自收 8083）
+#   ⚠️ verify-m4-mq.sh 与上面两个脚本**不能同时跑**：MQ 脚本要求 8083 停着（消费者会把待断言的消息吃掉），
+#      脚本已加守卫会明确报错——这属于设计，不是 bug
 cd server && mvn -q test -Dtest='!AuthFeignClientTest#batchUsersShouldDegradeWhenAuthDown' -Dsurefire.failIfNoSpecifiedTests=false  # 单测 47 例（那条降级用例需 auth 停机时单独跑）
 #   ⚠️ 别用 `mvn ... | tail`：管道会把退出码换成 tail 的（见踩坑 #11）
 #   ⚠️ `-Dtest='!...'` 必须配 `-Dsurefire.failIfNoSpecifiedTests=false`：否则**没有测试的模块**（gateway）

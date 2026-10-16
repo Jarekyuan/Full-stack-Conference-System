@@ -22,13 +22,25 @@ spring:
       # 与 deploy/docker-compose.infra.yml 的 REDIS_PASSWORD 同源（评审 C1：Redis 不再免密）
       # T4.3 的消费幂等 SETNX(mq:idem:{msgId}) 走这个实例
       password: ${REDIS_PASSWORD:redis123}
-  # RabbitMQ：**消费端**（T4.3 起）。队列与交换机拓扑在 meeting-service/RabbitConfig 里声明，
-  # 本服务 T4.3 会声明同一份（同名同参数重复声明是幂等的）——谁先启动谁创建，不存在时序问题。
+  # RabbitMQ：**消费端**（T4.3）。拓扑与生产端同源（common 的 MeetingMqTopology），
+  # 两边声明同名同参数是幂等的——谁先启动谁创建，不存在"生产端必须先启动"的时序依赖。
   rabbitmq:
     host: 127.0.0.1
     port: 5672
     username: ${RABBITMQ_USER:guest}
     password: ${RABBITMQ_PASSWORD:guest}
+    listener:
+      simple:
+        # 手动 ACK：处理成功才 ack（T4.3 ③）。自动模式下"方法返回即 ack"，
+        # 把异常 catch 在方法里就会让失败静默变成成功——失败必须由代码显式决定去向。
+        acknowledge-mode: manual
+        # 反序列化失败这类"容器层"异常不要无限重投（重投多少次都一样），直接转死信。
+        # 业务异常的去向由消费者代码显式 nack 决定，不依赖这个开关。
+        default-requeue-rejected: false
+        # 一次只预取一条：通知量不大，避免"消费者积压一堆未 ack 消息"在重启时被大量重投
+        prefetch: 1
+        # 每队列单消费者：同队列内串行 ⇒ 同一条消息不会被两个线程同时处理（幂等判断的竞态前提）
+        concurrency: 1
   cloud:
     nacos:
       discovery:
@@ -53,3 +65,8 @@ management:
 logging:
   level:
     com.smt: debug
+    # 重试过程默认**没有任何日志**（RetryTemplate 内部只在失败时由调用方记录），
+    # 于是"消息到底重试了几次、退避了多久"完全看不见——排障时只能靠猜。
+    # 开发期打开它，日志里会出现 `Retry: count=0/1/2`，重试次数一目了然
+    # （scripts/verify-m4-notify-consume.sh 就是拿这几行当断言的；上量后按需调回 info）
+    org.springframework.retry: debug

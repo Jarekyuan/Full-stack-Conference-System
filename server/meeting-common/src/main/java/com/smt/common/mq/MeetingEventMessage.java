@@ -1,8 +1,6 @@
-package com.smt.meeting.mq;
+package com.smt.common.mq;
 
 import java.time.LocalDateTime;
-
-import com.smt.meeting.event.MeetingDomainEvent;
 
 /**
  * MQ 消息体（T4.1）：领域事件外面再包一层"消息元数据"。
@@ -13,6 +11,11 @@ import com.smt.meeting.event.MeetingDomainEvent;
  *
  * <p>`msgId` 是消费端幂等去重的键（T4.3 用 SETNX 去重）：MQ 的投递语义是 at-least-once，
  * 同一条消息**一定会**重复投递（消费者 ack 前断连、网络抖动重投），所以去重是消费端的责任，不是可选项。
+ *
+ * <p>⚠️ 这个类在 meeting-common（T4.3 从 meeting-service 迁过来）：它**是线上格式**，
+ * 生产端与消费端必须按同一份契约读写。放在生产端模块里，消费端只能用同名同字段的复制品，
+ * 改名/加字段时两边编译都不会报错，只有线上反序列化出来是 null。
+ * （消费端另有 `TypePrecedence.INFERRED` 兜底：类型取自监听方法签名，不信任消息头里的类名——见 notification-service 的 RabbitConfig。）
  */
 public record MeetingEventMessage(String msgId, LocalDateTime occurredAt, MeetingDomainEvent data) {
 

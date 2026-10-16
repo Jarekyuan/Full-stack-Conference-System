@@ -35,6 +35,18 @@
             <optional>true</optional>
         </dependency>
 
+        <!--
+          RabbitMQ（T4.3）：common 里的 `com.smt.common.mq` 包需要 amqp 的 Queue/Binding 类型。
+          optional=true 的理由同 starter-web —— 只有 meeting-service / notification-service 用得到，
+          不让 gateway / auth 被动引入一套 MQ 依赖（它们既不生产也不消费）。
+          只用得到 amqp 的"声明模型"类型，不涉及连接：两个服务各自引 starter-amqp 提供连接与监听器。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+            <optional>true</optional>
+        </dependency>
+
         <!-- Spring Security 核心：UserHeaderFilter 桥接 SecurityContext + 方法级鉴权依赖 -->
         <dependency>
             <groupId>org.springframework.security</groupId>

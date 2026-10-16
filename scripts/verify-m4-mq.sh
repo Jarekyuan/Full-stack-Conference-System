@@ -77,12 +77,23 @@ U1=$(login user1 user123); AP1=$(login approver1 user123)
 IDS=""
 cleanup() {
   for m in $IDS; do
-    sql "DELETE FROM smt_meeting.meeting_status_log WHERE meeting_id=$m;
+    sql "DELETE FROM smt_meeting.notification WHERE meeting_id=$m;
+         DELETE FROM smt_meeting.meeting_status_log WHERE meeting_id=$m;
          DELETE FROM smt_meeting.meeting_approval WHERE meeting_id=$m;
          DELETE FROM smt_meeting.meeting WHERE id=$m;" >/dev/null
   done
 }
 trap cleanup EXIT
+
+# ⚠️ 前置守卫（T4.3 起）：本脚本断言的是"消息还在队列里"，而 notification-service
+# 就是这些队列的消费者——它一在跑，消息在断言之前就被 ack 掉了，看到的全是 0 条，
+# 表现得像"生产端没发出去"（实测：消费者在跑时本脚本 5/11，且失败信息完全指向错误的方向）。
+if [ -n "$(lsof -nP -iTCP:8083 -sTCP:LISTEN -t 2>/dev/null)" ]; then
+  echo "❌ 检测到 notification-service（:8083）正在运行：它会消费掉待断言的消息。"
+  echo "   先停掉它再跑本脚本（例：kill \$(lsof -nP -iTCP:8083 -sTCP:LISTEN -t)），"
+  echo "   或改跑 scripts/verify-m4-notify-consume.sh（那个脚本验的是消费侧，会自己起停 8083）。"
+  exit 1
+fi
 
 echo
 echo "=== 清空历史消息（保证断言只看到本次产生的）==="

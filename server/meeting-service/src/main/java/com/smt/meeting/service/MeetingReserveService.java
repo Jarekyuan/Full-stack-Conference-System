@@ -9,7 +9,7 @@ import com.smt.meeting.entity.MeetingParticipant;
 import com.smt.meeting.entity.MeetingRoom;
 import com.smt.meeting.entity.RoomStrategy;
 import com.smt.meeting.enums.MeetingEventEnum;
-import com.smt.meeting.event.MeetingDomainEvent;
+import com.smt.common.mq.MeetingDomainEvent;
 import com.smt.meeting.enums.MeetingStatusEnum;
 import com.smt.meeting.lock.MeetingLockHelper;
 import com.smt.meeting.mapper.MeetingMapper;
@@ -83,7 +83,7 @@ public class MeetingReserveService {
                     // 这里的顺序很关键——事件注册在事务里，发送在提交后，回滚则不发
                     eventPublisher.publishEvent(MeetingDomainEvent.created(
                             meeting.getId(), meeting.getTitle(), meeting.getRoomId(), organiserId,
-                            meeting.getStartTime(), meeting.getEndTime()));
+                            meeting.getStartTime(), meeting.getEndTime(), status));
 
                     return new MeetingCreateVO(meeting.getId(), status, needApproval,
                             needApproval ? "预约已提交，等待审批" : "预约成功");
@@ -164,7 +164,8 @@ public class MeetingReserveService {
 
         // 只改 title/remark：占用时段没变，不涉及抢时段，无需抢锁
         if (!scheduleChanged) {
-            transactionTemplate.executeWithoutResult(tx -> applyUpdate(meetingId, dto, operatorId, false));
+            transactionTemplate.executeWithoutResult(
+                    tx -> applyUpdate(meetingId, meeting.getOrganiserId(), dto, operatorId, false));
             return;
         }
 
@@ -178,13 +179,14 @@ public class MeetingReserveService {
                 transactionTemplate.execute(tx -> {
                     meetingRoomMapper.selectIdForUpdate(room.getId()); // 数据库兜底（Redis 锁失效仍拦得住）
                     checkConflict(room.getId(), dto.getStartTime(), dto.getEndTime(), meetingId); // 排除自身
-                    applyUpdate(meetingId, dto, operatorId, backToApproval);
+                    applyUpdate(meetingId, meeting.getOrganiserId(), dto, operatorId, backToApproval);
                     return null;
                 }));
     }
 
     /** 乐观锁更新 + R-14 状态回退（必须在事务内调用） */
-    private void applyUpdate(Long meetingId, MeetingUpdateDTO dto, Long operatorId, boolean backToApproval) {
+    private void applyUpdate(Long meetingId, Long organiserId, MeetingUpdateDTO dto, Long operatorId,
+                             boolean backToApproval) {
         // 乐观锁（只改非状态字段 + version 自增）；
         // 同时校 status=RESERVED：改期与取消是两条不同的写路径（后者只改 status、不动 version），
         // 只校 version 拦不住交叉写（评审 C4）。两个条件任一不满足都按 40002 提示刷新重试。
@@ -200,9 +202,12 @@ public class MeetingReserveService {
             stateMachine.transition(meetingId, MeetingEventEnum.MODIFY, operatorId, "修改到需审批会议室，重新送审");
         }
         // 修改事件（T4.1）：只改标题/备注也会走到这里，消费端按需决定要不要提醒参会人
+        // status 传"修改后的状态"：R-14 回退到 10 时，消费端据此再通知一次审批人（T4.3）
         eventPublisher.publishEvent(MeetingDomainEvent.updated(
-                meetingId, dto.getTitle(), dto.getRoomId(), operatorId,
-                dto.getStartTime(), dto.getEndTime(), operatorId));
+                meetingId, dto.getTitle(), dto.getRoomId(), organiserId,
+                dto.getStartTime(), dto.getEndTime(),
+                backToApproval ? MeetingStatusEnum.PENDING_APPROVAL.getCode() : MeetingStatusEnum.RESERVED.getCode(),
+                operatorId));
     }
 
     // ---------- 延长 / 提前结束（T3.4） ----------

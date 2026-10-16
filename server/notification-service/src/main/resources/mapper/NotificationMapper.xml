@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 站内通知 SQL（手写 XML；只写自己这张表——别的表都是只读，见 RecipientMapper） -->
+<mapper namespace="com.smt.notification.mapper.NotificationMapper">
+
+    <resultMap id="BaseResultMap" type="com.smt.notification.entity.Notification">
+        <id column="id" property="id"/>
+        <result column="user_id" property="userId"/>
+        <result column="type" property="type"/>
+        <result column="title" property="title"/>
+        <result column="content" property="content"/>
+        <result column="meeting_id" property="meetingId"/>
+        <result column="read_flag" property="readFlag"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <!-- 一次事件通知多个收件人：一条多值 INSERT，而不是循环单条——
+         同一次消费的 N 条通知必须在**同一事务**里落库（通知要么都发、要么都不发），
+         合并成一条 SQL 顺便省掉 N-1 次往返。
+         read_flag 显式写 0：不依赖列默认值，读 SQL 的人一眼能看到"新通知是未读"。 -->
+    <insert id="insertBatch">
+        INSERT INTO notification (user_id, type, title, content, meeting_id, read_flag)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (#{item.userId}, #{item.type}, #{item.title}, #{item.content}, #{item.meetingId}, 0)
+        </foreach>
+    </insert>
+</mapper>

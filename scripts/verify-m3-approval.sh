@@ -92,7 +92,8 @@ cleanup() {
   for m in $CREATED_U1; do cancel "$U1" "$m"; done
   for m in $CREATED_U2; do cancel "$U2" "$m"; done
   for m in $ALL_CREATED; do
-    sql "DELETE FROM smt_meeting.meeting_status_log WHERE meeting_id=$m;
+    sql "DELETE FROM smt_meeting.notification WHERE meeting_id=$m;
+         DELETE FROM smt_meeting.meeting_status_log WHERE meeting_id=$m;
          DELETE FROM smt_meeting.meeting_participant WHERE meeting_id=$m;
          DELETE FROM smt_meeting.meeting_approval WHERE meeting_id=$m;
          DELETE FROM smt_meeting.meeting WHERE id=$m;" >/dev/null

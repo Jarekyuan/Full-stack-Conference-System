@@ -15,8 +15,9 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import com.smt.meeting.config.RabbitConfig;
-import com.smt.meeting.event.MeetingDomainEvent;
+import com.smt.common.mq.MeetingMqTopology;
+import com.smt.common.mq.MeetingDomainEvent;
+import com.smt.common.mq.MeetingEventMessage;
 
 /**
  * T4.1 验收：**消息只在事务提交后发出**（docs/02 5.2 第 7 步）。
@@ -41,7 +42,7 @@ class MeetingEventPublisherTest {
 
     private MeetingDomainEvent sampleEvent() {
         return MeetingDomainEvent.created(1L, "MQ 时序验证", 6L, 4L,
-                LocalDateTime.of(2026, 12, 1, 10, 0), LocalDateTime.of(2026, 12, 1, 11, 0));
+                LocalDateTime.of(2026, 12, 1, 10, 0), LocalDateTime.of(2026, 12, 1, 11, 0), 20);
     }
 
     @Test
@@ -51,7 +52,7 @@ class MeetingEventPublisherTest {
         // 第三个参数要写具体类型：RabbitTemplate 有 (String,Object,CorrelationData) 与
         // (String,String,Object) 两个三参重载，用裸 any() 会编译期歧义
         verify(rabbitTemplate, times(1))
-                .convertAndSend(eq(RabbitConfig.EXCHANGE), eq("meeting.created"), any(MeetingEventMessage.class));
+                .convertAndSend(eq(MeetingMqTopology.EXCHANGE), eq("meeting.created"), any(MeetingEventMessage.class));
     }
 
     @Test

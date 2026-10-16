@@ -7,8 +7,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
-import com.smt.meeting.config.RabbitConfig;
-import com.smt.meeting.event.MeetingDomainEvent;
+import com.smt.common.mq.MeetingDomainEvent;
+import com.smt.common.mq.MeetingEventMessage;
+import com.smt.common.mq.MeetingMqTopology;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -45,7 +46,7 @@ public class MeetingEventPublisher {
         MeetingEventMessage message = MeetingEventMessage.of(UUID.randomUUID().toString(), event);
         String routingKey = message.routingKey();
         try {
-            rabbitTemplate.convertAndSend(RabbitConfig.EXCHANGE, routingKey, message);
+            rabbitTemplate.convertAndSend(MeetingMqTopology.EXCHANGE, routingKey, message);
             log.info("[MQ] 已发送事件 {} meetingId={} msgId={}", routingKey, event.meetingId(), message.msgId());
         } catch (Exception e) {
             // 不抛（见类注释）；ERROR 级别因为这是"通知链路断了"，需要人知道

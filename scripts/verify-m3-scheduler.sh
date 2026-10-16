@@ -84,7 +84,7 @@ free_port() { # 杀掉占用该端口的进程（比 pid 文件可靠：孤儿�
 }
 stop_pidfile() { [ -f "$1" ] && kill "$(cat "$1")" 2>/dev/null; rm -f "$1"; sleep 1; }
 drop_meeting() {
-  sql "DELETE FROM smt_meeting.meeting_status_log WHERE meeting_id=$1; DELETE FROM smt_meeting.meeting_participant WHERE meeting_id=$1; DELETE FROM smt_meeting.meeting WHERE id=$1;" >/dev/null
+  sql "DELETE FROM smt_meeting.notification WHERE meeting_id=$1; DELETE FROM smt_meeting.meeting_status_log WHERE meeting_id=$1; DELETE FROM smt_meeting.meeting_participant WHERE meeting_id=$1; DELETE FROM smt_meeting.meeting WHERE id=$1;" >/dev/null
 }
 cleanup() {
   stop_pidfile /tmp/m3-peer.pid

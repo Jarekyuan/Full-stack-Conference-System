@@ -42,7 +42,7 @@ U1=$(login user1 user123); U2=$(login user2 user123)
 IDS=""
 cleanup() {
   for m in $IDS; do
-    sql "DELETE FROM smt_meeting.meeting_status_log WHERE meeting_id=$m; DELETE FROM smt_meeting.meeting_participant WHERE meeting_id=$m; DELETE FROM smt_meeting.meeting WHERE id=$m;" >/dev/null
+    sql "DELETE FROM smt_meeting.notification WHERE meeting_id=$m; DELETE FROM smt_meeting.meeting_status_log WHERE meeting_id=$m; DELETE FROM smt_meeting.meeting_participant WHERE meeting_id=$m; DELETE FROM smt_meeting.meeting WHERE id=$m;" >/dev/null
   done
 }
 trap cleanup EXIT

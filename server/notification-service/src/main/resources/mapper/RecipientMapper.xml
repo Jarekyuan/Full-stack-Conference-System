@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 收件人解析（只读跨域表，理由见 RecipientMapper 接口注释；本文件不含任何写操作） -->
+<mapper namespace="com.smt.notification.mapper.RecipientMapper">
+
+    <!-- 会议参会人：命中 uk_meeting_user(meeting_id, user_id) 的最左前缀，走索引不回表 -->
+    <select id="selectParticipantIds" resultType="java.lang.Long">
+        SELECT user_id
+        FROM meeting_participant
+        WHERE meeting_id = #{meetingId}
+        ORDER BY user_id
+    </select>
+
+    <!-- 审批人：sys_role 按 code 唯一索引定位，再经 sys_user_role.idx_role 关联；
+         顺带过滤停用账号（sys_user.status=0）——给已离职的人发待办是纯噪音。
+         DISTINCT 防"同一用户被重复授权同角色"（当前有 uk_user_role 唯一键兜着，属防御性写法） -->
+    <select id="selectApproverIds" resultType="java.lang.Long">
+        SELECT DISTINCT ur.user_id
+        FROM sys_user_role ur
+        JOIN sys_role r ON r.id = ur.role_id
+        JOIN sys_user u ON u.id = ur.user_id
+        WHERE r.code = 'APPROVER'
+          AND r.status = 1
+          AND u.status = 1
+        ORDER BY ur.user_id
+    </select>
+</mapper>

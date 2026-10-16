@@ -1,11 +1,9 @@
 package com.smt.meeting.config;
 
-import org.springframework.amqp.core.Binding;
-import org.springframework.amqp.core.BindingBuilder;
-import org.springframework.amqp.core.Queue;
-import org.springframework.amqp.core.QueueBuilder;
-import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.core.AmqpAdmin;
+import org.springframework.amqp.core.Binding;
+import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.boot.ApplicationRunner;
@@ -14,30 +12,23 @@ import org.springframework.context.annotation.Configuration;
 
 import lombok.extern.slf4j.Slf4j;
 
-import com.smt.meeting.event.MeetingEventType;
+import com.smt.common.mq.MeetingEventType;
+import com.smt.common.mq.MeetingMqTopology;
 
 /**
- * RabbitMQ 拓扑（T4.1）。
+ * RabbitMQ 拓扑（T4.1，生产端视角）。
  *
- * <p>拓扑：一个 topic exchange {@code meeting.events} + 每个事件类型一个队列，队列名 == 路由键。
- * 用 topic 而非 direct/fanout：路由键带层级（`meeting.created`），将来加"预约域"下的新事件
- * （如 `meeting.recurring.*`）或按域通配订阅（`meeting.#`）都不用改拓扑。
+ * <p>交换机/队列/绑定的**定义**不在这里，在 {@link MeetingMqTopology}（meeting-common）——
+ * 因为消费端（notification-service）要声明**一模一样**的一份，而队列参数不一致会
+ * {@code PRECONDITION_FAILED}（详见该类注释）。这里只负责把共享定义注册成 Bean。
  *
  * <p>为什么每个事件一个队列、而不是一个队列吃全部：通知的**处理策略按场景不同**
  * （提醒要校验时间是否改过、取消要通知参会人），分开后每个消费者只关心自己那类，
- * 某类消费卡住也不会堵住其他类型。代价是队列数量随事件类型增长——当前 6 个，可控。
- *
- * <p>⚠️ 这里声明的是**生产者视角**的拓扑。notification-service（T4.2 起）也会声明同样的队列：
- * 两个服务都声明同名同参数的对象是幂等的（RabbitMQ 对同参数重复声明返回成功），
- * 谁先启动谁创建，不存在"生产者先起、队列还没建、消息被丢"的时序问题——
- * 这正是"声明式拓扑"相对"控制台手工建队列"的价值。
+ * 某类消费卡住也不会堵住其他类型。代价是队列数量随事件类型增长——当前 6 个（含 T4.5 的提醒队列），可控。
  */
 @Slf4j
 @Configuration
 public class RabbitConfig {
-
-    /** 会议事件交换机（topic） */
-    public static final String EXCHANGE = "meeting.events";
 
     /**
      * 消息转换器：JSON。
@@ -51,7 +42,17 @@ public class RabbitConfig {
 
     @Bean
     public TopicExchange meetingEventExchange() {
-        return new TopicExchange(EXCHANGE, true, false); // durable=true, autoDelete=false
+        return MeetingMqTopology.eventExchange();
+    }
+
+    @Bean
+    public TopicExchange meetingDeadLetterExchange() {
+        return MeetingMqTopology.deadLetterExchange();
+    }
+
+    @Bean
+    public Queue meetingDeadLetterQueue() {
+        return MeetingMqTopology.deadLetterQueue();
     }
 
     /**
@@ -80,67 +81,73 @@ public class RabbitConfig {
         };
     }
 
-    /** 一个事件类型一个队列（队列名 == 路由键，排障时一眼对得上；逐个声明是因为 @Bean 不支持批量） */
+    // ---- 事件队列（队列名 == 路由键，逐个声明是因为 @Bean 不支持批量） ----
+
     @Bean
     public Queue meetingCreatedQueue() {
-        return QueueBuilder.durable(MeetingEventType.CREATED.routingKey()).build();
+        return MeetingMqTopology.eventQueue(MeetingEventType.CREATED);
     }
 
     @Bean
     public Queue meetingApprovedQueue() {
-        return QueueBuilder.durable(MeetingEventType.APPROVED.routingKey()).build();
+        return MeetingMqTopology.eventQueue(MeetingEventType.APPROVED);
     }
 
     @Bean
     public Queue meetingRejectedQueue() {
-        return QueueBuilder.durable(MeetingEventType.REJECTED.routingKey()).build();
+        return MeetingMqTopology.eventQueue(MeetingEventType.REJECTED);
     }
 
     @Bean
     public Queue meetingCancelledQueue() {
-        return QueueBuilder.durable(MeetingEventType.CANCELLED.routingKey()).build();
+        return MeetingMqTopology.eventQueue(MeetingEventType.CANCELLED);
     }
 
     @Bean
     public Queue meetingUpdatedQueue() {
-        return QueueBuilder.durable(MeetingEventType.UPDATED.routingKey()).build();
+        return MeetingMqTopology.eventQueue(MeetingEventType.UPDATED);
     }
 
     @Bean
     public Queue meetingRemindQueue() {
         // 提醒队列（T4.5 由延迟队列经 DLX 投递过来），此处先声明以便消费端提前接好
-        return QueueBuilder.durable(MeetingEventType.REMIND.routingKey()).build();
+        return MeetingMqTopology.eventQueue(MeetingEventType.REMIND);
     }
 
     // ---- 绑定：队列名即路由键（topic exchange 下精确路由键是精确匹配） ----
 
     @Bean
     public Binding bindCreated(Queue meetingCreatedQueue, TopicExchange meetingEventExchange) {
-        return BindingBuilder.bind(meetingCreatedQueue).to(meetingEventExchange)
-                .with(MeetingEventType.CREATED.routingKey());
+        return MeetingMqTopology.bindEventQueue(meetingCreatedQueue, meetingEventExchange, MeetingEventType.CREATED);
     }
 
     @Bean
     public Binding bindApproved(Queue meetingApprovedQueue, TopicExchange meetingEventExchange) {
-        return BindingBuilder.bind(meetingApprovedQueue).to(meetingEventExchange)
-                .with(MeetingEventType.APPROVED.routingKey());
+        return MeetingMqTopology.bindEventQueue(meetingApprovedQueue, meetingEventExchange, MeetingEventType.APPROVED);
     }
 
     @Bean
     public Binding bindRejected(Queue meetingRejectedQueue, TopicExchange meetingEventExchange) {
-        return BindingBuilder.bind(meetingRejectedQueue).to(meetingEventExchange)
-                .with(MeetingEventType.REJECTED.routingKey());
+        return MeetingMqTopology.bindEventQueue(meetingRejectedQueue, meetingEventExchange, MeetingEventType.REJECTED);
     }
 
     @Bean
     public Binding bindCancelled(Queue meetingCancelledQueue, TopicExchange meetingEventExchange) {
-        return BindingBuilder.bind(meetingCancelledQueue).to(meetingEventExchange)
-                .with(MeetingEventType.CANCELLED.routingKey());
+        return MeetingMqTopology.bindEventQueue(meetingCancelledQueue, meetingEventExchange, MeetingEventType.CANCELLED);
     }
 
     @Bean
     public Binding bindUpdated(Queue meetingUpdatedQueue, TopicExchange meetingEventExchange) {
-        return BindingBuilder.bind(meetingUpdatedQueue).to(meetingEventExchange)
-                .with(MeetingEventType.UPDATED.routingKey());
+        return MeetingMqTopology.bindEventQueue(meetingUpdatedQueue, meetingEventExchange, MeetingEventType.UPDATED);
+    }
+
+    @Bean
+    public Binding bindRemind(Queue meetingRemindQueue, TopicExchange meetingEventExchange) {
+        return MeetingMqTopology.bindEventQueue(meetingRemindQueue, meetingEventExchange, MeetingEventType.REMIND);
+    }
+
+    @Bean
+    public Binding bindDeadLetterQueue(Queue meetingDeadLetterQueue, TopicExchange meetingDeadLetterExchange) {
+        return MeetingMqTopology.bindDeadLetterQueue(meetingDeadLetterQueue, meetingDeadLetterExchange);
     }
 }
