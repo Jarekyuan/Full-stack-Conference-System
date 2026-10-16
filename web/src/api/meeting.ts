@@ -223,3 +223,62 @@ export function extendMeeting(id: number, minutes: number): Promise<void> {
 export function finishMeeting(id: number): Promise<void> {
   return http.post<void>(`/meetings/${id}/finish`)
 }
+
+// ———————————————————— 周期会议（T5.1/T5.2，契约 docs/04 4.9）————————————————————
+// 复用 createMeeting 的幂等约定：token 由调用方在"进入表单时"生成一次并复用。
+
+/** 创建周期会议的输入（与后端 RecurringCreateDTO 对齐） */
+export interface RecurringCreateInput {
+  title: string
+  roomId: number
+  /** 1=周一 … 7=周日（与 java.time.DayOfWeek.getValue() 一致） */
+  dayOfWeek: number
+  /** 当天分钟数（540=09:00）：与"时刻"解耦，避免时区/夏令时下的漂移 */
+  startMinutes: number
+  durationMinutes: number
+  /** 日期区间（含端点） */
+  startDate: string
+  endDate: string
+}
+
+/** 周期创建的冲突条目（后端 RecurringConflictVO）：比单场冲突多 occurrenceStart（**哪一场**撞了） */
+export interface RecurringConflict {
+  /** 冲突所属的场次开始时间（展开出来的那一场） */
+  occurrenceStart: string
+  meetingId: number
+  title: string
+  startTime: string
+  endTime: string
+  organiserId: number
+  organiserName: string
+}
+
+export interface RecurringCreateResult {
+  recurringId: number
+  created: number
+  meetingIds: number[]
+}
+
+/**
+ * 创建周期会议。**幂等比单场更要紧**：重复提交一次单场顶多多一场会，
+ * 重复提交一次系列会一次多出 N 场（而且都要逐个取消）。
+ */
+export function createRecurring(
+  input: RecurringCreateInput,
+  idempotencyToken: string,
+): Promise<RecurringCreateResult | undefined> {
+  return http.post<RecurringCreateResult>('/meetings/recurring', input, {
+    headers: { 'X-Idempotency-Token': idempotencyToken },
+  })
+}
+
+/** 取消整个系列（只取消未开始的场次；系列内有进行中的场次会被拒 → 40002） */
+export function cancelRecurring(
+  recurringId: number,
+  reason?: string,
+): Promise<{ cancelled: number; skipped: number }> {
+  return http.post<{ cancelled: number; skipped: number }>(
+    `/meetings/recurring/${recurringId}/cancel`,
+    { reason },
+  )
+}

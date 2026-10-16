@@ -14,14 +14,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Controller, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import dayjs from 'dayjs'
-import { App, Alert, Button, DatePicker, Drawer, Form, Input, Modal, Select, Typography } from 'antd'
+import dayjs, { type Dayjs } from 'dayjs'
+import { App, Alert, Button, DatePicker, Drawer, Form, Input, Modal, Select, Switch, Typography } from 'antd'
 import {
   checkAvailability,
   createMeeting,
+  createRecurring,
   type AvailabilityItem,
   type MeetingConflict,
   type MeetingCreateResult,
+  type RecurringConflict,
+  type RecurringCreateResult,
 } from '@/api/meeting'
 import type { Room } from '@/api/room'
 import UserPicker from '@/components/UserPicker'
@@ -62,6 +65,8 @@ export default function BookingDrawer({ open, prefill, rooms, onClose, onSuccess
   const { message } = App.useApp()
   const [idempotencyToken, setIdempotencyToken] = useState('')
   const [conflictModal, setConflictModal] = useState<MeetingConflict[] | null>(null)
+  /** 周期创建的冲突清单（带"哪一场"）——与单场冲突分开渲染，用户才知道改哪天 */
+  const [recurringConflicts, setRecurringConflicts] = useState<RecurringConflict[] | null>(null)
   /** 已完成的可用性结论：checkKey 标识它属于哪组 (会议室, 时段) */
   const [availability, setAvailability] = useState<{ checkKey: string; item: AvailabilityItem } | null>(null)
 
@@ -74,16 +79,19 @@ export default function BookingDrawer({ open, prefill, rooms, onClose, onSuccess
     formState: { errors },
   } = useForm<BookingForm>({
     resolver: zodResolver(bookingSchema),
-    defaultValues: { title: '', userIds: [], remark: '' },
+    defaultValues: { title: '', userIds: [], remark: '', repeatWeekly: false },
   })
 
   // 只订阅这两个字段：写主题/备注不该触发重渲染
-  const [roomId, timeRange] = watch(['roomId', 'timeRange'])
+  const [roomId, timeRange, repeatWeekly] = watch(['roomId', 'timeRange', 'repeatWeekly'])
 
   /**
    * 当前表单值对应的"可用性检查键"。
    * 只有它与 availability.checkKey 相等时才展示结论——过期响应自然被挡在外面（竞态守卫）。
    */
+  /** 当前选中的会议室（用于"可提前天数"这类策略提示：Room 里带着策略字段） */
+  const selectedRoom = useMemo(() => rooms.find((r) => r.id === roomId), [rooms, roomId])
+
   const checkKey = useMemo(() => {
     const [start, end] = timeRange ?? []
     if (!roomId || !start || !end || !start.isValid() || !end.isValid()) return ''
@@ -139,6 +147,47 @@ export default function BookingDrawer({ open, prefill, rooms, onClose, onSuccess
   }, [open, checkKey])
 
   const { runAsync: submit, loading } = useAppRequest(createMeeting, { toastError: false })
+  const { runAsync: submitRecurringRequest, loading: recurringLoading } = useAppRequest(createRecurring, {
+    toastError: false,
+  })
+
+  /**
+   * 周期创建（T5.4）：把表单值翻译成后端的"每周规则"。
+   * dayOfWeek/startMinutes 全部**从开始时间派生**（不让用户另选，避免"周三 10:00 开始、规则却是周二"这种自相矛盾的输入）。
+   */
+  const submitRecurring = async (values: BookingForm) => {
+    const [start, end] = values.timeRange
+    const input = {
+      title: values.title.trim(),
+      roomId: values.roomId,
+      // dayjs 的 day() 是 0=周日…6=周六；后端要的是 1=周一…7=周日。
+      // （isoWeekday() 需要 isoWeek 插件——为一个数字引插件不划算，换算一行就够）
+      dayOfWeek: start.day() === 0 ? 7 : start.day(),
+      startMinutes: start.hour() * 60 + start.minute(),
+      durationMinutes: end.diff(start, 'minute'),
+      startDate: start.format('YYYY-MM-DD'),
+      endDate: (values.repeatEndDate as Dayjs).format('YYYY-MM-DD'),
+    }
+    try {
+      const result: RecurringCreateResult | undefined = await submitRecurringRequest(input, idempotencyToken)
+      if (!result) {
+        message.info('该系列已提交过，请勿重复提交')
+        onSuccess()
+        onClose()
+        return
+      }
+      message.success(`已创建周期会议：${result.created} 场`)
+      onSuccess()
+      onClose()
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 40005) {
+        setRecurringConflicts((e.data as { conflicts?: RecurringConflict[] } | null)?.conflicts ?? [])
+        return
+      }
+      // 其余（40007 未开放周期预约 / 30003 超可预约窗口 / 10006 幂等重复…）的 msg 已经是人话，直接弹
+      message.error(e instanceof ApiError ? e.message : '创建失败，请稍后重试')
+    }
+  }
 
   const onSubmit = async (values: BookingForm) => {
     const input = {
@@ -148,6 +197,10 @@ export default function BookingDrawer({ open, prefill, rooms, onClose, onSuccess
       endTime: values.timeRange[1].format(API_TIME_FORMAT),
       remark: values.remark?.trim() || undefined,
       participants: values.userIds.length ? { userIds: values.userIds } : undefined,
+    }
+    if (values.repeatWeekly) {
+      await submitRecurring(values)
+      return
     }
     try {
       const result: MeetingCreateResult | undefined = await submit(input, idempotencyToken)
@@ -162,6 +215,11 @@ export default function BookingDrawer({ open, prefill, rooms, onClose, onSuccess
       onSuccess()
       onClose()
     } catch (e) {
+      if (e instanceof ApiError && e.code === 40005) {
+        // 周期创建的冲突：清单里每一项都带 occurrenceStart（哪一场），逐条列给用户
+        setRecurringConflicts((e.data as { conflicts?: RecurringConflict[] } | null)?.conflicts ?? [])
+        return
+      }
       if (e instanceof ApiError && e.code === 40001) {
         // 提交时冲突：多半是被并发抢了（availability 是只读快照），弹详情
         const conflicts = (e.data as { conflicts?: MeetingConflict[] } | null)?.conflicts ?? []
@@ -188,7 +246,7 @@ export default function BookingDrawer({ open, prefill, rooms, onClose, onSuccess
       onClose={handleClose}
       width={460}
       extra={
-        <Button type="primary" loading={loading} onClick={handleSubmit(onSubmit)}>
+        <Button type="primary" loading={loading || recurringLoading} onClick={handleSubmit(onSubmit)}>
           提交预约
         </Button>
       }
@@ -261,6 +319,48 @@ export default function BookingDrawer({ open, prefill, rooms, onClose, onSuccess
           </Form.Item>
         )}
 
+        {/* 周期会议（T5.4）：勾选后展开"重复到哪天"。星期几不另选——它就是开始时间所属的星期几 */}
+        <Form.Item label="每周重复" tooltip="勾选后按本次的开始时间生成【每周一次】的系列会议">
+          <Controller
+            name="repeatWeekly"
+            control={control}
+            render={({ field }) => (
+              <Switch checked={field.value} onChange={field.onChange} checkedChildren="每周" unCheckedChildren="单次" />
+            )}
+          />
+        </Form.Item>
+        {repeatWeekly && (
+          <Form.Item
+            label="重复到哪天"
+            validateStatus={errors.repeatEndDate ? 'error' : ''}
+            help={errors.repeatEndDate?.message}
+            extra={
+              timeRange?.[0]?.isValid()
+                ? `每周${'一二三四五六日'[(timeRange[0].day() === 0 ? 7 : timeRange[0].day()) - 1]}，与本次同一时间，最多可提前 ${selectedRoom?.advanceDays ?? 30} 天`
+                : '请先选择开始时间'
+            }
+          >
+            <Controller
+              name="repeatEndDate"
+              control={control}
+              render={({ field }) => (
+                <DatePicker
+                  className="w-full"
+                  value={field.value}
+                  onChange={field.onChange}
+                  // 结束日期不能早于开始日期；也不能超过会议室的可提前天数（服务端同样会校验，这里先挡一道）
+                  disabledDate={(d) =>
+                    !d ||
+                    !timeRange?.[0]?.isValid() ||
+                    d.isBefore(timeRange[0].startOf('day')) ||
+                    d.isAfter(timeRange[0].add(selectedRoom?.advanceDays ?? 30, 'day'))
+                  }
+                />
+              )}
+            />
+          </Form.Item>
+        )}
+
         <Form.Item label="参会人">
           <Controller
             name="userIds"
@@ -294,6 +394,24 @@ export default function BookingDrawer({ open, prefill, rooms, onClose, onSuccess
         {conflictModal?.map((c) => (
           <div key={c.meetingId} className="py-0.5">
             <b>{c.title}</b>　{c.startTime.slice(11, 16)}-{c.endTime.slice(11, 16)}　{c.organiserName}
+          </div>
+        ))}
+      </Modal>
+
+      {/* 周期创建的冲突：逐条带"哪一场"，用户才知道是改整系列还是单独处理 */}
+      <Modal
+        title="周期会议存在冲突场次"
+        open={!!recurringConflicts}
+        onCancel={() => setRecurringConflicts(null)}
+        onOk={() => setRecurringConflicts(null)}
+        okText="知道了"
+        cancelButtonProps={{ style: { display: 'none' } }}
+      >
+        <p className="mb-2 text-slate-500">以下场次与已有会议冲突，调整开始时间或缩短重复区间后重试：</p>
+        {recurringConflicts?.map((c) => (
+          <div key={`${c.occurrenceStart}-${c.meetingId}`} className="mb-1">
+            第 {c.occurrenceStart.slice(0, 10)} 那一场：{c.startTime.slice(11, 16)}-{c.endTime.slice(11, 16)}{' '}
+            {c.title}（{c.organiserName}）
           </div>
         ))}
       </Modal>

@@ -8,6 +8,7 @@ import { createBrowserRouter, Navigate } from 'react-router-dom'
 import Placeholder from '@/components/Placeholder'
 import { RequireAuth, RequireRole } from '@/components/RouteGuards'
 import NotificationList from '@/pages/NotificationList'
+import Dashboard from '@/pages/admin/Dashboard'
 import MainLayout from '@/layouts/MainLayout'
 import ApprovalCenter from '@/pages/ApprovalCenter'
 import Calendar from '@/pages/Calendar'
@@ -58,7 +59,7 @@ export const router = createBrowserRouter([
             path: 'admin/dashboard',
             element: (
               <RequireRole roles={['ADMIN']}>
-                <Placeholder title="统计看板" />
+                <Dashboard />
               </RequireRole>
             ),
           },

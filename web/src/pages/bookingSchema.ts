@@ -29,10 +29,25 @@ export const bookingSchema = z
     ),
     userIds: z.array(z.number()),
     remark: z.string().max(500, '备注最长 500 字符').optional(),
+    // 周期会议（T5.4）：勾选后展开"重复到哪天"；星期几不需要用户选——
+    // 它就是本次开始时间落在星期几（选了周三 10:00，系列就是每周三 10:00）
+    // .default(false)：**默认单次**。不给默认值的话，所有既有调用点（含单测）都会因为
+    // "缺这个字段"而校验失败——加可选功能不该把老路径打断（这正是单测的价值：它先叫了）
+    repeatWeekly: z.boolean().default(false),
+    repeatEndDate: z.custom<Dayjs>((v) => dayjs.isDayjs(v), '请选择重复结束日期').optional(),
   })
   .refine((v) => v.timeRange[0].isBefore(v.timeRange[1]), {
     path: ['timeRange'],
     message: '结束时间必须晚于开始时间',
+  })
+  .refine((v) => !v.repeatWeekly || (v.repeatEndDate && dayjs.isDayjs(v.repeatEndDate)), {
+    path: ['repeatEndDate'],
+    message: '请选择重复结束日期',
+  })
+  // 客户端只挡"明显不合法"（顺序）；"最多提前 N 天"由服务端按会议室策略判定并给出**第几场**不合适的提示
+  .refine((v) => !v.repeatWeekly || !v.repeatEndDate || v.repeatEndDate.isAfter(v.timeRange[0], 'day'), {
+    path: ['repeatEndDate'],
+    message: '重复结束日期必须晚于开始日期',
   })
 
 export type BookingForm = z.infer<typeof bookingSchema>

@@ -53,10 +53,10 @@
 | M2 前端 | ✅ **3/3** | ✅ T2.F1 日历页（时间轴定位 + memo 行级组件化）｜✅ T2.F2 预约表单 Drawer（防抖冲突提示 + 幂等提交）｜✅ T2.F3 我的会议列表 + 详情（筛选分页 + 状态时间线 + 取消） |
 | M3 审批+生命周期 | ✅ **8/8** | ✅ T3.1 待办/已办列表｜✅ T3.2 审批通过（复检+行锁）｜✅ T3.3 拒绝｜✅ T3.4 延长 + 提前结束｜✅ T3.5 定时流转｜✅ T3.6 对账补偿｜✅ T3.F1 审批中心（前端）｜✅ T3.F2 详情页延长/结束（前端） |
 | M4 通知+MQ+打磨 | ✅ **12/12**（评审见 `docs/review-M4.md`） | ✅ T4.1 事件发布（`meeting.events` topic + 事务提交后投递）｜✅ T4.2 notification-service 骨架（:8083）｜✅ T4.3 消费落库站内信（幂等 + 手动 ACK + 死信）｜✅ T4.4 通知 REST（列表/未读/已读，契约补登 docs/04 3.3）｜✅ T4.5 会议提醒（扫描 + 幂等 key）｜✅ T4.6 WebSocket 推送（网关 `?token=` + 提交后推）｜✅ T4.7 Redis 缓存（会议室注解式 + 日历手写式）｜✅ T4.8 预约限流（ZSET+Lua + Nacos 动态阈值）｜✅ T4.9 traceId 服务侧（MDC + 网关访问日志）｜✅ T4.10 测试盘点（单测 52→80 例）｜✅ T4.11 审计切面（@Log + 独立 audit.log）｜✅ T4.F1 通知中心（铃铛角标 + 列表 + WS 实时更新） |
-| M5 进阶+部署 | ⬜ | 7 任务（周期会议 / 统计 / 容器化） |
+| M5 进阶+部署 | 🟡 **4/7** | ✅ T5.1 周期创建｜✅ T5.2 系列取消｜✅ T5.3 统计接口｜✅ T5.4 前端看板+周期入口；⏸ **T5.5~T5.7 容器化/部署按用户要求暂缓** |
 
-**M4 已全部完成（2026-10-16，12/12）**：MQ 事件 → 通知消费 → REST/WS → 提醒 → 缓存 → 限流 → traceId → 测试盘点 → 审计。
-**下一步是 M5**（周期会议 T5.1~T5.2 / 统计 T5.3~T5.4 / 容器化部署 T5.5~T5.7）。
+**M4 已全部完成（2026-10-16，12/12）**；**M5 做到 4/7**（周期会议 + 统计 + 看板），
+**剩下的 T5.5~T5.7（Dockerfile×4 + compose + Nginx）按用户要求暂缓**——用户要先自行验证一些东西。
 
 **M4 演示脚本（可照做）**：user1 登录前端（:5173）→ 另开一个浏览器/接口以 approver1 身份审批 →
 user1 端**铃铛角标秒级 +1**（WS）→ 打开通知中心看到"审批通过"→ 点掉角标归零。
@@ -318,6 +318,9 @@ bash scripts/verify-m4-cache.sh                    # T4.7：命中判据用 SQL 
 bash scripts/verify-m4-ratelimit.sh                # T4.8：滑动窗口拦截、Nacos 改阈值不重启生效、0=关闭、ZSET 形态
 bash scripts/verify-m4-traceid.sh                  # T4.9：网关+服务两侧同 id、无头请求兜底、非法值被重生成
 bash scripts/verify-m4-audit.sh                    # T4.11：审计留痕（成功/失败/五类动作/不记全文/带 traceId）
+bash scripts/verify-m5-recurring.sh                # T5.1：周期创建（展开/N 场共享 recurring_id/冲突清单/40007/幂等）
+bash scripts/verify-m5-recurring-cancel.sh         # T5.2：系列取消（未来场次/历史不受影响/进行中拦截，约 2 分钟）
+bash scripts/verify-m5-stats.sh                    # T5.3：统计（接口 vs 独立 SQL 对账/裁剪/口径/权限）
 #   ⚠️ **凡是会连续造会的脚本，开头都要装限流开关**（T4.8 之后预约有用户级限流 10 次/分钟）：
 #      `source "$(dirname "$0")/lib/ratelimit.sh"` + `ratelimit_disable_for_script`
 #      （e2e 用 `web/e2e/lib/ratelimit.cjs` 的 `disableRateLimit()`）。
