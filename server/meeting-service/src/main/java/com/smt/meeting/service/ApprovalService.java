@@ -19,6 +19,7 @@ import com.smt.meeting.vo.ApprovalHistoryVO;
 import com.smt.meeting.vo.ApprovalResultVO;
 import com.smt.meeting.vo.ApprovalVO;
 import com.smt.meeting.vo.MeetingConflictVO;
+import com.smt.meeting.aop.Log;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -83,6 +84,7 @@ public class ApprovalService {
      *
      * @throws BusinessException 40003 会议不存在 / 50002 已被处理 / 50001 复检冲突（data 带 conflicts）
      */
+    @Log(type = "APPROVAL_PASS")
     public ApprovalResultVO pass(Long meetingId, String comment, Long approverId) {
         Meeting meeting = loadMeeting(meetingId);
 
@@ -128,6 +130,7 @@ public class ApprovalService {
      * 只锁会议行就够（防与"通过"并发——通过那边会同时持会议室行与会议行，这里只等会议行，
      * 不构成环，不会死锁）。
      */
+    @Log(type = "APPROVAL_REJECT")
     public ApprovalResultVO reject(Long meetingId, String comment, Long approverId) {
         // 先做参数校验（快速失败，不必为一个注定失败的请求去抢锁/占事务）
         if (StrUtil.isBlank(comment)) {

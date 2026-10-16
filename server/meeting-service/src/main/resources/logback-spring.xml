@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  meeting-service 日志配置（T4.11 新增）。
+
+  为什么要这个文件（此前只有 application.yml 里的 logging.pattern）：审计需要**独立 appender**，
+  yml 表达不了"某个 logger 写到另一个文件"。
+
+  ⚠️ 一旦有了这个文件，`logging.pattern.level`（yml 里那个 traceId 格式）对**本服务**就不再生效了
+  ——格式由下面的 <pattern> 说了算，所以 traceId 那段必须在这里重复一遍（T4.9 的成果不能丢）。
+-->
+<configuration>
+
+    <!-- 控制台：与 auth/notification 保持**完全一致**的格式（含 traceId），否则一条 grep 串不起三个服务 -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %5p [traceId:%X{traceId:-}] --- [%15.15t] %-40.40logger{39} : %m%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!--
+      审计：独立文件 + 独立留存策略。
+      业务日志是"排障时看"的（丢了就丢了），审计是"事后追责/合规"用的（要长期留），
+      两者的留存期与查看方式都不一样——所以从第一天起就分开，别等将来再拆。
+    -->
+    <appender name="AUDIT_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/audit.log</file>
+        <append>true</append>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>logs/audit.%d{yyyy-MM-dd}.log</fileNamePattern>
+            <!-- 审计留存 90 天（与业务日志的"不管"形成对比：这是**有意**的区别对待） -->
+            <maxHistory>90</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [traceId:%X{traceId:-}] %m%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- 名为 AUDIT 的 logger 只写审计文件；additivity=false 免得审计行又在控制台出现一遍 -->
+    <logger name="AUDIT" level="INFO" additivity="false">
+        <appender-ref ref="AUDIT_FILE"/>
+    </logger>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>

@@ -20,6 +20,7 @@ import com.smt.meeting.statemachine.MeetingStateMachine;
 import com.smt.meeting.vo.ExtendLimitVO;
 import com.smt.meeting.vo.MeetingConflictVO;
 import com.smt.meeting.vo.MeetingCreateVO;
+import com.smt.meeting.aop.Log;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -59,6 +60,7 @@ public class MeetingReserveService {
     /** 领域事件发布（T4.1）：业务代码只发 Spring 事件，转投 MQ 的时机由 AFTER_COMMIT 监听器决定 */
     private final ApplicationEventPublisher eventPublisher;
 
+    @Log(type = "MEETING_CREATE")
     public MeetingCreateVO create(MeetingCreateDTO dto, Long organiserId) {
         // ---------- 第一段：无锁前置校验（快速失败） ----------
         MeetingRoom room = loadAvailableRoom(dto.getRoomId());
@@ -101,6 +103,7 @@ public class MeetingReserveService {
      * 后来者读到"还没被取消"的旧快照 → 报一场已释放时段的假冲突（评审 Optional）。
      * 锁序与 create/update 一致（先会议室行 → 后会议行），不引入新死锁面。
      */
+    @Log(type = "MEETING_CANCEL")
     public void cancel(Long meetingId, String reason, Long operatorId) {
         Meeting meeting = meetingMapper.selectById(meetingId);
         if (meeting == null) {
@@ -144,6 +147,7 @@ public class MeetingReserveService {
      * 乐观锁只保护"同一行"的并发写，管不住"改到哪"与"谁能订哪"的跨行竞态——
      * 不抢锁的话，改期与新建会各自读到旧快照、各自通过冲突检测，同一时段落下两场会议。
      */
+    @Log(type = "MEETING_UPDATE")
     public void update(Long meetingId, MeetingUpdateDTO dto, Long operatorId) {
         Meeting meeting = meetingMapper.selectById(meetingId);
         if (meeting == null) {
@@ -240,6 +244,7 @@ public class MeetingReserveService {
      * 后一个把 end_time 从 16:30 改回 16:10——不变量没破（不会重叠），但**时间倒退**、
      * 审计日志写成"延长 10 分钟（16:30 → 16:10）"自相矛盾，用户也白点一次。
      */
+    @Log(type = "MEETING_EXTEND")
     public void extend(Long meetingId, int minutes, Long operatorId) {
         Meeting meeting = meetingMapper.selectById(meetingId);
         if (meeting == null) {
@@ -310,6 +315,7 @@ public class MeetingReserveService {
      * 与 cancel 同理要取房间锁——提前结束会**释放**剩余时段，不取锁时并发的冲突检测会读到
      * "还没结束"的旧快照，报一场假冲突。
      */
+    @Log(type = "MEETING_FINISH")
     public void finish(Long meetingId, Long operatorId) {
         Meeting meeting = meetingMapper.selectById(meetingId);
         if (meeting == null) {

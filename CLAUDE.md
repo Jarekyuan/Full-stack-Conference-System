@@ -52,7 +52,7 @@
 | M2 后端（预约核心） | ✅ **10/10** | 状态机 → 冲突检测 → 可用性/日历 → 创建预约 → 幂等 → Redisson 锁 → 并发脚本 → 列表详情 → 取消 → 修改（乐观锁） |
 | M2 前端 | ✅ **3/3** | ✅ T2.F1 日历页（时间轴定位 + memo 行级组件化）｜✅ T2.F2 预约表单 Drawer（防抖冲突提示 + 幂等提交）｜✅ T2.F3 我的会议列表 + 详情（筛选分页 + 状态时间线 + 取消） |
 | M3 审批+生命周期 | ✅ **8/8** | ✅ T3.1 待办/已办列表｜✅ T3.2 审批通过（复检+行锁）｜✅ T3.3 拒绝｜✅ T3.4 延长 + 提前结束｜✅ T3.5 定时流转｜✅ T3.6 对账补偿｜✅ T3.F1 审批中心（前端）｜✅ T3.F2 详情页延长/结束（前端） |
-| M4 通知+MQ+打磨 | 🟡 **10/12** | ✅ T4.1 事件发布（`meeting.events` topic + 事务提交后投递）｜✅ T4.2 notification-service 骨架（:8083）｜✅ T4.3 消费落库站内信（幂等 + 手动 ACK + 死信）｜✅ T4.4 通知 REST（列表/未读/已读，契约补登 docs/04 3.3）｜✅ T4.5 会议提醒（扫描 + 幂等 key）｜✅ T4.6 WebSocket 推送（网关 `?token=` + 提交后推）｜✅ T4.7 Redis 缓存（会议室注解式 + 日历手写式）｜✅ T4.8 预约限流（ZSET+Lua + Nacos 动态阈值）｜✅ T4.9 traceId 服务侧（MDC + 网关访问日志）｜✅ T4.10 测试盘点（单测 52→76 例） |
+| M4 通知+MQ+打磨 | 🟡 **11/12** | ✅ T4.1 事件发布（`meeting.events` topic + 事务提交后投递）｜✅ T4.2 notification-service 骨架（:8083）｜✅ T4.3 消费落库站内信（幂等 + 手动 ACK + 死信）｜✅ T4.4 通知 REST（列表/未读/已读，契约补登 docs/04 3.3）｜✅ T4.5 会议提醒（扫描 + 幂等 key）｜✅ T4.6 WebSocket 推送（网关 `?token=` + 提交后推）｜✅ T4.7 Redis 缓存（会议室注解式 + 日历手写式）｜✅ T4.8 预约限流（ZSET+Lua + Nacos 动态阈值）｜✅ T4.9 traceId 服务侧（MDC + 网关访问日志）｜✅ T4.10 测试盘点（单测 52→80 例）｜✅ T4.11 审计切面（@Log + 独立 audit.log） |
 | M5 进阶+部署 | ⬜ | 7 任务 |
 
 **当前聚焦：M4 通知 + MQ + 打磨**（M2/M3 已全部完成并逐条实测）。
@@ -78,7 +78,7 @@
 > - ⚠️ `verify-m3-scheduler.sh` 会**接管 8082**（起两个实例抢任务锁），跑完要按默认配置重启服务。
 >
 > **M4 进度与交接（2026-10-16）**：
-> - ✅ T4.1~T4.10 已完成，**剩余 T4.11 审计切面 / T4.F1 前端通知中心**。
+> - ✅ T4.1~T4.11 已完成，**只剩 T4.F1 前端通知中心（铃铛角标 + 通知列表 + WS 实时更新）**。
 > - 🔧 **死信拓扑已由 `MeetingMqTopology`（meeting-common）统一声明**，生产端/消费端都引用它——
 >   队列参数（含 `x-dead-letter-exchange`）不可能漂移。⚠️ 若将来**再改**队列参数：
 >   RabbitMQ 的参数是建立时定死的，必须**删掉老队列重建**（且两边同源改），否则 `PRECONDITION_FAILED`。
@@ -289,6 +289,9 @@ bash scripts/verify-m4-remind.sh                   # T4.5：提醒窗口/收件�
 bash scripts/verify-m4-cache.sh                    # T4.7：命中判据用 SQL 次数、写路径清缓存、随机/空值 TTL、single-flight
 bash scripts/verify-m4-ratelimit.sh                # T4.8：滑动窗口拦截、Nacos 改阈值不重启生效、0=关闭、ZSET 形态
 bash scripts/verify-m4-traceid.sh                  # T4.9：网关+服务两侧同 id、无头请求兜底、非法值被重生成
+bash scripts/verify-m4-audit.sh                    # T4.11：审计留痕（成功/失败/五类动作/不记全文/带 traceId）
+#   📌 审计日志在 `server/logs/audit.log`（logback-spring.xml 的 AUDIT appender，留存 90 天）；
+#      它**不随测试清理**——审计只追加、不删改
 #   ⚠️ 本脚本 grep `server/logs/*.log` → 服务必须**按约定路径**启动（`nohup java -jar … > logs/<svc>.log`）
 cd server && mvn -q test -Dtest='RateLimitAspectTest' -Dsurefire.failIfNoSpecifiedTests=false  # 限流降级放行（单测）
 #   ⚠️ 本脚本会**接管 8082**（要读服务的 SQL 日志），跑完自动按默认配置重启；判据是"SQL 执行次数"而不是耗时

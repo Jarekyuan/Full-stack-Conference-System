@@ -12,6 +12,7 @@ import com.smt.meeting.mapper.RoomGroupMapper;
 import com.smt.meeting.mapper.RoomStrategyMapper;
 import com.smt.meeting.vo.RoomGroupVO;
 import com.smt.meeting.vo.RoomVO;
+import com.smt.meeting.aop.Log;
 import lombok.RequiredArgsConstructor;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
@@ -69,6 +70,7 @@ public class RoomService {
     // 变更后整体失效：会议室缓存（列表 + 详情）。策略变更也在此列——列表里带 needApproval 等策略字段
     @CacheEvict(cacheNames = {CacheConfig.ROOM_LIST_CACHE, CacheConfig.ROOM_DETAIL_CACHE}, allEntries = true)
     @Transactional
+    @Log(type = "ROOM_CREATE")
     public Long create(RoomSaveDTO dto) {
         ensureGroupExists(dto.getGroupId());
         MeetingRoom room = new MeetingRoom();
@@ -98,6 +100,7 @@ public class RoomService {
     // 变更后整体失效：会议室缓存（列表 + 详情）。策略变更也在此列——列表里带 needApproval 等策略字段
     @CacheEvict(cacheNames = {CacheConfig.ROOM_LIST_CACHE, CacheConfig.ROOM_DETAIL_CACHE}, allEntries = true)
     @Transactional
+    @Log(type = "ROOM_UPDATE")
     public void update(Long id, RoomSaveDTO dto) {
         ensureRoomExists(id);
         ensureGroupExists(dto.getGroupId());
@@ -117,6 +120,7 @@ public class RoomService {
     // 变更后整体失效：会议室缓存（列表 + 详情）。策略变更也在此列——列表里带 needApproval 等策略字段
     @CacheEvict(cacheNames = {CacheConfig.ROOM_LIST_CACHE, CacheConfig.ROOM_DETAIL_CACHE}, allEntries = true)
     @Transactional
+    @Log(type = "ROOM_DELETE")
     public void remove(Long id) {
         ensureRoomExists(id);
         if (meetingRoomMapper.countActiveMeetingsByRoom(id) > 0) {
@@ -130,6 +134,7 @@ public class RoomService {
     // 变更后整体失效：会议室缓存（列表 + 详情）。策略变更也在此列——列表里带 needApproval 等策略字段
     @CacheEvict(cacheNames = {CacheConfig.ROOM_LIST_CACHE, CacheConfig.ROOM_DETAIL_CACHE}, allEntries = true)
     @Transactional
+    @Log(type = "ROOM_STRATEGY_UPDATE")
     public void updateStrategy(Long id, StrategyDTO dto) {
         ensureRoomExists(id);
         RoomStrategy strategy = new RoomStrategy();
