@@ -52,7 +52,7 @@
 | M2 后端（预约核心） | ✅ **10/10** | 状态机 → 冲突检测 → 可用性/日历 → 创建预约 → 幂等 → Redisson 锁 → 并发脚本 → 列表详情 → 取消 → 修改（乐观锁） |
 | M2 前端 | ✅ **3/3** | ✅ T2.F1 日历页（时间轴定位 + memo 行级组件化）｜✅ T2.F2 预约表单 Drawer（防抖冲突提示 + 幂等提交）｜✅ T2.F3 我的会议列表 + 详情（筛选分页 + 状态时间线 + 取消） |
 | M3 审批+生命周期 | ✅ **8/8** | ✅ T3.1 待办/已办列表｜✅ T3.2 审批通过（复检+行锁）｜✅ T3.3 拒绝｜✅ T3.4 延长 + 提前结束｜✅ T3.5 定时流转｜✅ T3.6 对账补偿｜✅ T3.F1 审批中心（前端）｜✅ T3.F2 详情页延长/结束（前端） |
-| M4 通知+MQ+打磨 | ✅ **12/12** | ✅ T4.1 事件发布（`meeting.events` topic + 事务提交后投递）｜✅ T4.2 notification-service 骨架（:8083）｜✅ T4.3 消费落库站内信（幂等 + 手动 ACK + 死信）｜✅ T4.4 通知 REST（列表/未读/已读，契约补登 docs/04 3.3）｜✅ T4.5 会议提醒（扫描 + 幂等 key）｜✅ T4.6 WebSocket 推送（网关 `?token=` + 提交后推）｜✅ T4.7 Redis 缓存（会议室注解式 + 日历手写式）｜✅ T4.8 预约限流（ZSET+Lua + Nacos 动态阈值）｜✅ T4.9 traceId 服务侧（MDC + 网关访问日志）｜✅ T4.10 测试盘点（单测 52→80 例）｜✅ T4.11 审计切面（@Log + 独立 audit.log）｜✅ T4.F1 通知中心（铃铛角标 + 列表 + WS 实时更新） |
+| M4 通知+MQ+打磨 | ✅ **12/12**（评审见 `docs/review-M4.md`） | ✅ T4.1 事件发布（`meeting.events` topic + 事务提交后投递）｜✅ T4.2 notification-service 骨架（:8083）｜✅ T4.3 消费落库站内信（幂等 + 手动 ACK + 死信）｜✅ T4.4 通知 REST（列表/未读/已读，契约补登 docs/04 3.3）｜✅ T4.5 会议提醒（扫描 + 幂等 key）｜✅ T4.6 WebSocket 推送（网关 `?token=` + 提交后推）｜✅ T4.7 Redis 缓存（会议室注解式 + 日历手写式）｜✅ T4.8 预约限流（ZSET+Lua + Nacos 动态阈值）｜✅ T4.9 traceId 服务侧（MDC + 网关访问日志）｜✅ T4.10 测试盘点（单测 52→80 例）｜✅ T4.11 审计切面（@Log + 独立 audit.log）｜✅ T4.F1 通知中心（铃铛角标 + 列表 + WS 实时更新） |
 | M5 进阶+部署 | ⬜ | 7 任务（周期会议 / 统计 / 容器化） |
 
 **M4 已全部完成（2026-10-16，12/12）**：MQ 事件 → 通知消费 → REST/WS → 提醒 → 缓存 → 限流 → traceId → 测试盘点 → 审计。
@@ -63,6 +63,11 @@ user1 端**铃铛角标秒级 +1**（WS）→ 打开通知中心看到"审批通
 `web/e2e/e2e-notify-center.cjs` 就是这条演示的可执行版本。
 
 **M2 后端补强（2026-10-15）**：修掉一处双重预订竞态——`update()`（改期）原先不经过预约锁，与"新建"并发时能各自通过冲突检测、同一时段落下两场会议（**实测 10 轮 7 轮复现**）。修法：改期纳入同一把房间锁 + 事务内加会议室行锁兜底（`selectIdForUpdate`），并补齐"凡是改变时段占用状态的写路径都要取行锁"这条设计约束（审批 T3.2 同此理）。回归脚本 `scripts/concurrent-modify.sh` 修复后 10/10 通过。
+
+**M4 全量评审与修复（2026-10-16，见 `docs/review-M4.md`）**：两个独立 agent 交叉评审（后端 / 前端+脚本）+ 逐条复现，
+9 条 Required 全部修完（其中 6 条是"注释/文档说的性质和代码实际行为不符"），
+并补了 9 个验证脚本/2 个 e2e 的弱断言。修复过程中自己新造的 6 个坑全部被**重跑**抓出——
+详见该文档的"复验"小节（含一条很有代表性的教训：`mvn clean` 会删掉正在运行的服务所依赖的 jar）。
 
 **M2 全量评审与修复（2026-10-15，见 `docs/review-M2.md`）**：对代码做了一次从 M0 到现在的全量 review（4 Critical + 12 Required + 14 Optional + M1 存量 17 条 P1 逐条核实），随后分 4 批修完：
 安全止血（Redis 口令/摘要存储、服务只绑回环、分页溢出、登录时序）→ 并发正确性（锁的异常收尾、状态守卫、幂等语义）→ 前端可见缺陷（竞态守卫、状态映射收敛等 7 条）→ 契约与工程（入参上限、PII 收口、框架异常映射、网关 traceId/CORS、前端 lint+测试+分包）。
@@ -248,7 +253,17 @@ user1 端**铃铛角标秒级 +1**（WS）→ 打开通知中心看到"审批通
     ⚠️ 同类前科：`verify-m3-scheduler.sh` 当年是**管道**被子进程抓住（`cmd | tail` 里的长驻 java 不关 stdout，tail 永远等不到 EOF）。
     **判据**：脚本"没输出、也没退出"时，先看它在等谁——`pgrep -P <脚本pid>` 一眼就能看出是不是在等自己起的服务。
 
-20. **`insertBatch` 要回填主键**（2026-10-16，实现 WS 推送时发现）：
+20. **`mvn clean` 会把"正在运行的服务所依赖的 jar"删掉，后果很隐蔽**（2026-10-16 踩到，整轮验证全红）：
+    串跑脚本写成"先 `mvn clean test`、再跑验证脚本"，而 `clean` 删掉了当时**正在运行**的三个服务所依赖的 jar：
+    - **正在跑的 JVM 不会立刻死**（类已加载），但**懒加载的 jar 内资源会崩**——
+      auth-service 在读 `META-INF/services/...` 时报 `JarUrlConnection.getInputStream` 失败，接口回 500；
+    - 任何"按端口 kill 再按 jar 路径重启"的脚本（如 `verify-m4-cache.sh`）**没有 jar 可重启** → 服务再也起不来。
+    于是表象是"11 个脚本 + 2 个 e2e 全红"，根因却与业务毫无关系。
+    **规矩**：`构建 + 单测 → (重)启动服务 → 跑脚本`，**中途绝不再 clean/构建**。
+    （另：`mvn test` 不产出 jar，所以"clean test"之后连包都不在——要用 `mvn clean install` 一步到位做完构建与单测。）
+    这也解释了为什么值得把这条和踩坑 #12 放一起看：**构建产物与正在跑的进程，是两个世界**。
+
+21. **`insertBatch` 要回填主键**（2026-10-16，实现 WS 推送时发现）：
     MyBatis 的 `<foreach>` 多值 INSERT 默认**不回填自增主键**——通知落库后拿不到 id，
     推送体只能推一条没有 id 的通知（前端没法"标记已读"，等于推了个半成品）。
     加上 `useGeneratedKeys="true" keyProperty="id"` 即可：Jdbc3KeyGenerator 对"单值集合参数"
@@ -295,6 +310,12 @@ bash scripts/verify-m4-cache.sh                    # T4.7：命中判据用 SQL 
 bash scripts/verify-m4-ratelimit.sh                # T4.8：滑动窗口拦截、Nacos 改阈值不重启生效、0=关闭、ZSET 形态
 bash scripts/verify-m4-traceid.sh                  # T4.9：网关+服务两侧同 id、无头请求兜底、非法值被重生成
 bash scripts/verify-m4-audit.sh                    # T4.11：审计留痕（成功/失败/五类动作/不记全文/带 traceId）
+#   ⚠️ **凡是会连续造会的脚本，开头都要装限流开关**（T4.8 之后预约有用户级限流 10 次/分钟）：
+#      `source "$(dirname "$0")/lib/ratelimit.sh"` + `ratelimit_disable_for_script`
+#      （e2e 用 `web/e2e/lib/ratelimit.cjs` 的 `disableRateLimit()`）。
+#      不装的话脚本会撞 10005，**报出来却是"创建失败"，看着像功能坏了**——整轮串跑时踩到过。
+#      限流本身由 verify-m4-ratelimit.sh 专门验证；这些脚本只是借用同一个开关（含读回确认 + 退出恢复）
+#   ⚠️ **串跑顺序**：构建+单测 → (重)启动服务 → 跑脚本，**中途绝不再 clean/构建**（见踩坑 #20）
 #   📌 审计日志在 `server/logs/audit.log`（logback-spring.xml 的 AUDIT appender，留存 90 天）；
 #      它**不随测试清理**——审计只追加、不删改
 #   ⚠️ 本脚本 grep `server/logs/*.log` → 服务必须**按约定路径**启动（`nohup java -jar … > logs/<svc>.log`）
