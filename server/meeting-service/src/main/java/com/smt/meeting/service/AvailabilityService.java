@@ -1,38 +1,88 @@
 package com.smt.meeting.service;
 
+import java.time.DayOfWeek;
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.temporal.TemporalAdjusters;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+import com.smt.common.mq.MeetingDomainEvent;
+import com.smt.common.mq.MeetingEventType;
 import com.smt.meeting.dto.AvailabilityQueryDTO;
 import com.smt.meeting.mapper.MeetingMapper;
 import com.smt.meeting.vo.AvailabilityVO;
 import com.smt.meeting.vo.CalendarMeetingVO;
 import com.smt.meeting.vo.MeetingConflictVO;
 import com.smt.meeting.vo.RoomCalendarVO;
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Service;
-
-import java.time.DayOfWeek;
-import java.time.LocalDate;
-import java.time.temporal.TemporalAdjusters;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.TreeMap;
-import java.util.stream.Collectors;
 
 /**
  * 可用性与日历查询（docs/04 4.3）
  * 边界说明：只做"会议室维度"的可用性查询，不做"参会人忙闲"（01 文档已砍该需求）。
  * 只读无锁：实时提示用，最终以提交时（创建/审批）的锁内校验为准——"查询与提交分离"（docs/04 7.4）。
+ *
+ * <h3>日历缓存（T4.7）为什么手写而不是 {@code @Cacheable}</h3>
+ * 它要同时做到四件事，注解一个都表达不了：
+ * ① **随机 TTL**（5min ± 抖动）：防缓存**雪崩**——一批 key 同时建、同时过期，会在同一秒集体回源；
+ * ② **空值短 TTL**：本周没有会议时也缓存（空对象），但只缓存 1 分钟——防**穿透**（反复查不存在的空周打库），
+ *    同时保证"刚订的会议"很快就能出现在日历上；
+ * ③ **互斥重建**（single-flight）：miss 时不一起打库，只放一个线程去建，其余短暂等待后读缓存——
+ *    防**击穿**（热点 key 过期瞬间的并发回源）；
+ * ④ **事件驱动失效**：预约/取消/改期后立刻删对应周的缓存（Cache-Aside：先更库、后删缓存）。
+ *
+ * <p>缓存**只做加速，不做真相**：任何缓存异常（Redis 挂了、反序列化失败）都退回查库，
+ * 绝不让一次缓存故障把日历接口打成 500（旁路依赖不能拖垮核心读路径）。
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AvailabilityService {
 
+    /** docs/02 6.4 的键设计：cache:calendar:{roomId}:{weekStart} */
+    private static final String CALENDAR_KEY_PREFIX = "cache:calendar:";
+    /** 有数据时的基础 TTL */
+    private static final Duration CALENDAR_TTL = Duration.ofMinutes(5);
+    /** 抖动幅度（秒）：实际 TTL = 5min ± 这个值 */
+    private static final int CALENDAR_TTL_JITTER_SECONDS = 60;
+    /** 空周（没有会议）的短 TTL：防穿透，又不能久到"刚订的会看不见" */
+    private static final Duration EMPTY_CALENDAR_TTL = Duration.ofMinutes(1);
+    /** single-flight 抢锁等待：等不到就自己查库（缓存抢锁**绝不能**把请求挂住） */
+    private static final long REBUILD_LOCK_WAIT_MS = 200;
+    /** 未抢到重建权的线程：等这么久再读一次缓存（给重建者一点时间） */
+    private static final long WAIT_FOR_REBUILD_MS = 150;
+
     private final ConflictChecker conflictChecker;
     private final MeetingMapper meetingMapper;
+    private final StringRedisTemplate redis;
+    private final RedissonClient redissonClient;
+    private final ObjectMapper objectMapper;
 
     /**
      * 批量可用性：逐会议室调冲突检测（无锁），组装 available + conflicts。
      * `distinct()` 去重：重复 id 只会得到两条内容完全相同的结论，却要多付一次查询（评审 R7）。
+     *
+     * <p>**不缓存**：可用性是"提交前的实时提示"，且必然带着用户刚输入的时间区间（缓存命中率极低、
+     * 过期数据的代价却很高——用户看到"可用"、提交却冲突）。缓存只用在"数据形态固定、读写比极高"
+     * 的地方（日历按周查、会议室列表），这是"缓存该不该上"的判断标准。
      */
     public AvailabilityVO check(AvailabilityQueryDTO dto) {
         List<AvailabilityVO.Item> items = dto.getRoomIds().stream()
@@ -48,11 +98,93 @@ public class AvailabilityService {
 
     /**
      * 单会议室某周日历：week 传该周任意一天，归一化到周一起的 7 天，补空天后返回。
+     * 默认走缓存（见类注释）；`skipCache` 仅供排障/对拍使用。
      */
     public RoomCalendarVO calendar(Long roomId, LocalDate week) {
         LocalDate weekStart = week.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-        LocalDate weekEnd = weekStart.plusDays(6);
+        String key = CALENDAR_KEY_PREFIX + roomId + ":" + weekStart;
 
+        RoomCalendarVO cached = readCache(key);
+        if (cached != null) {
+            return cached;
+        }
+        return rebuild(roomId, weekStart, key);
+    }
+
+    // ---------- 缓存内部 ----------
+
+    private RoomCalendarVO rebuild(Long roomId, LocalDate weekStart, String key) {
+        RLock lock = redissonClient.getLock(key + ":rebuild");
+        boolean acquired = false;
+        try {
+            // waitTime 只等 200ms：抢不到就自己查库，**不让缓存把请求挂住**
+            acquired = lock.tryLock(REBUILD_LOCK_WAIT_MS, TimeUnit.MILLISECONDS);
+            if (!acquired) {
+                // 别人正在重建：稍等再读一次缓存（热点 key 过期瞬间的并发大多能被这一次等待消化）
+                Thread.sleep(WAIT_FOR_REBUILD_MS);
+                RoomCalendarVO afterWait = readCache(key);
+                if (afterWait != null) {
+                    return afterWait;
+                }
+                log.info("[缓存] 重建等待超时，直接回源: key={}", key);
+                return loadAndCache(roomId, weekStart, key);
+            }
+            // 双检：等锁期间可能已被别的线程建好
+            RoomCalendarVO cached = readCache(key);
+            return cached != null ? cached : loadAndCache(roomId, weekStart, key);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return loadFromDb(roomId, weekStart);
+        } catch (Exception e) {
+            // 锁/缓存故障一律降级回源（缓存是旁路）
+            log.warn("[缓存] 互斥重建异常，回源: key={}, err={}", key, e.getMessage());
+            return loadFromDb(roomId, weekStart);
+        } finally {
+            if (acquired && lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        }
+    }
+
+    private RoomCalendarVO loadAndCache(Long roomId, LocalDate weekStart, String key) {
+        RoomCalendarVO vo = loadFromDb(roomId, weekStart);
+        boolean empty = vo.getDays().stream().allMatch(d -> d.getMeetings().isEmpty());
+        Duration ttl = empty ? EMPTY_CALENDAR_TTL : jitteredTtl();
+        try {
+            redis.opsForValue().set(key, objectMapper.writeValueAsString(vo), ttl);
+        } catch (Exception e) {
+            // 写缓存失败不影响本次返回（下次再来建）
+            log.warn("[缓存] 写入失败: key={}, err={}", key, e.getMessage());
+        }
+        return vo;
+    }
+
+    /** TTL = 5min ± 60s：让同一批写入的 key 不会在同一秒集体过期（防雪崩） */
+    private Duration jitteredTtl() {
+        int offset = ThreadLocalRandom.current().nextInt(-CALENDAR_TTL_JITTER_SECONDS,
+                CALENDAR_TTL_JITTER_SECONDS + 1);
+        return CALENDAR_TTL.plusSeconds(offset);
+    }
+
+    private RoomCalendarVO readCache(String key) {
+        try {
+            String json = redis.opsForValue().get(key);
+            return json == null ? null
+                    : objectMapper.readValue(json, new TypeReference<RoomCalendarVO>() {
+                    });
+        } catch (Exception e) {
+            // 反序列化失败（比如 DTO 改过字段）当 miss 处理：**删掉坏 key**，别让它一直挡住回源
+            log.warn("[缓存] 读取失败，按未命中处理并删除: key={}, err={}", key, e.getMessage());
+            try {
+                redis.delete(key);
+            } catch (Exception ignored) {
+                // Redis 不可用时连删除都失败，忽略——回源照常
+            }
+            return null;
+        }
+    }
+
+    private RoomCalendarVO loadFromDb(Long roomId, LocalDate weekStart) {
         // 查询范围为 [周一 00:00, 下周一 00:00)（半开区间）
         List<CalendarMeetingVO> meetings = meetingMapper.selectByRoomAndRange(
                 roomId, weekStart.atStartOfDay(), weekStart.plusDays(7).atStartOfDay());
@@ -72,8 +204,51 @@ public class AvailabilityService {
         RoomCalendarVO vo = new RoomCalendarVO();
         vo.setRoomId(roomId);
         vo.setWeekStart(weekStart);
-        vo.setWeekEnd(weekEnd);
+        vo.setWeekEnd(weekStart.plusDays(6));
         vo.setDays(days);
         return vo;
+    }
+
+    // ---------- 事件驱动失效 ----------
+
+    /**
+     * 会议变更后删除受影响周的日历缓存（Cache-Aside：先更库、后删缓存）。
+     *
+     * <p>为什么挂在**领域事件**上而不是塞进各个写方法里：写路径有创建/改期/取消/审批通过/拒绝/延长/结束
+     * 六七条，且将来还会加（周期会议批量、系列取消…）。事件是"业务事实已经发生"的**统一出口**，
+     * 在这里收口，新写路径只要发事件就自动获得缓存一致性——漏一个写方法的代价是"用户看到过期日历"，
+     * 而且极难察觉（评审最怕的就是这种静默不一致）。
+     *
+     * <p>AFTER_COMMIT：事务回滚了就不该删缓存（那时库没变，删了只是白白回源一次；
+     * 更糟的是"缓存删了、库回滚了"，读到的仍是旧数据，看起来像删除失效）。
+     *
+     * <p>⚠️ 已知不足：**定时任务把 20→30/40 时没有发事件**，所以"进行中/已结束"这两次状态变化最多
+     * 滞后一个 TTL（5 分钟）才在日历上体现。日历是展示用途、TTL 又有界，先接受并记在这里；
+     * 要立刻准确就让状态任务也发事件（多一次缓存删除，代价很小，但当前没有这个需求）。
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onMeetingChanged(MeetingDomainEvent event) {
+        if (event.type() == MeetingEventType.REMIND) {
+            return; // 提醒不改变任何日程数据
+        }
+        try {
+            evictWeeks(event.roomId(), event.startTime(), event.endTime());
+        } catch (Exception e) {
+            // 删缓存失败不能影响业务（缓存会自然过期）
+            log.warn("[缓存] 删除日历缓存失败: meetingId={}, err={}", event.meetingId(), e.getMessage());
+        }
+    }
+
+    /** 会议可能横跨两周（12-31 到 01-01 这类），两周边界的 key 都要删 */
+    private void evictWeeks(Long roomId, LocalDateTime start, LocalDateTime end) {
+        if (roomId == null || start == null || end == null) {
+            return;
+        }
+        LocalDate startWeek = start.toLocalDate().with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        LocalDate endWeek = end.toLocalDate().with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        redis.delete(CALENDAR_KEY_PREFIX + roomId + ":" + startWeek);
+        if (!endWeek.equals(startWeek)) {
+            redis.delete(CALENDAR_KEY_PREFIX + roomId + ":" + endWeek);
+        }
     }
 }

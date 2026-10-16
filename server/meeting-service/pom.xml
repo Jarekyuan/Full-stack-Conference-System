@@ -105,6 +105,15 @@
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
 
+        <!--
+          Spring Cache（T4.7：会议室列表/详情缓存用注解式，日历缓存手写——两者都用过才知道边界）。
+          只加 spring-boot-starter-cache（缓存抽象），Redis 实现由 starter-data-redis 提供。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-cache</artifactId>
+        </dependency>
+
         <!-- 健康检查 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
