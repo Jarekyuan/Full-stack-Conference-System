@@ -3,10 +3,13 @@ package com.smt.common.config;
 import com.fasterxml.jackson.datatype.jsr310.deser.LocalDateTimeDeserializer;
 import com.fasterxml.jackson.datatype.jsr310.ser.LocalDateTimeSerializer;
 import com.smt.common.exception.GlobalExceptionHandler;
+import com.smt.common.filter.TraceIdFilter;
 import com.smt.common.filter.UserHeaderFilter;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.autoconfigure.jackson.Jackson2ObjectMapperBuilderCustomizer;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.core.Ordered;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -41,6 +44,19 @@ public class CommonWebAutoConfiguration {
         return builder -> builder
                 .serializers(new LocalDateTimeSerializer(formatter))
                 .deserializers(new LocalDateTimeDeserializer(formatter));
+    }
+
+    /**
+     * traceId 过滤器（T4.9）：注册为**独立的** FilterRegistrationBean 而不是普通 @Bean——
+     * 普通 Filter bean 由 Boot 以默认顺序（LOWEST_PRECEDENCE）注册，会排在安全链之后，
+     * 那样"鉴权失败"这类最早的日志就还没有 traceId（恰恰是最需要它的场景）。
+     */
+    @Bean
+    public FilterRegistrationBean<TraceIdFilter> traceIdFilter() {
+        FilterRegistrationBean<TraceIdFilter> registration = new FilterRegistrationBean<>(new TraceIdFilter());
+        registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
+        registration.setName("traceIdFilter");
+        return registration;
     }
 
     @Bean

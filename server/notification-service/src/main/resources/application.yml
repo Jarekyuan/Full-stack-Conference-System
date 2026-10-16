@@ -63,6 +63,12 @@ management:
         include: health,info
 
 logging:
+  # 每行日志带上 traceId（T4.9）：`logging.pattern.level` 会替换掉默认的 `%5p`，
+  # 于是格式变成 `时间 [traceId:xxx] 级别 --- [线程] logger : 消息`——
+  # 排障时拿一次请求的 traceId 就能把三个服务的日志串起来（`grep 'traceId:xxx' logs/*.log`）。
+  # `:-` 是 logback 的默认值语法：MDC 里没有时打空，不会打出字面量 "traceId:null"。
+  pattern:
+    level: "%5p [traceId:%X{traceId:-}]"
   level:
     com.smt: debug
     # 重试过程默认**没有任何日志**（RetryTemplate 内部只在失败时由调用方记录），

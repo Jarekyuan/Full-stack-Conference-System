@@ -4,6 +4,7 @@ import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
 import org.springframework.http.server.reactive.ServerHttpRequest;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
@@ -22,6 +23,7 @@ import java.util.regex.Pattern;
  *
  * <p>M4（T4.9）在本过滤器之上再补 MDC/logback 那一半（服务侧日志打 `[traceId]`）；此处先把**接口契约**闭环。
  */
+@Slf4j
 @Component
 public class TraceIdFilter implements GlobalFilter, Ordered {
 
@@ -42,7 +44,20 @@ public class TraceIdFilter implements GlobalFilter, Ordered {
         ServerHttpRequest request = exchange.getRequest().mutate()
                 .header(HEADER_TRACE_ID, traceId)
                 .build();
-        return chain.filter(exchange.mutate().request(request).build());
+
+        // 访问日志（T4.9）：网关侧记一行，业务服务侧也记一行，两边**同一个 traceId**——
+        // 这才叫"全链路可串联"（在此之前网关只在 401 时打日志，
+        // 正常请求在网关侧没有任何痕迹，"2+ 服务 traceId 一致"根本无处可验）。
+        long start = System.currentTimeMillis();
+        return chain.filter(exchange.mutate().request(request).build())
+                .then(Mono.fromRunnable(() -> {
+                    var status = exchange.getResponse().getStatusCode();
+                    log.info("[traceId:{}] {} {} → {} ({}ms)", traceId,
+                            exchange.getRequest().getMethod(),
+                            exchange.getRequest().getURI().getRawPath(),
+                            status == null ? "-" : status.value(),
+                            System.currentTimeMillis() - start);
+                }));
     }
 
     @Override

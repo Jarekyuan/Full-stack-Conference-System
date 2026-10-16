@@ -127,7 +127,10 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
     }
 
     private Mono<Void> unauthorized(ServerWebExchange exchange, String reason) {
-        log.warn("鉴权失败: path={}, reason={}", exchange.getRequest().getURI().getPath(), reason);
+        // traceId 一起打出来（T4.9）：401 是**到不了业务服务**的那类失败，
+        // 只有网关这一行日志可查——没有 traceId 的话，"这次失败对上的是哪次请求"就断了线索。
+        String traceId = exchange.getResponse().getHeaders().getFirst(TraceIdFilter.HEADER_TRACE_ID);
+        log.warn("[traceId:{}] 鉴权失败: path={}, reason={}", traceId, exchange.getRequest().getURI().getPath(), reason);
         ServerHttpResponse response = exchange.getResponse();
         response.setStatusCode(HttpStatus.UNAUTHORIZED);
         response.getHeaders().setContentType(MediaType.APPLICATION_JSON);
