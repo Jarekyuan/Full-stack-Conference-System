@@ -4,6 +4,7 @@ import com.smt.common.context.UserContext;
 import com.smt.common.result.PageResult;
 import com.smt.common.result.Result;
 import com.smt.meeting.aop.Idempotent;
+import com.smt.meeting.aop.RateLimit;
 import com.smt.meeting.dto.MeetingCancelDTO;
 import com.smt.meeting.dto.MeetingCreateDTO;
 import com.smt.meeting.dto.MeetingExtendDTO;
@@ -80,6 +81,7 @@ public class MeetingController {
      */
     @PostMapping
     @Idempotent("meeting")
+    @RateLimit("reserve")
     public Result<MeetingCreateVO> create(@Valid @RequestBody MeetingCreateDTO dto) {
         Long organiserId = UserContext.getUserId();
         return Result.success(reserveService.create(dto, organiserId));

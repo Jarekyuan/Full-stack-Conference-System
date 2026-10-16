@@ -28,8 +28,16 @@ spring:
     password: ${RABBITMQ_PASSWORD:guest}
     # 发送失败要抛异常给 publisher（它自己 catch 后告警）——不能让它静默成功
     publisher-confirm-type: correlated
+  # Nacos 配置中心（T4.8）：限流阈值从配置中心读，改值不重启即时生效（@RefreshScope）
+  config:
+    import:
+      # optional: 前缀很重要——配置中心拿不到时**不阻断启动**。限流是旁路保护，
+      # 不能因为"配置中心访问不了"就让整个会议服务起不来（与切面的"异常放行"同一条原则）。
+      - optional:nacos:meeting-service.yml
   cloud:
     nacos:
+      config:
+        server-addr: 127.0.0.1:8848
       discovery:
         server-addr: 127.0.0.1:8848
         # 本地开发固定回环注册：休眠/换网后局域网 IP 会变，否则 Feign/网关按旧 IP 连不上

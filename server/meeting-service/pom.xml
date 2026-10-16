@@ -72,6 +72,15 @@
             <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
         </dependency>
 
+        <!--
+          Nacos 配置中心（T4.8：限流阈值放这里，改值**不重启**即时生效——@RefreshScope 落地演示）。
+          与 discovery 是两个 starter：一个是"服务在哪"，一个是"配置是什么"。
+        -->
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-config</artifactId>
+        </dependency>
+
         <!-- OpenFeign（服务间调用）+ Resilience4j（fallback/circuitbreaker 支撑） -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>

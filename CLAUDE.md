@@ -50,7 +50,7 @@
 | M2 后端（预约核心） | ✅ **10/10** | 状态机 → 冲突检测 → 可用性/日历 → 创建预约 → 幂等 → Redisson 锁 → 并发脚本 → 列表详情 → 取消 → 修改（乐观锁） |
 | M2 前端 | ✅ **3/3** | ✅ T2.F1 日历页（时间轴定位 + memo 行级组件化）｜✅ T2.F2 预约表单 Drawer（防抖冲突提示 + 幂等提交）｜✅ T2.F3 我的会议列表 + 详情（筛选分页 + 状态时间线 + 取消） |
 | M3 审批+生命周期 | ✅ **8/8** | ✅ T3.1 待办/已办列表｜✅ T3.2 审批通过（复检+行锁）｜✅ T3.3 拒绝｜✅ T3.4 延长 + 提前结束｜✅ T3.5 定时流转｜✅ T3.6 对账补偿｜✅ T3.F1 审批中心（前端）｜✅ T3.F2 详情页延长/结束（前端） |
-| M4 通知+MQ+打磨 | 🟡 **7/12** | ✅ T4.1 事件发布（`meeting.events` topic + 事务提交后投递）｜✅ T4.2 notification-service 骨架（:8083）｜✅ T4.3 消费落库站内信（幂等 + 手动 ACK + 死信）｜✅ T4.4 通知 REST（列表/未读/已读，契约补登 docs/04 3.3）｜✅ T4.5 会议提醒（扫描 + 幂等 key）｜✅ T4.6 WebSocket 推送（网关 `?token=` + 提交后推）｜✅ T4.7 Redis 缓存（会议室注解式 + 日历手写式） |
+| M4 通知+MQ+打磨 | 🟡 **8/12** | ✅ T4.1 事件发布（`meeting.events` topic + 事务提交后投递）｜✅ T4.2 notification-service 骨架（:8083）｜✅ T4.3 消费落库站内信（幂等 + 手动 ACK + 死信）｜✅ T4.4 通知 REST（列表/未读/已读，契约补登 docs/04 3.3）｜✅ T4.5 会议提醒（扫描 + 幂等 key）｜✅ T4.6 WebSocket 推送（网关 `?token=` + 提交后推）｜✅ T4.7 Redis 缓存（会议室注解式 + 日历手写式）｜✅ T4.8 预约限流（ZSET+Lua + Nacos 动态阈值） |
 | M5 进阶+部署 | ⬜ | 7 任务 |
 
 **当前聚焦：M4 通知 + MQ + 打磨**（M2/M3 已全部完成并逐条实测）。
@@ -76,7 +76,7 @@
 > - ⚠️ `verify-m3-scheduler.sh` 会**接管 8082**（起两个实例抢任务锁），跑完要按默认配置重启服务。
 >
 > **M4 进度与交接（2026-10-16）**：
-> - ✅ T4.1~T4.7 已完成（事件发布 / 骨架 / 消费 / 通知 REST / 会议提醒 / WS 推送 / 缓存），**下一个是 T4.8 预约限流**。
+> - ✅ T4.1~T4.8 已完成（事件发布 / 骨架 / 消费 / 通知 REST / 会议提醒 / WS 推送 / 缓存 / 限流），**下一个是 T4.9 traceId 服务侧**。
 > - 🔧 **死信拓扑已由 `MeetingMqTopology`（meeting-common）统一声明**，生产端/消费端都引用它——
 >   队列参数（含 `x-dead-letter-exchange`）不可能漂移。⚠️ 若将来**再改**队列参数：
 >   RabbitMQ 的参数是建立时定死的，必须**删掉老队列重建**（且两边同源改），否则 `PRECONDITION_FAILED`。
@@ -271,6 +271,9 @@ cd web && npm run dev    # http://localhost:5173
 ```bash
 # 后端
 bash scripts/concurrent-reserve.sh 5 --repeat 10   # 5 个客户端抢同一时段 → 恰好 1 成功（跑完自清理槽位）
+#   ⚠️ 两个 concurrent 脚本会**临时通过 Nacos 关掉限流**（T4.8 起预约有限流，几十次连发必撞），退出时恢复
+#   ⚠️ 它们用 room 1，而 room 1 上有 2026-10-15 留下的 20 场 active 会议 → 会报"连续 10 天候选时段均被占用"；
+#      换 `ROOM_ID=6` 或先清理那批历史数据
 bash scripts/concurrent-modify.sh 10               # 改期 vs 新建抢同一时段 → 时段只落 1 场
 bash scripts/verify-review-batch4.sh               # 第 4 批修复的 33 条逐项断言（R7/R8/P1-*）
 bash scripts/verify-m3-approval.sh                # T3.1~T3.3：待办/已办、复检 50001、并发双人同审、拒绝
@@ -282,6 +285,8 @@ bash scripts/verify-m4-notify-consume.sh           # T4.3：五类事件落站�
 bash scripts/verify-m4-notify-api.sh               # T4.4：列表倒序/分页、未读数、已读幂等、跨用户越权 60001（自起自收 8083）
 bash scripts/verify-m4-remind.sh                   # T4.5：提醒窗口/收件人/幂等/窗口外与待审批不提醒/改期重新武装
 bash scripts/verify-m4-cache.sh                    # T4.7：命中判据用 SQL 次数、写路径清缓存、随机/空值 TTL、single-flight
+bash scripts/verify-m4-ratelimit.sh                # T4.8：滑动窗口拦截、Nacos 改阈值不重启生效、0=关闭、ZSET 形态
+cd server && mvn -q test -Dtest='RateLimitAspectTest' -Dsurefire.failIfNoSpecifiedTests=false  # 限流降级放行（单测）
 #   ⚠️ 本脚本会**接管 8082**（要读服务的 SQL 日志），跑完自动按默认配置重启；判据是"SQL 执行次数"而不是耗时
 #   ⚠️ 本脚本用**默认 60 秒扫描间隔**跑，全程约 4 分钟（要等两三轮扫描）——慢是有意的，验的就是真实配置
 #   ⚠️ verify-m4-mq.sh 与上面两个脚本**不能同时跑**：MQ 脚本要求 8083 停着（消费者会把待断言的消息吃掉），
