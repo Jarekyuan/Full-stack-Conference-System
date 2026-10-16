@@ -31,9 +31,11 @@ import com.smt.meeting.mapper.MeetingMapper;
 import com.smt.meeting.mapper.MeetingRecurringMapper;
 import com.smt.meeting.mapper.MeetingRoomMapper;
 import com.smt.meeting.mapper.RoomStrategyMapper;
+import com.smt.common.mq.MeetingDomainEvent;
 import com.smt.meeting.statemachine.MeetingStateMachine;
 import com.smt.meeting.vo.MeetingConflictVO;
 import com.smt.meeting.vo.RecurringConflictVO;
+import com.smt.meeting.vo.RecurringCancelVO;
 import com.smt.meeting.vo.RecurringCreateVO;
 
 /**
@@ -73,6 +75,8 @@ public class RecurringService {
     private final MeetingLockHelper lockHelper;
     private final TransactionTemplate transactionTemplate;
     private final CalendarCacheEvictor calendarCacheEvictor;
+    /** 逐场取消要发领域事件（与单场取消一致：参会人该知道这会没了） */
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     /**
      * 创建周期会议。
@@ -144,6 +148,77 @@ public class RecurringService {
                             dto.getDayOfWeek(), LocalTime.of(dto.getStartMinutes() / 60, dto.getStartMinutes() % 60));
                     return new RecurringCreateVO(rule.getId(), meetings.size(),
                             meetings.stream().map(Meeting::getId).toList());
+                }));
+    }
+
+    /**
+     * 取消整个系列（T5.2，契约 docs/04 4.9）：只取消"未开始"的场次（10 待审批 / 20 已预约）。
+     *
+     * <h3>三条规则</h3>
+     * ① **历史场次不受影响**：已结束（40）、已取消（50）、已拒绝（60）本来就没有出边（R-11），
+     *    这里直接跳过并计入 skipped —— 不是错误，是"系列里有过去的会"这件正常的事；
+     * ② ⚠️ **系列里有"进行中"（30）的场次 → 整个系列取消被拒**：把正在开的会"取消"在业务上说不通
+     *    （它不是"没发生"，是"正在发生"），提示先单场处理（单场也取消不了 30，需要的是提前结束）；
+     * ③ **逐场走状态机**（红线 #4）：每场一条 meeting_status_log，详情页时间线里说得清"这场是怎么没的"。
+     *
+     * <h3>并发</h3>
+     * 与单场取消同一套：**锁住所有被取消场次涉及的自然日 → 再开事务**（锁 ⊇ 事务），
+     * 事务内先锁会议室行。取消会**释放时段**，不取同一把锁的话，并发的冲突检测会读到"还没取消"的旧快照，
+     * 报一场假冲突（与 T2.9 单场取消同理）。
+     *
+     * @throws BusinessException 40008 系列不存在 / 40004 非组织人 / 40002 系列内有进行中的场次
+     */
+    @Log(type = "RECURRING_CANCEL")
+    public RecurringCancelVO cancel(Long recurringId, String reason, Long operatorId) {
+        MeetingRecurring rule = recurringMapper.selectById(recurringId);
+        if (rule == null) {
+            throw new BusinessException(ErrorCode.RECURRING_NOT_FOUND);
+        }
+        if (!rule.getOrganiserId().equals(operatorId)) {
+            throw new BusinessException(ErrorCode.NOT_MEETING_OWNER);
+        }
+        List<Meeting> meetings = meetingMapper.selectByRecurringId(recurringId);
+
+        // 未开始 = 还能取消的（10/20）；其余是历史，直接算 skipped
+        List<Meeting> cancellable = meetings.stream()
+                .filter(m -> m.getStatus() != null && (m.getStatus() == 10 || m.getStatus() == 20))
+                .toList();
+        List<Meeting> ongoing = meetings.stream()
+                .filter(m -> m.getStatus() != null && m.getStatus() == 30)
+                .toList();
+        if (!ongoing.isEmpty()) {
+            throw new BusinessException(ErrorCode.MEETING_STATUS_NOT_ALLOWED.getCode(),
+                    String.format("系列内有 %d 场进行中的会议（最早 %s），请先单独处理",
+                            ongoing.size(), ongoing.get(0).getStartTime()));
+        }
+        if (cancellable.isEmpty()) {
+            // 没有可取消的场次：不算错误（可能全是历史场次），返回 0/总数，让调用方自己判断
+            return new RecurringCancelVO(0, meetings.size());
+        }
+
+        SortedSet<LocalDate> dates = cancellable.stream()
+                .map(m -> m.getStartTime().toLocalDate())
+                .collect(Collectors.toCollection(TreeSet::new));
+        return lockHelper.executeWithLockOnDates(rule.getRoomId(), dates, () ->
+                transactionTemplate.execute(tx -> {
+                    meetingRoomMapper.selectIdForUpdate(rule.getRoomId()); // 数据库兜底，与单场取消同一把
+                    for (Meeting m : cancellable) {
+                        stateMachine.transition(m.getId(), MeetingEventEnum.CANCEL, operatorId, reason);
+                        meetingMapper.updateCancelInfo(m.getId(), reason);
+                        // 领域事件：**逐场发**（单场取消也是这么做的）。系列场次通常没有参会人 →
+                        // 实际不会产生通知；万一后来给某几场加了参会人，他们本来就该被告知
+                        eventPublisher.publishEvent(MeetingDomainEvent.cancelled(
+                                m.getId(), m.getTitle(), m.getRoomId(), m.getOrganiserId(),
+                                m.getStartTime(), m.getEndTime(), reason));
+                    }
+                    // 日历缓存：直接删覆盖区间（与创建同理：不逐场发事件去驱动缓存，本进程内直接调用更直白）
+                    calendarCacheEvictor.evict(rule.getRoomId(),
+                            cancellable.get(0).getStartTime(),
+                            cancellable.get(cancellable.size() - 1).getEndTime());
+
+                    log.info("[周期会议] 系列 {} 已取消 {} 场（历史场次跳过 {} 场）",
+                            recurringId, cancellable.size(), meetings.size() - cancellable.size());
+                    return new RecurringCancelVO(cancellable.size(), meetings.size() - cancellable.size());
                 }));
     }
 

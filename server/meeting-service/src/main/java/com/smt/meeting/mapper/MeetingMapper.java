@@ -146,6 +146,12 @@ public interface MeetingMapper {
     long countStuckPending();
 
     /**
+     * 按系列查场次（T5.2 系列取消）：命中 {@code idx_recurring(recurring_id, start_time)} 且天然有序。
+     * 没有这条索引时 EXPLAIN 是 `type=ALL` 全表扫——见 docs/03 5.5b（实现时实测并补的）。
+     */
+    List<Meeting> selectByRecurringId(@Param("recurringId") Long recurringId);
+
+    /**
      * 待审批列表（T3.1）：status=10 的会议 + 会议室名/组织人名/用途备注。
      * 与列表 VO 分开的原因：`MeetingVO` 按场景裁剪掉了 remark，而审批人正是靠它做判断（见 docs/04 3.2）。
      */

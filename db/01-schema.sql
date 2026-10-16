@@ -184,7 +184,10 @@ CREATE TABLE IF NOT EXISTS meeting (
   -- 定时任务：结束流转（status IN (20,30) AND end_time<=now）
   KEY idx_status_end (status, end_time),
   -- 我的会议列表（organiser_id 等值 + start_time 排序）
-  KEY idx_organiser (organiser_id, start_time)
+  KEY idx_organiser (organiser_id, start_time),
+  -- 周期系列查询（T5.2）：WHERE recurring_id = ? [AND start_time > ?] ORDER BY start_time
+  -- 没有它时 EXPLAIN 是 type=ALL 全表扫（实测：89 行的小表也已全扫）；加上后 type=ref + Using index
+  KEY idx_recurring (recurring_id, start_time)
 ) ENGINE = InnoDB COMMENT = '会议主表';
 
 -- ----------------------------------------------------------------------------

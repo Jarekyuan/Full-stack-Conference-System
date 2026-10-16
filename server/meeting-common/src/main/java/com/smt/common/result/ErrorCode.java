@@ -44,6 +44,7 @@ public enum ErrorCode {
     RECURRING_CONFLICT(40005, "周期会议存在冲突场次"),
     EXTEND_LIMIT_EXCEEDED(40006, "延长超出允许上限"),
     RECURRING_NOT_ALLOWED(40007, "该会议室未开放周期预约"),
+    RECURRING_NOT_FOUND(40008, "周期会议系列不存在"),
 
     // ---- 5xxxx 审批 ----
     APPROVAL_CONFLICT(50001, "该时段已被占用，无法通过审批"),

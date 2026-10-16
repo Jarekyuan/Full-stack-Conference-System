@@ -18,6 +18,7 @@ import com.smt.meeting.vo.ExtendLimitVO;
 import com.smt.meeting.vo.MeetingCreateVO;
 import com.smt.meeting.vo.MeetingDetailVO;
 import com.smt.meeting.vo.MeetingVO;
+import com.smt.meeting.vo.RecurringCancelVO;
 import com.smt.meeting.vo.RecurringCreateVO;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -103,6 +104,16 @@ public class MeetingController {
     @RateLimit
     public Result<RecurringCreateVO> createRecurring(@Valid @RequestBody RecurringCreateDTO dto) {
         return Result.success(recurringService.create(dto, UserContext.getUserId()));
+    }
+
+    /**
+     * 取消整个周期系列（T5.2，契约 docs/04 4.9）：只取消未开始的场次；系列内有进行中的场次则整系列被拒。
+     */
+    @PostMapping("/recurring/{id}/cancel")
+    public Result<RecurringCancelVO> cancelRecurring(@PathVariable Long id,
+                                                     @RequestBody(required = false) MeetingCancelDTO dto) {
+        String reason = dto == null ? null : dto.getReason();
+        return Result.success(recurringService.cancel(id, reason, UserContext.getUserId()));
     }
 
     /** 可延长上限（docs/04 4.6，T3.4）：R-15 的计算在服务端，前端只负责展示 maxDelayMinutes + reason */
