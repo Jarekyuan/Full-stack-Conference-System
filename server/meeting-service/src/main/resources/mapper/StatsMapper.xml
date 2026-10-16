@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 统计聚合 SQL（T5.3，口径见 docs/04 4.10；手写 XML，聚合逻辑全部下推到数据库） -->
+<mapper namespace="com.smt.meeting.mapper.StatsMapper">
+
+    <!-- 只映射 SQL 查得到的四列：usageRate 是服务端算的派生值（见 RoomUsageRow 的说明） -->
+    <resultMap id="RoomUsageMap" type="com.smt.meeting.vo.RoomUsageRow">
+        <result column="room_id" property="roomId"/>
+        <result column="room_name" property="roomName"/>
+        <result column="meeting_count" property="meetingCount"/>
+        <result column="total_minutes" property="totalMinutes"/>
+    </resultMap>
+
+    <!--
+      会议室使用率（H-1）：LEFT JOIN 保证"零会议的会议室也出现"（否则前端柱状图会少几根，
+      看起来像"这个房间被删了"）。
+      ⚠️ 时长按区间**裁剪**：LEAST/GREATEST 把跨出区间的部分切掉——跨月会议不能把整段时长都算进本月。
+      状态口径 20/30/40（真正占用过时段）：10 不占时段、50/60 没发生过。
+    -->
+    <select id="selectRoomUsage" resultMap="RoomUsageMap">
+        SELECT r.id AS room_id,
+               r.name AS room_name,
+               COUNT(m.id) AS meeting_count,
+               COALESCE(SUM(TIMESTAMPDIFF(MINUTE,
+                   GREATEST(m.start_time, #{rangeStart}),
+                   LEAST(m.end_time, #{rangeEnd}))), 0) AS total_minutes
+        FROM meeting_room r
+        LEFT JOIN meeting m
+               ON m.room_id = r.id
+              AND m.status IN (20, 30, 40)
+              AND m.start_time &lt; #{rangeEnd}
+              AND m.end_time &gt; #{rangeStart}
+        GROUP BY r.id, r.name
+        ORDER BY r.name
+    </select>
+
+    <!--
+      个人趋势（H-2）：口径"我组织的 ∪ 我参与的"（与列表 scope=mine 一致）。
+      ⚠️ "我参与的"用 EXISTS 子查询而不是 JOIN：JOIN 会让"组织人同时也是参会人"的会议出两行，
+      于是 COUNT 虚高；用 EXISTS 则每场会只出现一行，COUNT/SUM 天然不用 DISTINCT。
+      （写的时候我第一版真的用了 SUM(DISTINCT 时长)——DISTINCT 去的是**值**不是行，
+       "两场时长相同的会"会被算成一场，是那种"数字看起来合理、其实少算了"的错。）
+      时长同样按窗口裁剪，与 room-usage 的口径一致。
+      按 start_time 的**日期**分组（跨天会议归到开始那天，与日历口径一致）。
+    -->
+    <!-- ⚠️ 这条用 resultType（而不是显式 resultMap）：返回类型是不可变 record，
+         MyBatis 的 resultMap 按 setter 映射、填不进 record（另一条就是这样报的错）。
+         resultType + 列别名走的是构造器路径，record 天然适配；列名与 record 组件名一致即可。 -->
+    <select id="selectMyDailyStats" resultType="com.smt.meeting.vo.MyMeetingStatsVO$Daily">
+        SELECT DATE(m.start_time) AS date,
+               COUNT(m.id) AS count,
+               COALESCE(SUM(TIMESTAMPDIFF(MINUTE,
+                   GREATEST(m.start_time, #{rangeStart}),
+                   LEAST(m.end_time, #{rangeEnd}))), 0) AS minutes
+        FROM meeting m
+        WHERE m.status IN (20, 30, 40)
+          AND m.start_time &gt;= #{rangeStart}
+          AND m.start_time &lt; #{rangeEnd}
+          AND (m.organiser_id = #{userId}
+               OR EXISTS (SELECT 1 FROM meeting_participant p
+                          WHERE p.meeting_id = m.id AND p.user_id = #{userId}))
+        GROUP BY DATE(m.start_time)
+        ORDER BY date
+    </select>
+</mapper>

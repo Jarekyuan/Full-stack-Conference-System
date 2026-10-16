@@ -263,7 +263,15 @@ user1 端**铃铛角标秒级 +1**（WS）→ 打开通知中心看到"审批通
     （另：`mvn test` 不产出 jar，所以"clean test"之后连包都不在——要用 `mvn clean install` 一步到位做完构建与单测。）
     这也解释了为什么值得把这条和踩坑 #12 放一起看：**构建产物与正在跑的进程，是两个世界**。
 
-21. **`insertBatch` 要回填主键**（2026-10-16，实现 WS 推送时发现）：
+21. **MyBatis 的显式 `resultMap` 按 setter 映射 → 不可变 record 用不了**（2026-10-16 T5.3 踩到）：
+    `ReflectionException: There is no setter for property named 'roomId' in 'class ...'`。
+    两条出路：① 投影类型用**可变 Bean**（本项目规矩是"SQL 显式 resultMap"，所以选它）；
+    ② 用 `resultType` + 列别名走**构造器路径**（record 天然适配，但列名要与组件名对齐）。
+    ⚠️ 同一次还撞了它的兄弟：让 mapper 去填一个 **SQL 里不存在的字段**（服务端算的派生值）会报
+    `IndexOutOfBoundsException: Index 4 out of bounds for length 4`（构造函数参数比结果集列多）。
+    **约定：mapper 的返回类型只放 SQL 真查得到的东西**，派生值（占用率、百分比…）在 Service 里算。
+
+22. **`insertBatch` 要回填主键**（2026-10-16，实现 WS 推送时发现）：
     MyBatis 的 `<foreach>` 多值 INSERT 默认**不回填自增主键**——通知落库后拿不到 id，
     推送体只能推一条没有 id 的通知（前端没法"标记已读"，等于推了个半成品）。
     加上 `useGeneratedKeys="true" keyProperty="id"` 即可：Jdbc3KeyGenerator 对"单值集合参数"
