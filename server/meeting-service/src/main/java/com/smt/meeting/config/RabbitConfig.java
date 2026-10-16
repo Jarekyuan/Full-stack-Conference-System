@@ -7,6 +7,7 @@ import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.autoconfigure.amqp.RabbitTemplateCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -23,8 +24,11 @@ import com.smt.common.mq.MeetingMqTopology;
  * {@code PRECONDITION_FAILED}（详见该类注释）。这里只负责把共享定义注册成 Bean。
  *
  * <p>为什么每个事件一个队列、而不是一个队列吃全部：通知的**处理策略按场景不同**
- * （提醒要校验时间是否改过、取消要通知参会人），分开后每个消费者只关心自己那类，
- * 某类消费卡住也不会堵住其他类型。代价是队列数量随事件类型增长——当前 6 个（含 T4.5 的提醒队列），可控。
+ * （提醒要校验时间是否改过、取消要通知参会人）；分开后每类事件可以独立观察/独立重放
+ * （管理台一眼看出哪类积压），死信也能按 routingKey 认出是哪种事件。
+ * ⚠️ 但**"分开队列"不等于"互不阻塞"**：消费端 6 个队列挂在同一个 @RabbitListener 上，
+ * 默认一条线程消费全部队列（见 MeetingEventConsumer 的说明），所以一条毒消息的退避会占住那条线程。
+ * 代价是队列数量随事件类型增长——当前 6 个，可控。
  */
 @Slf4j
 @Configuration
@@ -38,6 +42,33 @@ public class RabbitConfig {
     @Bean
     public MessageConverter jsonMessageConverter() {
         return new Jackson2JsonMessageConverter();
+    }
+
+    /**
+     * 把"发了但没人收"变成**看得见**（2026-10-16 评审 O5）。
+     *
+     * <p>yml 里开了 `publisher-confirm-type: correlated` 与 `publisher-returns: true`，
+     * 但那只是"允许 broker 告诉你"——**不注册回调就什么也听不到**：
+     * ① broker 拒收（nack）→ ConfirmCallback；② 路由不到任何队列（topic 没有匹配的绑定）→ ReturnsCallback。
+     * 后者正是最容易被忽略的一种"消息静默消失"（发送端一切正常、管理台什么都看不到）。
+     * 注册之后至少日志里有 ERROR，排障不用猜。
+     *
+     * <p>注意：这里**不重发**。可靠投递（本地消息表/重试）是另一个量级的话题，
+     * 本项目按 docs/02 的取舍"接受漏发 + 告警"，只是把"漏了"从静默变成可见。
+     */
+    @Bean
+    public RabbitTemplateCustomizer rabbitTemplateCustomizer() {
+        return template -> {
+            template.setMandatory(true);
+            template.setConfirmCallback((correlationData, ack, cause) -> {
+                if (!ack) {
+                    log.error("[MQ] broker 未确认消息（nack）: cause={}", cause);
+                }
+            });
+            template.setReturnsCallback(returned -> log.error(
+                    "[MQ] 消息路由不到任何队列，已被丢弃: exchange={}, routingKey={}, replyText={}",
+                    returned.getExchange(), returned.getRoutingKey(), returned.getReplyText()));
+        };
     }
 
     @Bean
@@ -110,7 +141,7 @@ public class RabbitConfig {
 
     @Bean
     public Queue meetingRemindQueue() {
-        // 提醒队列（T4.5 由延迟队列经 DLX 投递过来），此处先声明以便消费端提前接好
+        // 提醒队列（T4.5：由**定时扫描**在开始前 15 分钟窗口内投递，见 MeetingRemindTask / docs/02 5.4）
         return MeetingMqTopology.eventQueue(MeetingEventType.REMIND);
     }
 

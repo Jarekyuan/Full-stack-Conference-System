@@ -59,8 +59,10 @@ public class MeetingReserveService {
     private final TransactionTemplate transactionTemplate;
     /** 领域事件发布（T4.1）：业务代码只发 Spring 事件，转投 MQ 的时机由 AFTER_COMMIT 监听器决定 */
     private final ApplicationEventPublisher eventPublisher;
+    /** 改期成功后就地删**旧房间/旧周**的日历缓存（事件里只有新值，见 AvailabilityService 的说明） */
+    private final CalendarCacheEvictor calendarCacheEvictor;
 
-    @Log(type = "MEETING_CREATE")
+    @Log(type = "MEETING_CREATE", targetFromResultOnly = true)
     public MeetingCreateVO create(MeetingCreateDTO dto, Long organiserId) {
         // ---------- 第一段：无锁前置校验（快速失败） ----------
         MeetingRoom room = loadAvailableRoom(dto.getRoomId());
@@ -186,6 +188,11 @@ public class MeetingReserveService {
                     applyUpdate(meetingId, meeting.getOrganiserId(), dto, operatorId, backToApproval);
                     return null;
                 }));
+
+        // 旧时段/旧房间的日历缓存要**就地补一刀**（2026-10-16 评审 R3）：领域事件里只带新值，
+        // 事件监听那条路删的是"新房间 + 新周"；不补这一下，旧房间的日历会一直挂着一场已经搬走的会
+        // （放在事务之后——与 Cache-Aside 的"先更库、后删缓存"一致）
+        calendarCacheEvictor.evict(meeting.getRoomId(), meeting.getStartTime(), meeting.getEndTime());
     }
 
     /** 乐观锁更新 + R-14 状态回退（必须在事务内调用） */
@@ -306,6 +313,11 @@ public class MeetingReserveService {
                             minutes,
                             locked.getEndTime().format(HHMM),
                             newEnd.format(HHMM)));
+                    // 结束时间变了 → 发 updated 事件（T4.7 说好"变更走事件统一出口"，延长也是变更）：
+                    // ① 日历缓存失效；② 参会人会收到"会议信息变更"——会开长了本来就该让他们知道
+                    eventPublisher.publishEvent(MeetingDomainEvent.updated(
+                            meetingId, locked.getTitle(), locked.getRoomId(), locked.getOrganiserId(),
+                            locked.getStartTime(), newEnd, MeetingStatusEnum.ONGOING.getCode(), operatorId));
                     return null;
                 }));
     }
@@ -332,6 +344,12 @@ public class MeetingReserveService {
                 transactionTemplate.execute(tx -> {
                     meetingRoomMapper.selectIdForUpdate(meeting.getRoomId());
                     stateMachine.transition(meetingId, MeetingEventEnum.END, operatorId, "组织人提前结束");
+                    // 提前结束 = 该时段被释放，会议（40）也不再出现在日历上（日历只展示 10/20/30）
+                    // → 同样发事件让缓存失效，否则日历最多 5 分钟仍显示"还在开"
+                    eventPublisher.publishEvent(MeetingDomainEvent.updated(
+                            meetingId, meeting.getTitle(), meeting.getRoomId(), meeting.getOrganiserId(),
+                            meeting.getStartTime(), meeting.getEndTime(),
+                            MeetingStatusEnum.FINISHED.getCode(), operatorId));
                     return null;
                 }));
     }

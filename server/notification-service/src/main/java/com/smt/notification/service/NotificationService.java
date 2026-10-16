@@ -188,7 +188,7 @@ public class NotificationService {
             return;
         }
         Notification existing = notificationMapper.selectById(id);
-        if (existing == null || !userId.equals(existing.getUserId())) {
+        if (existing == null || !java.util.Objects.equals(userId, existing.getUserId())) {
             throw new BusinessException(ErrorCode.NOTIFICATION_NOT_FOUND);
         }
         // 是我的且已读过：幂等成功（不报错、不重复更新）
@@ -228,6 +228,9 @@ public class NotificationService {
             n.setTitle(title);
             n.setContent(safeContent);
             n.setMeetingId(e.meetingId());
+            // 显式写创建时间（而不是靠列的 DEFAULT CURRENT_TIMESTAMP）：
+            // WS 推送体里带 createdAt（docs/04 6.2），不显式赋值的话推出去永远是 null（评审 O2）
+            n.setCreatedAt(LocalDateTime.now());
             rows.add(n);
         }
         notificationMapper.insertBatch(rows);

@@ -26,8 +26,11 @@ spring:
     port: 5672
     username: ${RABBITMQ_USER:guest}
     password: ${RABBITMQ_PASSWORD:guest}
-    # 发送失败要抛异常给 publisher（它自己 catch 后告警）——不能让它静默成功
+    # 发送失败要抛异常给 publisher（它自己 catch 后告警）——不能让它静默成功。
+    # 配合 RabbitConfig 里的 RabbitTemplateCustomizer：correlated 只是"允许 broker 告知"，
+    # 真正让"被 nack / 路由不到队列"变成日志 ERROR 的是那两个回调（评审 O5）
     publisher-confirm-type: correlated
+    publisher-returns: true
   # Nacos 配置中心（T4.8）：限流阈值从配置中心读，改值不重启即时生效（@RefreshScope）
   config:
     import:

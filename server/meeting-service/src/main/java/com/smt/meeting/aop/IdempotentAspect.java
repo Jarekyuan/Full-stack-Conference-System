@@ -7,6 +7,8 @@ import com.smt.common.result.ErrorCode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.aspectj.lang.ProceedingJoinPoint;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -26,6 +28,11 @@ import java.time.Duration;
  * 现在：已完成 → 10006（真重复）；处理中 → 短暂等待首个请求的结果；
  *      等待期间首个请求失败并删了 key → 自己接手执行，保住"失败可重试"的语义。
  *
+ * <h3>与其他切面的顺序（2026-10-16 评审 O4：显式定死，别靠 bean 名碰巧）</h3>
+ * `审计(+10) → 幂等(+20) → 限流(+30) → 事务`：重复提交要在**消耗限流额度之前**被挡下——
+ * 用户手抖点两下不该被扣两次防刷配额。此前两个切面都没写 @Order，是靠 bean 注册顺序碰巧成立的，
+ * 改个类名就会静默反转（反转后 10006 与 10005 谁先返回就变了）。
+ *
  * 与事务的关系：切面在 Controller 层（事务在 Service 层），先幂等判重、后进事务；
  * 并发下只有拿到 SETNX 的那个请求能执行业务，其余按上面的状态机处理。
  */
@@ -33,6 +40,7 @@ import java.time.Duration;
 @Aspect
 @Component
 @RequiredArgsConstructor
+@Order(Ordered.HIGHEST_PRECEDENCE + 20)
 public class IdempotentAspect {
 
     public static final String HEADER_IDEMPOTENCY_TOKEN = "X-Idempotency-Token";

@@ -43,11 +43,13 @@ public class LogAspect {
         try {
             Object result = pjp.proceed();
             // 成功路径的审计本身也不能抛（catch 在 recordQuietly 里）
-            recordQuietly(logAnnotation.type(), extractTargetId(pjp.getArgs(), result),
+            recordQuietly(logAnnotation.type(), extractTargetId(pjp.getArgs(), result, logAnnotation),
                     true, System.currentTimeMillis() - start, null);
             return result;
         } catch (Throwable e) {
-            recordQuietly(logAnnotation.type(), extractTargetId(pjp.getArgs(), null),
+            // ⚠️ 失败路径**仍要看参数**：cancel/update/extend 的目标 id 就在参数里（单测逮过我传 null 的版本）；
+            // 只有 targetFromResultOnly 的创建类操作才记 "-"
+            recordQuietly(logAnnotation.type(), extractTargetId(pjp.getArgs(), null, logAnnotation),
                     false, System.currentTimeMillis() - start, e.getClass().getSimpleName() + ": " + e.getMessage());
             throw e; // 业务异常照常抛（审计只是旁路）
         }
@@ -70,10 +72,13 @@ public class LogAspect {
      * <p>为什么不要求每个调用点显式传 id：那会让业务方法为了审计改签名（把审计成本转嫁给业务代码）。
      * 这里用"约定 + 兜底"——取不到就记 `-`，**审计宁可缺一个字段，不能因为取 id 失败而报错**。
      */
-    private Long extractTargetId(Object[] args, Object result) {
+    private Long extractTargetId(Object[] args, Object result, Log annotation) {
         Long fromResult = result == null ? null : extractIdFromResult(result);
         if (fromResult != null) {
             return fromResult;
+        }
+        if (annotation.targetFromResultOnly()) {
+            return null; // 创建类操作：参数里没有目标 id，取不到就记 "-"（宁可缺字段，不可记错 id）
         }
         if (args != null) {
             for (Object arg : args) {

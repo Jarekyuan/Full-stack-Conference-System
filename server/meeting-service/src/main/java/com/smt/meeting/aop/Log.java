@@ -26,4 +26,13 @@ public @interface Log {
 
     /** 操作类型（写进审计行的 ACTION 字段；用常量字符串而不是枚举，方便跨服务/跨模块复用同一套词汇） */
     String type();
+
+    /**
+     * 目标 id **只认返回值**（创建类操作的参数里没有"被操作对象"的 id）。
+     *
+     * <p>为什么要有这个开关（2026-10-16 评审 O3）：`create(dto, organiserId)` 的参数里第一个 Long
+     * 是**组织人 id**，失败时按"参数优先"兜底会记成 `target=组织人id`——审计员会当成"操作了那个会议"。
+     * 开启它之后，创建失败就老老实实记 `target=-`（宁可缺一个字段，不可记错一个 id）。
+     */
+    boolean targetFromResultOnly() default false;
 }

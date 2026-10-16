@@ -37,7 +37,7 @@ class MeetingExtendLimitTest {
         meetingMapper = mock(MeetingMapper.class);
         strategyMapper = mock(RoomStrategyMapper.class);
         // 只测"上限计算"这条只读路径：其余依赖传 null（它不会走到）
-        service = new MeetingReserveService(meetingMapper, null, strategyMapper, null, null, null, null, null, null);
+        service = new MeetingReserveService(meetingMapper, null, strategyMapper, null, null, null, null, null, null, null);
     }
 
     private Meeting ongoing(LocalDateTime end) {

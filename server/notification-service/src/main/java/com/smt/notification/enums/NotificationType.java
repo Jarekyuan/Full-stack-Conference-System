@@ -14,7 +14,7 @@ public enum NotificationType {
     APPROVAL_TODO,
     /** 审批通过/拒绝 → 组织人 */
     APPROVAL_RESULT,
-    /** 开始前 15 分钟提醒 → 参会人（T4.5） */
+    /** 开始前 15 分钟提醒 → **组织人 + 参会人**（docs/04 5.3 于 2026-10-16 变更） */
     MEETING_REMIND,
     /** 会议时间/信息变更 → 参会人 */
     MEETING_UPDATED,

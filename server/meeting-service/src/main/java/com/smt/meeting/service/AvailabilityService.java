@@ -57,8 +57,6 @@ import com.smt.meeting.vo.RoomCalendarVO;
 @RequiredArgsConstructor
 public class AvailabilityService {
 
-    /** docs/02 6.4 的键设计：cache:calendar:{roomId}:{weekStart} */
-    private static final String CALENDAR_KEY_PREFIX = "cache:calendar:";
     /** 有数据时的基础 TTL */
     private static final Duration CALENDAR_TTL = Duration.ofMinutes(5);
     /** 抖动幅度（秒）：实际 TTL = 5min ± 这个值 */
@@ -75,6 +73,8 @@ public class AvailabilityService {
     private final StringRedisTemplate redis;
     private final RedissonClient redissonClient;
     private final ObjectMapper objectMapper;
+    /** 日历缓存失效（改期时要连"旧房间/旧周"一起删，见 onMeetingChanged 的说明） */
+    private final CalendarCacheEvictor cacheEvictor;
 
     /**
      * 批量可用性：逐会议室调冲突检测（无锁），组装 available + conflicts。
@@ -102,7 +102,7 @@ public class AvailabilityService {
      */
     public RoomCalendarVO calendar(Long roomId, LocalDate week) {
         LocalDate weekStart = week.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-        String key = CALENDAR_KEY_PREFIX + roomId + ":" + weekStart;
+        String key = CalendarCacheEvictor.CALENDAR_KEY_PREFIX + roomId + ":" + weekStart;
 
         RoomCalendarVO cached = readCache(key);
         if (cached != null) {
@@ -214,41 +214,25 @@ public class AvailabilityService {
     /**
      * 会议变更后删除受影响周的日历缓存（Cache-Aside：先更库、后删缓存）。
      *
-     * <p>为什么挂在**领域事件**上而不是塞进各个写方法里：写路径有创建/改期/取消/审批通过/拒绝/延长/结束
-     * 六七条，且将来还会加（周期会议批量、系列取消…）。事件是"业务事实已经发生"的**统一出口**，
-     * 在这里收口，新写路径只要发事件就自动获得缓存一致性——漏一个写方法的代价是"用户看到过期日历"，
-     * 而且极难察觉（评审最怕的就是这种静默不一致）。
+     * <p>为什么挂在**领域事件**上而不是逐个塞进写方法里：写路径有创建/改期/取消/审批通过/拒绝/延长/结束
+     * 多类，且将来还会加（M5 的周期会议批量、系列取消…）。事件是"业务事实已经发生"的**统一出口**，
+     * 新写路径只要发事件就自动获得缓存一致性——漏一个写方法的代价是"用户看到过期日历"，
+     * 而且极难察觉。
      *
-     * <p>AFTER_COMMIT：事务回滚了就不该删缓存（那时库没变，删了只是白白回源一次；
-     * 更糟的是"缓存删了、库回滚了"，读到的仍是旧数据，看起来像删除失效）。
+     * <p>AFTER_COMMIT：事务回滚了就不该删缓存（那时库没变，删了只是白白回源一次）。
      *
-     * <p>⚠️ 已知不足：**定时任务把 20→30/40 时没有发事件**，所以"进行中/已结束"这两次状态变化最多
-     * 滞后一个 TTL（5 分钟）才在日历上体现。日历是展示用途、TTL 又有界，先接受并记在这里；
-     * 要立刻准确就让状态任务也发事件（多一次缓存删除，代价很小，但当前没有这个需求）。
+     * <p>⚠️ **两类已知缺口**（2026-10-16 评审 R3 补记，此前只记了第二类）：
+     * ① **改期**只删"新房间 + 新周"——事件里只有新值，旧房间/旧周的缓存由
+     *    {@code MeetingReserveService.update()} 在成功后就地调 {@link CalendarCacheEvictor} 补删
+     *    （两处配合，缺一处就会留下一场"已经搬走"的会）；
+     * ② **定时任务**把 20→30/40 时不发事件，所以"进行中/已结束"最多滞后一个 TTL（5 分钟）才在日历上体现。
+     *    日历是展示用途、TTL 有界，先接受；要即时就让状态任务也发事件。
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onMeetingChanged(MeetingDomainEvent event) {
         if (event.type() == MeetingEventType.REMIND) {
             return; // 提醒不改变任何日程数据
         }
-        try {
-            evictWeeks(event.roomId(), event.startTime(), event.endTime());
-        } catch (Exception e) {
-            // 删缓存失败不能影响业务（缓存会自然过期）
-            log.warn("[缓存] 删除日历缓存失败: meetingId={}, err={}", event.meetingId(), e.getMessage());
-        }
-    }
-
-    /** 会议可能横跨两周（12-31 到 01-01 这类），两周边界的 key 都要删 */
-    private void evictWeeks(Long roomId, LocalDateTime start, LocalDateTime end) {
-        if (roomId == null || start == null || end == null) {
-            return;
-        }
-        LocalDate startWeek = start.toLocalDate().with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-        LocalDate endWeek = end.toLocalDate().with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-        redis.delete(CALENDAR_KEY_PREFIX + roomId + ":" + startWeek);
-        if (!endWeek.equals(startWeek)) {
-            redis.delete(CALENDAR_KEY_PREFIX + roomId + ":" + endWeek);
-        }
+        cacheEvictor.evict(event.roomId(), event.startTime(), event.endTime());
     }
 }

@@ -27,7 +27,7 @@ public enum MeetingEventType {
     CANCELLED(MeetingMqTopology.QUEUE_CANCELLED),
     /** 修改（时间/会议室/标题/备注/参会人） */
     UPDATED(MeetingMqTopology.QUEUE_UPDATED),
-    /** 会议提醒（T4.5 延迟消息，提前 15 分钟） */
+    /** 会议提醒（T4.5：定时扫描在"开始前 15 分钟窗口"内发出，**不是延迟消息**，见 docs/02 5.4） */
     REMIND(MeetingMqTopology.QUEUE_REMIND);
 
     private final String routingKey;

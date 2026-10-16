@@ -47,6 +47,11 @@ class LogAspectTest {
         public String type() {
             return "MEETING_CANCEL";
         }
+
+        @Override
+        public boolean targetFromResultOnly() {
+            return false;
+        }
     };
 
     @BeforeEach

@@ -9,23 +9,29 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * 消费幂等（T4.3）：`SETNX mq:idem:{msgId}`，成功才处理。
+ * 消费幂等（T4.3）：`mq:idem:{msgId}` —— 记的是"这条消息**已经成功处理过**"。
  *
- * <p>为什么消费端**必须**自己去重：MQ 的投递语义是 at-least-once——消费者 ack 前掉线、
- * 网络抖动、重试，都会让同一条消息再来一次。broker 不保证"只投一次"，
- * 去重只能由知道业务语义的那一端做。
+ * <h3>⚠️ 标记必须在**成功之后**写（2026-10-16 评审 R1，我第一版改错了）</h3>
+ * 正确的时序是"先处理、成功才标记"：
+ * <pre>
+ *   已处理？ ──是─▶ ack（重复投递，丢弃）
+ *      │否
+ *      ▼
+ *   处理（重试 3 次）─失败─▶ nack 进死信（**不写标记** → 重放死信时能重新处理）
+ *      │成功
+ *      ▼
+ *   写"已处理"标记 ─▶ ack（ack 若失败：消息重投时标记已在 → 被正确判为重复，不会重复发通知）
+ * </pre>
  *
- * <h3>key 的值带状态（P 处理中 / S 已完成），不是一个裸标记</h3>
- * 和 HTTP 幂等切面（{@code IdempotentAspect}）同一个道理，但**这个场景更尖锐**：
- * 如果只用"key 存在 = 处理过"，那么"处理失败 → 重试"时，重试会撞上自己刚写的标记、
- * 被判成重复消息直接 ack 掉——**消息就这么静默丢了**，而且日志上看到的是"重复消息，已丢弃"，
- * 像是正常的去重。所以失败路径必须**显式释放**标记（{@link #release}）。
+ * <p>**在"处理之前"写标记是错的**——无论叫它 P（处理中）还是 S（已处理），后果都一样：
+ * 进程在处理中崩溃 → broker 立刻重投 → 新进程看到标记还在 → 判为重复 → ack 丢弃
+ * → **这条通知永远不会生成**，而日志写着"重复投递，已丢弃"，看起来完全正常。
+ * （初版用 P/S 双状态，我第一版"修复"只是把 P 去掉、标记仍写在前面——后果一模一样，
+ * 是评审 agent 的追问让我发现改错了方向。）
  *
- * <h3>两个 TTL 为什么不一样</h3>
- * P（处理中）10 分钟：只用来盖住"一次处理 + 重试"的时间窗，越短越好——
- * 进程在处理中崩溃时，这条消息重投回来还能重新处理（P 已过期），不至于是"永久性跳过"。
- * S（已完成）24 小时：挡重放（docs/02 6.4 的键设计）。超过 24h 的重投会重复通知一次，
- * 这个代价换取"key 不会无限堆积"，对通知来说是可接受的。
+ * <p>代价：**极少数并发重复**（同一 msgId 的两份同时被处理，且都成功）会重复发一条通知——
+ * 这在单消费者/单实例下几乎不可能（一条消息只投给一个消费者），而它换掉的是"崩溃后必丢"。
+ * 取舍明确：**宁可重复一条通知，不可静默丢失**（重复只是打扰一次，丢失是用户永远不知道）。
  */
 @Slf4j
 @Component
@@ -34,35 +40,24 @@ public class ConsumeIdempotency {
 
     /** 与 docs/02 6.4 的 `mq:idem:{msgId}` 对齐 */
     private static final String KEY_PREFIX = "mq:idem:";
-    private static final String STATE_PROCESSING = "P";
-    private static final String STATE_DONE = "S";
-    private static final Duration PROCESSING_TTL = Duration.ofMinutes(10);
+    /** 24 小时：挡重放的窗口（docs/02 6.4）。超过 24h 的重投会重复通知一次，换取 key 不无限堆积 */
     private static final Duration DONE_TTL = Duration.ofHours(24);
 
     private final StringRedisTemplate redis;
 
-    /** 取用结果：拿到了（该我处理） / 已处理过（丢弃） / 正在处理中（丢弃重复投递） */
-    public enum AcquireResult {
-        ACQUIRED, DONE, IN_FLIGHT
-    }
-
-    public AcquireResult acquire(String msgId) {
-        String key = KEY_PREFIX + msgId;
-        if (Boolean.TRUE.equals(redis.opsForValue().setIfAbsent(key, STATE_PROCESSING, PROCESSING_TTL))) {
-            return AcquireResult.ACQUIRED;
+    /** 这条消息是否已经成功处理过（重复投递要跳过） */
+    public boolean isProcessed(String msgId) {
+        try {
+            return Boolean.TRUE.equals(redis.hasKey(KEY_PREFIX + msgId));
+        } catch (Exception e) {
+            // Redis 故障时**不让它静默通过**：抛出去 → 消息不 ack、被重投（幂等是正确性前提，
+            // 不像限流那样"异常放行"——没有去重就可能重复发通知，而"等一下再处理"没有任何损失）
+            throw e;
         }
-        return STATE_DONE.equals(redis.opsForValue().get(key))
-                ? AcquireResult.DONE
-                : AcquireResult.IN_FLIGHT;
     }
 
-    /** 处理成功：把标记改成"已完成"并延长到 24h */
-    public void markDone(String msgId) {
-        redis.opsForValue().set(KEY_PREFIX + msgId, STATE_DONE, DONE_TTL);
-    }
-
-    /** 处理失败：撤销标记，否则重试/重投会被自己的标记挡掉（见类注释） */
-    public void release(String msgId) {
-        redis.delete(KEY_PREFIX + msgId);
+    /** 处理成功后才标记（见类注释：标记写在处理之前 = 崩溃后丢消息） */
+    public void markProcessed(String msgId) {
+        redis.opsForValue().set(KEY_PREFIX + msgId, "S", DONE_TTL);
     }
 }

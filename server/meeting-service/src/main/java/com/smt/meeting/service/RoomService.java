@@ -70,7 +70,7 @@ public class RoomService {
     // 变更后整体失效：会议室缓存（列表 + 详情）。策略变更也在此列——列表里带 needApproval 等策略字段
     @CacheEvict(cacheNames = {CacheConfig.ROOM_LIST_CACHE, CacheConfig.ROOM_DETAIL_CACHE}, allEntries = true)
     @Transactional
-    @Log(type = "ROOM_CREATE")
+    @Log(type = "ROOM_CREATE", targetFromResultOnly = true)
     public Long create(RoomSaveDTO dto) {
         ensureGroupExists(dto.getGroupId());
         MeetingRoom room = new MeetingRoom();
