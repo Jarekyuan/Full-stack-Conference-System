@@ -7,7 +7,7 @@
  * 埋在组件的 JSX 里就只能靠手点验证。抽出来才能用单测钉住（评审 P1-15）。
  * DOM 侧的 `getBoundingClientRect()` 由调用方算成比例后传进来，本模块不碰 window。
  */
-import dayjs from 'dayjs'
+import dayjs, { type Dayjs } from 'dayjs'
 import type { CalendarMeeting } from '@/api/meeting'
 
 /** 时间轴窗口（业务时间）：超出窗口的会议块裁剪到边界 */
@@ -45,6 +45,24 @@ export function slotFromClickRatio(ratio: number): { startMinutes: number; endMi
   const start = Math.min(clampMinutes(Math.round(raw / SNAP_MINUTES) * SNAP_MINUTES), LATEST_START_MINUTES)
   // 末端不越界：19:30 点下去给到 20:00（半小时），而不是 20:30
   return { startMinutes: start, endMinutes: Math.min(start + DEFAULT_DURATION_MINUTES, DAY_END_MINUTES) }
+}
+
+/**
+ * 某日在时间轴窗口内的“已过去比例”（0~1），用于给过去时段盖灰罩（T6.1）：
+ * - 过去的日期 → 1（整天灰）
+ * - 未来的日期 → 0
+ * - 今天 → 从 08:00 到当前时刻的比例（08:00 前=0，20:00 后=1）
+ *
+ * 只负责画灰罩；**点击兜底拦截**还要按具体时刻再判一次（吸附可能把边界点成过去）。
+ */
+export function pastRatio(date: string, now: Dayjs = dayjs()): number {
+  const day = dayjs(date)
+  if (day.isBefore(now, 'day')) return 1
+  if (day.isAfter(now, 'day')) return 0
+  const minutes = now.hour() * 60 + now.minute()
+  if (minutes <= DAY_START_MINUTES) return 0
+  if (minutes >= DAY_END_MINUTES) return 1
+  return (minutes - DAY_START_MINUTES) / TOTAL_MINUTES
 }
 
 /** 会议块的几何：top/height 百分比（裁剪到时间轴窗口内）+ 时长分钟数（决定文字排几行） */

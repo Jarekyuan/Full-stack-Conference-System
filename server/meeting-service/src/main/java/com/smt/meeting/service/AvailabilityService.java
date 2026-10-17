@@ -3,11 +3,12 @@ package com.smt.meeting.service;
 import java.time.DayOfWeek;
 import java.time.Duration;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
@@ -30,6 +31,7 @@ import com.smt.common.mq.MeetingDomainEvent;
 import com.smt.common.mq.MeetingEventType;
 import com.smt.meeting.dto.AvailabilityQueryDTO;
 import com.smt.meeting.mapper.MeetingMapper;
+import com.smt.meeting.mapper.MeetingParticipantMapper;
 import com.smt.meeting.vo.AvailabilityVO;
 import com.smt.meeting.vo.CalendarMeetingVO;
 import com.smt.meeting.vo.MeetingConflictVO;
@@ -70,6 +72,8 @@ public class AvailabilityService {
 
     private final ConflictChecker conflictChecker;
     private final MeetingMapper meetingMapper;
+    /** 日历的“邀请我的”标记：按请求用户实时查，结果**不写缓存** */
+    private final MeetingParticipantMapper meetingParticipantMapper;
     private final StringRedisTemplate redis;
     private final RedissonClient redissonClient;
     private final ObjectMapper objectMapper;
@@ -98,22 +102,24 @@ public class AvailabilityService {
 
     /**
      * 单会议室某周日历：week 传该周任意一天，归一化到周一起的 7 天，补空天后返回。
-     * 默认走缓存（见类注释）；`skipCache` 仅供排障/对拍使用。
+     *
+     * <p>{@code userId} 用于给每条会议打 `invited`（当前用户是否参会）。
+     * **缓存里存的是未打标的共享数据**，读出来之后才按用户装饰——见 {@link #decorateInvited}。
      */
-    public RoomCalendarVO calendar(Long roomId, LocalDate week) {
+    public RoomCalendarVO calendar(Long roomId, LocalDate week, Long userId) {
         LocalDate weekStart = week.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
         String key = CalendarCacheEvictor.CALENDAR_KEY_PREFIX + roomId + ":" + weekStart;
 
         RoomCalendarVO cached = readCache(key);
         if (cached != null) {
-            return cached;
+            return decorateInvited(cached, userId);
         }
-        return rebuild(roomId, weekStart, key);
+        return rebuild(roomId, weekStart, key, userId);
     }
 
     // ---------- 缓存内部 ----------
 
-    private RoomCalendarVO rebuild(Long roomId, LocalDate weekStart, String key) {
+    private RoomCalendarVO rebuild(Long roomId, LocalDate weekStart, String key, Long userId) {
         RLock lock = redissonClient.getLock(key + ":rebuild");
         boolean acquired = false;
         try {
@@ -124,21 +130,21 @@ public class AvailabilityService {
                 Thread.sleep(WAIT_FOR_REBUILD_MS);
                 RoomCalendarVO afterWait = readCache(key);
                 if (afterWait != null) {
-                    return afterWait;
+                    return decorateInvited(afterWait, userId);
                 }
                 log.info("[缓存] 重建等待超时，直接回源: key={}", key);
-                return loadAndCache(roomId, weekStart, key);
+                return decorateInvited(loadAndCache(roomId, weekStart, key), userId);
             }
             // 双检：等锁期间可能已被别的线程建好
             RoomCalendarVO cached = readCache(key);
-            return cached != null ? cached : loadAndCache(roomId, weekStart, key);
+            return decorateInvited(cached != null ? cached : loadAndCache(roomId, weekStart, key), userId);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return loadFromDb(roomId, weekStart);
+            return decorateInvited(loadFromDb(roomId, weekStart), userId);
         } catch (Exception e) {
             // 锁/缓存故障一律降级回源（缓存是旁路）
             log.warn("[缓存] 互斥重建异常，回源: key={}, err={}", key, e.getMessage());
-            return loadFromDb(roomId, weekStart);
+            return decorateInvited(loadFromDb(roomId, weekStart), userId);
         } finally {
             if (acquired && lock.isHeldByCurrentThread()) {
                 lock.unlock();
@@ -156,6 +162,33 @@ public class AvailabilityService {
             // 写缓存失败不影响本次返回（下次再来建）
             log.warn("[缓存] 写入失败: key={}, err={}", key, e.getMessage());
         }
+        return vo;
+    }
+
+    /**
+     * 给缓存/回源结果打上“当前用户是否参会”的标记（T6.1）。
+     *
+     * <p>**必须在缓存之外做**：日历缓存键是 `room + week` 共享的，用户相关字段一旦写进缓存，
+     * 下一个用户就会看到上一个人的“邀请我的”。因此缓存里存的永远是 invited 未赋值的基础数据，
+     * 这里只改**本次反序列化出来的对象**（readCache 每次都 new 一个）。
+     *
+     * <p>userId 为空（理论上不会，日历要求登录）= 不做标记，前端按“其他”处理。
+     */
+    private RoomCalendarVO decorateInvited(RoomCalendarVO vo, Long userId) {
+        if (userId == null) {
+            return vo;
+        }
+        List<Long> meetingIds = vo.getDays().stream()
+                .flatMap(day -> day.getMeetings().stream())
+                .map(CalendarMeetingVO::getMeetingId)
+                .toList();
+        if (meetingIds.isEmpty()) {
+            return vo;
+        }
+        Set<Long> invitedIds = new HashSet<>(
+                meetingParticipantMapper.selectInvitedMeetingIds(userId, meetingIds));
+        vo.getDays().forEach(day -> day.getMeetings()
+                .forEach(meeting -> meeting.setInvited(invitedIds.contains(meeting.getMeetingId()))));
         return vo;
     }
 

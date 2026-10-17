@@ -1,5 +1,6 @@
 package com.smt.meeting.controller;
 
+import com.smt.common.context.UserContext;
 import com.smt.common.exception.BusinessException;
 import com.smt.common.result.ErrorCode;
 import com.smt.common.result.Result;
@@ -47,6 +48,7 @@ public class AvailabilityController {
             // 日期格式错误按参数错误返回（10001），不被 500 兜底吞掉
             throw new BusinessException(ErrorCode.PARAM_ERROR);
         }
-        return Result.success(availabilityService.calendar(id, weekDate));
+        // userId 用于给每条会议打“邀请我的”标记（T6.1）；权限仍是“登录即可”
+        return Result.success(availabilityService.calendar(id, weekDate, UserContext.getUserId()));
     }
 }

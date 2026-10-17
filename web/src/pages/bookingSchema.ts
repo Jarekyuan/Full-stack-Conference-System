@@ -40,6 +40,11 @@ export const bookingSchema = z
     path: ['timeRange'],
     message: '结束时间必须晚于开始时间',
   })
+  // T6.1：过去时间不可预约（UI 已 disabledDate/disabledTime，这里兜住手工输入/预填）
+  .refine((v) => v.timeRange[0].isAfter(dayjs()), {
+    path: ['timeRange'],
+    message: '不能预约过去的时间',
+  })
   .refine((v) => !v.repeatWeekly || (v.repeatEndDate && dayjs.isDayjs(v.repeatEndDate)), {
     path: ['repeatEndDate'],
     message: '请选择重复结束日期',

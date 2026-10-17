@@ -8,17 +8,22 @@
 import { http } from './request'
 import type { PageResult } from './types'
 
-/** 日历中的会议条目（后端 CalendarMeetingVO）；日历只返回有效日程（10/20/30） */
+/** 日历中的会议条目（后端 CalendarMeetingVO）；日历返回 10/20/30/40（50/60 不展示） */
 export interface CalendarMeeting {
   meetingId: number
   title: string
   /** 后端统一时间格式 yyyy-MM-dd HH:mm:ss */
   startTime: string
   endTime: string
-  /** 10 待审批 / 20 已预约 / 30 进行中（配色见 docs/04 5.1） */
+  /** 10 待审批 / 20 已预约 / 30 进行中 / 40 已结束（日历四色见 docs/04 5.1） */
   status: number
   organiserId: number
   organiserName: string
+  /**
+   * 当前登录用户是否在这场的参会人里（组织人不算）。
+   * 服务端按请求用户实时装配，**不来自共享缓存**；老缓存/缺省时按 false 处理。
+   */
+  invited?: boolean
 }
 
 /** 一天的日程（后端 RoomCalendarVO.Day；固定 7 项，无会议的天为空数组） */

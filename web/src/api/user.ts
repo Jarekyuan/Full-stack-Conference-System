@@ -22,9 +22,12 @@ export interface UserSearchItem {
   deptName: string | null
 }
 
-/** 按姓名/用户名模糊搜索用户（选参会人用；后端最多 20 条，空关键字返回空数组） */
-export function searchUsers(keyword: string): Promise<UserSearchItem[]> {
-  return http.get<UserSearchItem[]>('/users/search', { params: { keyword } })
+/**
+ * 按姓名/用户名模糊搜索用户，或按部门列出直属成员（T6.1 部门树选人）。
+ * 后端规则：keyword 与 deptId 都为空 → 空数组；只传 deptId → 该部门直属成员；最多 50 条。
+ */
+export function searchUsers(keyword?: string, deptId?: number): Promise<UserSearchItem[]> {
+  return http.get<UserSearchItem[]>('/users/search', { params: { keyword, deptId } })
 }
 
 // ———————————————————— 管理端：组织与用户页（T1.20） ————————————————————

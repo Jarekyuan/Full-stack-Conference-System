@@ -44,12 +44,19 @@ public class UserService {
     private final SysDeptMapper sysDeptMapper;
     private final PasswordEncoder passwordEncoder;
 
-    /** 选参会人搜索：空关键字直接返回空（避免无意义全表扫描）；出参为场景专用的 UserSearchVO（不装配角色、不含 email） */
-    public List<UserSearchVO> search(String keyword) {
-        if (StrUtil.isBlank(keyword)) {
+    /**
+     * 选参会人搜索 / 按部门列人（T6.1）。
+     *
+     * <p>keyword 与 deptId 都为空 → 空数组（避免无意义全表扫描）；
+     * 只传 deptId → 列出该部门**直属成员**（子部门由前端部门树继续下钻）。
+     * 出参仍是场景专用的 UserSearchVO（不装配角色、不含 email）。
+     */
+    public List<UserSearchVO> search(String keyword, Long deptId) {
+        boolean hasKeyword = StrUtil.isNotBlank(keyword);
+        if (!hasKeyword && deptId == null) {
             return List.of();
         }
-        return sysUserMapper.searchBrief(keyword.trim());
+        return sysUserMapper.searchBrief(hasKeyword ? keyword.trim() : null, deptId);
     }
 
     /** 批量查询用户精简信息（服务间内部接口：id → {id, realName, email}） */

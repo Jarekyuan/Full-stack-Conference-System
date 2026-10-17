@@ -129,14 +129,14 @@ const md = (d) => `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDa
     await p2.waitForURL('**/calendar', { timeout: 10000 });
     await p2.waitForTimeout(1500);
 
-    // 挑周六（未来）的空闲整点：与 e2e-booking 同一套几何定位（行=会议室、列=日期）
+    // 挑**下一周周六**的空闲整点：与 e2e-booking 同一套几何定位（行=会议室、列=日期）。
+    // 固定用下一周，避免今天恰好是周六时选到已过去的钟点（T6.1 起过去时段会被拦截）。
     const monday = new Date();
     monday.setDate(monday.getDate() - (monday.getDay() === 0 ? 6 : monday.getDay() - 1));
+    monday.setDate(monday.getDate() + 7);
     const SAT = new Date(monday.getTime() + 5 * 86400000);
-    const roomCell = await p2.getByText('青竹厅').first().locator('..').boundingBox();
-    const satHeader = await p2.getByText(new RegExp(`^${md(SAT)}$`)).first().boundingBox();
-    const clickX = satHeader.x + satHeader.width / 2;
-    const yAtRatio = (r) => roomCell.y + roomCell.height * r;
+    await p2.getByRole('button', { name: '下一周' }).click();
+    await p2.waitForTimeout(1200);
     const hourRatio = (h) => (h - 8) / 12; // 时间轴 08:00–20:00
 
     let hour = -1;
@@ -159,6 +159,13 @@ const md = (d) => `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDa
     evictCalendarCache(1, fmt(monday));
     await p2.reload({ waitUntil: 'networkidle' });
     await p2.waitForTimeout(1500);
+    // reload 会回到本周——重新切到下一周再取几何位置（旧坐标在 reload 后已失效）
+    await p2.getByRole('button', { name: '下一周' }).click();
+    await p2.waitForTimeout(1200);
+    const roomCell = await p2.getByText('青竹厅').first().locator('..').boundingBox();
+    const satHeader = await p2.getByText(new RegExp(`^${md(SAT)}$`)).first().boundingBox();
+    const clickX = satHeader.x + satHeader.width / 2;
+    const yAtRatio = (r) => roomCell.y + roomCell.height * r;
     await p2.mouse.click(clickX, yAtRatio(hourRatio(hour) + 0.02));
     await p2.waitForTimeout(700);
     const title = `E2E周系列-${Date.now()}`;

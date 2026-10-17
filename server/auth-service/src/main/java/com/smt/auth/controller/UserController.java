@@ -32,10 +32,11 @@ public class UserController {
 
     private final UserService userService;
 
-    /** 选参会人搜索（出参 UserSearchVO：id/realName/deptName，见 docs/04 3.1） */
+    /** 选参会人搜索 / 按部门列人（出参 UserSearchVO：id/realName/deptName，见 docs/04 3.1） */
     @GetMapping("/search")
-    public Result<List<UserSearchVO>> search(@RequestParam String keyword) {
-        return Result.success(userService.search(keyword));
+    public Result<List<UserSearchVO>> search(@RequestParam(required = false) String keyword,
+                                             @RequestParam(required = false) Long deptId) {
+        return Result.success(userService.search(keyword, deptId));
     }
 
     @GetMapping

@@ -4,10 +4,12 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { CalendarMeeting } from '@/api/meeting'
+import dayjs from 'dayjs'
 import {
   blockGeometry,
   DAY_END_MINUTES,
   DAY_START_MINUTES,
+  pastRatio,
   slotFromClickRatio,
   toMinutes,
 } from './calendarGeometry'
@@ -77,5 +79,26 @@ describe('blockGeometry（会议块定位）', () => {
   it('整段都在窗口外的会议：高度 0 且不为负（不会画出倒挂的块）', () => {
     const { minutes } = blockGeometry(meeting('2026-10-15 06:00:00', '2026-10-15 07:00:00'))
     expect(minutes).toBe(0)
+  })
+})
+
+describe('pastRatio（过去时段灰罩比例，T6.1）', () => {
+  const now = dayjs('2026-10-17 14:00:00')
+
+  it('过去的日期 → 整天灰（1）', () => {
+    expect(pastRatio('2026-10-16', now)).toBe(1)
+  })
+
+  it('未来的日期 → 不灰（0）', () => {
+    expect(pastRatio('2026-10-18', now)).toBe(0)
+  })
+
+  it('今天 14:00 → 从 08:00 到 14:00 占窗口 6/12 = 0.5', () => {
+    expect(pastRatio('2026-10-17', now)).toBe(0.5)
+  })
+
+  it('今天 08:00 前 → 0；20:00 后 → 1（不会越界）', () => {
+    expect(pastRatio('2026-10-17', dayjs('2026-10-17 07:30:00'))).toBe(0)
+    expect(pastRatio('2026-10-17', dayjs('2026-10-17 22:00:00'))).toBe(1)
   })
 })

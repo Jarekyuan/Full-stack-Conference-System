@@ -125,7 +125,7 @@
     <!--
       日历查询：按"开始时间落在本周"归属（跨天会议归到开始那天，前端无需处理跨天拆分）。
       范围条件 start_time >= ? AND start_time < ? 命中 idx_room_time 的 start_time 范围扫描。
-      只取 10/20/30：日历展示有效日程，40/50/60 是历史态。
+      取 10/20/30/40（T6.1）：40 已结束也要在日历上以灰色显示；50 已取消 / 60 已拒绝不展示。
     -->
     <select id="selectByRoomAndRange" resultMap="CalendarVOMap">
         SELECT m.id AS meeting_id, m.title, m.start_time, m.end_time, m.status,
@@ -135,7 +135,7 @@
         WHERE m.room_id = #{roomId}
           AND m.start_time &gt;= #{rangeStart}
           AND m.start_time &lt; #{rangeEnd}
-          AND m.status IN (10, 20, 30)
+          AND m.status IN (10, 20, 30, 40)
         ORDER BY m.start_time
     </select>
 

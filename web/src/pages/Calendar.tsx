@@ -8,15 +8,17 @@
  * 本任务（T2.F1）做到"点空格带出预填时间"；预约 Drawer 表单由 T2.F2 接入。
  */
 import { useCallback, useMemo, useState } from 'react'
-import { Alert, Button, Card, Space, Spin } from 'antd'
+import { Alert, Button, Card, Input, Space, Spin, Tooltip } from 'antd'
 import dayjs, { type Dayjs } from 'dayjs'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Search } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { getRoomCalendar, type CalendarDay, type CalendarMeeting } from '@/api/meeting'
 import { listRooms, type Room } from '@/api/room'
+import { CALENDAR_CATEGORY_META, type CalendarCategory } from '@/components/calendarAppearance'
 import { CalendarGrid, type EmptySlot } from '@/components/CalendarGrid'
 import BookingDrawer, { type BookingPrefill } from '@/pages/BookingDrawer'
 import { useAppRequest } from '@/hooks/useAppRequest'
+import { useUserStore } from '@/stores/userStore'
 
 /** 取该日期所在周的周一（dayjs day(): 0=周日 … 6=周六） */
 function mondayOf(date: Dayjs): Dayjs {
@@ -33,12 +35,18 @@ interface WeekPayload {
   failedRoomIds: number[]
 }
 
+/** 图例顺序：与 calendarAppearance 的优先级一致 */
+const LEGEND_CATEGORIES: CalendarCategory[] = ['pending', 'mine', 'invited', 'other']
+
 export default function Calendar() {
   const navigate = useNavigate()
+  const user = useUserStore((s) => s.user)
   const [week, setWeek] = useState<Dayjs>(() => mondayOf(dayjs()))
   const [bookingOpen, setBookingOpen] = useState(false)
   const [prefill, setPrefill] = useState<BookingPrefill | null>(null)
+  const [roomKeyword, setRoomKeyword] = useState('')
   const weekStr = week.format('YYYY-MM-DD')
+  const canApprove = (user?.roles ?? []).some((role) => role === 'APPROVER' || role === 'ADMIN')
 
   const { data, loading, refresh } = useAppRequest<WeekPayload>(
     async () => {
@@ -68,6 +76,19 @@ export default function Calendar() {
     () => Array.from({ length: 7 }, (_, i) => week.add(i, 'day').format('YYYY-MM-DD')),
     [week],
   )
+
+  // 会议室过滤：listRooms 不分页（当前量级很小），前端过滤足够；将来分页再下沉到后端
+  const filteredRooms = useMemo(() => {
+    const keyword = roomKeyword.trim().toLowerCase()
+    const rooms = payload?.rooms ?? []
+    if (!keyword) return rooms
+    return rooms.filter((room) =>
+      [room.name, room.location, ...(room.deviceTags ?? [])]
+        .join(' ')
+        .toLowerCase()
+        .includes(keyword),
+    )
+  }, [payload, roomKeyword])
 
   // 点空格 → 打开预约 Drawer（T2.F2），把日期 + 吸附后的分钟数组装成接口时间格式
   const handleEmptyClick = useCallback((slot: EmptySlot) => {
@@ -112,6 +133,32 @@ export default function Calendar() {
         </Space>
       }
     >
+      {/* 工具栏：会议室关键字过滤 + 四色图例（T6.1） */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <Input
+          allowClear
+          value={roomKeyword}
+          onChange={(e) => setRoomKeyword(e.target.value)}
+          prefix={<Search size={14} className="text-slate-400" />}
+          placeholder="搜索会议室名称 / 位置 / 设备"
+          style={{ width: 280 }}
+        />
+        <div className="flex flex-wrap items-center gap-4">
+          {LEGEND_CATEGORIES.map((category) => {
+            const meta = CALENDAR_CATEGORY_META[category]
+            return (
+              <span key={category} className="flex items-center gap-1.5 text-xs text-slate-500">
+                <span className={`inline-block h-2.5 w-2.5 rounded-sm ${meta.dotClass}`} />
+                {meta.label}
+              </span>
+            )
+          })}
+          <Tooltip title="已过期优先置灰；其余按 待审批 > 我预订 > 邀请我的 > 其他">
+            <span className="cursor-help text-xs text-slate-400">颜色说明</span>
+          </Tooltip>
+        </div>
+      </div>
+
       <Spin spinning={loading}>
         <div className="min-h-[280px]">
           {payload && payload.failedRoomIds.length > 0 && (
@@ -126,9 +173,12 @@ export default function Calendar() {
           )}
           {payload && (
             <CalendarGrid
-              rooms={payload.rooms}
+              rooms={filteredRooms}
               dates={dates}
               daysByRoom={payload.daysByRoom}
+              currentUserId={user?.id}
+              canApprove={canApprove}
+              emptyText={roomKeyword.trim() ? '没有匹配的会议室' : '暂无可用会议室'}
               onEmptyClick={handleEmptyClick}
               onMeetingClick={handleMeetingClick}
             />

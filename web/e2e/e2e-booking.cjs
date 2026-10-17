@@ -13,11 +13,13 @@ const BASE = 'http://localhost:5173';
 const TS = Date.now();
 const pad = (v) => String(v).padStart(2, '0');
 
-// 用本周六/周日（未来的日子），避免"今天已过去的钟点"被后端拒（30003）
+// 固定用**下一周**的周六/周日：避免“今天恰好是周六/周日”时选到已过去的钟点被后端拒（30003，
+// T6.1 起前端也会直接拦截过去时段）。下周的日期在任何一天运行都必定在未来。
 const MONDAY = (() => {
   const n = new Date();
   const d = new Date(n);
   d.setDate(n.getDate() - (n.getDay() === 0 ? 6 : n.getDay() - 1));
+  d.setDate(d.getDate() + 7);
   return d;
 })();
 const dayOf = (offset) => new Date(MONDAY.getTime() + offset * 86400000);
@@ -85,6 +87,9 @@ const hourRatio = (hour) => (hour * 60 - DAY_START_MIN) / DAY_TOTAL_MIN;
     await page.locator('button[type="submit"]').click();
     await page.waitForURL('**/calendar');
     await page.waitForTimeout(1500);
+    // 预检/操作都在下一周：先切过去
+    await page.getByRole('button', { name: '下一周' }).click();
+    await page.waitForTimeout(1200);
 
     const roomCell = await page.getByText('青竹厅').first().locator('..').boundingBox();
     const satHeader = await page.getByText(new RegExp(`^${md(SAT)}$`)).first().boundingBox();
@@ -101,7 +106,7 @@ const hourRatio = (hour) => (hour * 60 - DAY_START_MIN) / DAY_TOTAL_MIN;
         break;
       }
     }
-    check('预检找到周六的空闲整点', hour > 0, hour > 0 ? `${iso(SAT)} ${hour}:00` : '无（周六 10-16 点均被占）');
+    check('预检找到下周六的空闲整点', hour > 0, hour > 0 ? `${iso(SAT)} ${hour}:00` : '无（周六 10-16 点均被占）');
     if (hour < 0) throw new Error('无可用时段，请先清理周六的测试数据');
 
     // ---------- ① 正常创建成功并刷新日历 ----------
@@ -153,8 +158,8 @@ const hourRatio = (hour) => (hour * 60 - DAY_START_MIN) / DAY_TOTAL_MIN;
     for (let h = 10; h <= 17; h++) {
       if (await isFree(SUN, h)) freeHours.push(h);
     }
-    check('周日找到两个空闲整点（幂等 + 双击各用一个）', freeHours.length >= 2, freeHours.join(', '));
-    if (freeHours.length < 2) throw new Error('周日空闲整点不足，请先清理周日的测试数据');
+    check('下周日找到两个空闲整点（幂等 + 双击各用一个）', freeHours.length >= 2, freeHours.join(', '));
+    if (freeHours.length < 2) throw new Error('下周日空闲整点不足，请先清理下周日的测试数据');
     const [idemHour, dblHour] = freeHours;
 
     // 机制级：用同一个 X-Idempotency-Token 直打两次创建接口

@@ -11,7 +11,7 @@ import { bookingSchema } from './bookingSchema'
 const validInput = {
   title: '产品评审会',
   roomId: 3,
-  timeRange: [dayjs('2026-10-15 14:00'), dayjs('2026-10-15 15:00')] as const,
+  timeRange: [dayjs('2099-01-01 14:00'), dayjs('2099-01-01 15:00')] as const,
   userIds: [] as number[],
 }
 
@@ -49,7 +49,7 @@ describe('bookingSchema', () => {
   it('结束时间早于开始时间 → 报在 timeRange 上', () => {
     const result = bookingSchema.safeParse({
       ...validInput,
-      timeRange: [dayjs('2026-10-15 15:00'), dayjs('2026-10-15 14:00')],
+      timeRange: [dayjs('2099-01-01 15:00'), dayjs('2099-01-01 14:00')],
     })
     expect(result.success).toBe(false)
     if (result.success) return
@@ -58,8 +58,15 @@ describe('bookingSchema', () => {
   })
 
   it('首尾相同（零时长）也不合法', () => {
-    const t = dayjs('2026-10-15 14:00')
+    const t = dayjs('2099-01-01 14:00')
     expect(firstMessage({ ...validInput, timeRange: [t, t] })).toBe('结束时间必须晚于开始时间')
+  })
+
+  it('过去的时间 → 不能预约过去的时间（T6.1）', () => {
+    const past = dayjs().subtract(1, 'day').startOf('hour')
+    expect(
+      firstMessage({ ...validInput, timeRange: [past, past.add(1, 'hour')] }),
+    ).toBe('不能预约过去的时间')
   })
 
   it('主题：空白字符串与超长都拦下', () => {

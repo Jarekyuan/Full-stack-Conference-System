@@ -27,7 +27,7 @@ import {
   type RecurringCreateResult,
 } from '@/api/meeting'
 import type { Room } from '@/api/room'
-import UserPicker from '@/components/UserPicker'
+import DeptUserPicker from '@/components/DeptUserPicker'
 import { useAppRequest } from '@/hooks/useAppRequest'
 import { ApiError } from '@/api/types'
 import { API_TIME_FORMAT, bookingSchema, type BookingForm } from '@/pages/bookingSchema'
@@ -294,6 +294,18 @@ export default function BookingDrawer({ open, prefill, rooms, onClose, onSuccess
                 className="w-full"
                 value={field.value}
                 onChange={(v) => field.onChange(v)}
+                // 过去时间在 UI 层就不可选（T6.1）；后端 validateTime 仍会兜底 30003
+                disabledDate={(current) => current.isBefore(dayjs().startOf('day'))}
+                disabledTime={(current) => {
+                  if (!current || !current.isSame(dayjs(), 'day')) return {}
+                  const now = dayjs()
+                  return {
+                    disabledHours: () => Array.from({ length: now.hour() }, (_, i) => i),
+                    disabledMinutes: (hour: number) =>
+                      hour === now.hour() ? Array.from({ length: now.minute() }, (_, i) => i) : [],
+                    disabledSeconds: () => Array.from({ length: 60 }, (_, i) => i),
+                  }
+                }}
               />
             )}
           />
@@ -365,7 +377,7 @@ export default function BookingDrawer({ open, prefill, rooms, onClose, onSuccess
           <Controller
             name="userIds"
             control={control}
-            render={({ field }) => <UserPicker value={field.value} onChange={field.onChange} />}
+            render={({ field }) => <DeptUserPicker value={field.value} onChange={field.onChange} />}
           />
         </Form.Item>
 

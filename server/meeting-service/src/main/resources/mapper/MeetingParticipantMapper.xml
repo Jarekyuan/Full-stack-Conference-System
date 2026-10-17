@@ -41,4 +41,16 @@
         ORDER BY mp.id
     </select>
 
+    <!-- 当前用户在这批会议里作为参会人的 id（T6.1 日历“邀请我的”）：
+         命中 idx_user(user_id)；meeting_id IN 只做过滤，不依赖它做索引 -->
+    <select id="selectInvitedMeetingIds" resultType="java.lang.Long">
+        SELECT DISTINCT meeting_id
+        FROM meeting_participant
+        WHERE user_id = #{userId}
+          AND meeting_id IN
+        <foreach collection="meetingIds" item="mid" open="(" separator="," close=")">
+            #{mid}
+        </foreach>
+    </select>
+
 </mapper>

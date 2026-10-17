@@ -19,4 +19,11 @@ public interface MeetingParticipantMapper {
 
     /** 参会人明细（JOIN sys_user 直出姓名/邮箱；T2.8 详情用） */
     List<MeetingDetailVO.ParticipantVO> selectDetailByMeetingId(@Param("meetingId") Long meetingId);
+
+    /**
+     * 这批会议里当前用户是参会人的 meetingId（T6.1 日历“邀请我的”）。
+     * 命中 idx_user；返回值用于在**缓存读出后**给 VO 打 invited 标记（用户相关，不能进共享缓存）。
+     */
+    List<Long> selectInvitedMeetingIds(@Param("userId") Long userId,
+                                       @Param("meetingIds") List<Long> meetingIds);
 }

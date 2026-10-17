@@ -35,9 +35,14 @@ class RoomMapperTest {
     }
 
     @Test
-    void selectAllRoomsShouldReturn6WithJsonParsed() {
+    void selectAllRoomsShouldContainSeedRoomsWithJsonParsed() {
         List<MeetingRoom> rooms = meetingRoomMapper.selectAll();
-        assertEquals(6, rooms.size());
+        // 不锁死总数：管理员本来就能在界面上新增会议室（2026-10-17 用户验证时就加了一间“大明宫”）。
+        // 断言“种子会议室都在 + 至少 6 间”，既守住种子数据，又不把正常业务写操作当成测试失败。
+        assertTrue(rooms.size() >= 6, "至少应有 6 间种子会议室");
+        List<String> names = rooms.stream().map(MeetingRoom::getName).toList();
+        assertTrue(names.containsAll(List.of("青竹厅", "白桦厅", "梧桐厅", "银杏厅", "红枫厅", "云杉厅")),
+                "6 间种子会议室应都在，实际=" + names);
 
         MeetingRoom wutong = rooms.stream().filter(r -> r.getId() == 3L).findFirst().orElseThrow();
         assertEquals("梧桐厅", wutong.getName());

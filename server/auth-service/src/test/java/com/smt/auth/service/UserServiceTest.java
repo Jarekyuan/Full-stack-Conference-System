@@ -204,4 +204,31 @@ class UserServiceTest {
         assertThat(deptIds.getValue()).containsExactly(2L);
         verify(sysDeptMapper, never()).selectAll();
     }
+
+    // ———— T6.1：选参会人搜索 / 部门树选人 ————
+
+    @Test
+    void searchShouldReturnEmptyWhenNoKeywordAndNoDept() {
+        assertThat(service.search("  ", null)).isEmpty();
+        // 空条件不能打库：否则会变成"全表扫描 + 把整个通讯录返回"
+        verify(sysUserMapper, never()).searchBrief(any(), any());
+    }
+
+    @Test
+    void searchByDeptShouldListDirectMembers() {
+        service.search(null, 2L);
+        verify(sysUserMapper).searchBrief(null, 2L);
+    }
+
+    @Test
+    void searchByKeywordAndDeptShouldPassBoth() {
+        service.search(" 张 ", 2L);
+        verify(sysUserMapper).searchBrief("张", 2L);
+    }
+
+    @Test
+    void searchByKeywordOnlyShouldPassNullDept() {
+        service.search("张", null);
+        verify(sysUserMapper).searchBrief("张", null);
+    }
 }

@@ -56,17 +56,23 @@
         </foreach>
     </select>
 
-    <!-- 用户名/姓名模糊搜索（选参会人场景，最多 20 条；左模糊无法走索引，用户量小可接受） -->
-    <!-- 选参会人搜索（评审 P1-13）：只取 Picker 真正要用的三个字段（id/姓名/部门），
-         不再SELECT整行再在 Service 里挑字段——少查字段、也彻底杜绝 email 这类 PII 顺带出去 -->
+    <!-- 用户名/姓名模糊搜索 + 可选部门（选参会人/部门树选人，最多 50 条；左模糊无法走索引，用户量小可接受）。
+         keyword 为空、deptId 有值 = 列该部门直属成员（T6.1）；两个条件都不传时 Service 已直接返回空数组。
+         选参会人搜索（评审 P1-13）：只取 Picker 真正要用的三个字段（id/姓名/部门），
+         不再 SELECT 整行再在 Service 里挑字段——少查字段、也彻底杜绝 email 这类 PII 顺带出去 -->
     <select id="searchBrief" resultType="com.smt.auth.vo.UserSearchVO">
         SELECT u.id AS id, u.real_name AS realName, d.name AS deptName
         FROM sys_user u
         LEFT JOIN sys_dept d ON d.id = u.dept_id
-        WHERE u.username LIKE CONCAT('%', #{keyword}, '%')
-           OR u.real_name LIKE CONCAT('%', #{keyword}, '%')
+        <where>
+            <if test="deptId != null">AND u.dept_id = #{deptId}</if>
+            <if test="keyword != null and keyword != ''">
+                AND (u.username LIKE CONCAT('%', #{keyword}, '%')
+                OR u.real_name LIKE CONCAT('%', #{keyword}, '%'))
+            </if>
+        </where>
         ORDER BY u.id
-        LIMIT 20
+        LIMIT 50
     </select>
 
     <!-- 部门条件：null = 全部；否则 IN (...)（includeChildren 的子树已在 Service 展开成 id 列表） -->

@@ -21,8 +21,12 @@ public interface SysUserMapper {
     /** 批量按主键查询（IN + foreach；内部接口最多 100 个 id） */
     List<SysUser> selectByIds(@Param("ids") List<Long> ids);
 
-    /** 用户名/姓名模糊搜索（选参会人场景，最多 20 条；LEFT JOIN 部门直出 deptName） */
-    List<UserSearchVO> searchBrief(@Param("keyword") String keyword);
+    /**
+     * 用户名/姓名模糊搜索 + 可选的部门过滤（选参会人场景，最多 50 条；LEFT JOIN 部门直出 deptName）。
+     * keyword 为空、deptId 有值时 = 列出该部门直属成员（T6.1 部门树选人）。
+     */
+    List<UserSearchVO> searchBrief(@Param("keyword") String keyword,
+                                   @Param("deptId") Long deptId);
 
     /**
      * 统计总数（分页配套 COUNT）。
