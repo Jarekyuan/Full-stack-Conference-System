@@ -228,6 +228,39 @@ check "user2 收到了取消通知（未读 +1）" \
   "$(wait_count 1 "SELECT COUNT(*) FROM smt_meeting.notification WHERE meeting_id=$M4 AND user_id=$U2_ID AND read_flag=0;" 30)" "1"
 
 echo
+echo "=== 4.6 删除通知（T6.2）==="
+U1_IDS=$(sql "SELECT id FROM smt_meeting.notification WHERE user_id=$U1_ID ORDER BY id;")
+U1_COUNT=$(echo "$U1_IDS" | grep -c . || true)
+FIRST_ID=$(echo "$U1_IDS" | sed -n '1p')
+SECOND_ID=$(echo "$U1_IDS" | sed -n '2p')
+THIRD_ID=$(echo "$U1_IDS" | sed -n '3p')
+check "U1 至少有 3 条通知可删（前置）" "$([ "$U1_COUNT" -ge 3 ] && echo yes || echo no)" "yes"
+if [ "$U1_COUNT" -ge 3 ]; then
+  check "删除单条返回 0" "$(api "$U1" DELETE "/api/notifications/$FIRST_ID" | j "d['code']")" "0"
+  check "单条已从库中删除" \
+    "$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE id=$FIRST_ID;")" "0"
+
+  U2_NOTIF=$(sql "SELECT id FROM smt_meeting.notification WHERE user_id=$U2_ID ORDER BY id LIMIT 1;")
+  check "删除别人的通知 → 60001" \
+    "$(api "$U1" DELETE "/api/notifications/$U2_NOTIF" | j "d['code']")" "60001"
+
+  BATCH_BODY="{\"ids\":[$SECOND_ID,$THIRD_ID]}"
+  check "批量删除返回实际条数" \
+    "$(api "$U1" POST "/api/notifications/delete" "$BATCH_BODY" | j "d['data']['deleted']")" "2"
+  check "批量删除后两条都没了" \
+    "$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE id IN ($SECOND_ID,$THIRD_ID);")" "0"
+
+  U1_REMAIN=$((U1_COUNT - 3))
+  U2_TOTAL=$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE user_id=$U2_ID;")
+  check "删除全部返回实际条数" \
+    "$(api "$U1" DELETE "/api/notifications" | j "d['data']['deleted']")" "$U1_REMAIN"
+  check "U1 通知已清空" \
+    "$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE user_id=$U1_ID;")" "0"
+  check "U2 的通知不受影响" \
+    "$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE user_id=$U2_ID;")" "$U2_TOTAL"
+fi
+
+echo
 echo "=== 5. 身份只认网关注入（fail closed）==="
 DIRECT=$(curl -s --noproxy '*' "http://127.0.0.1:$PORT/notifications?page=1&size=10")
 check "直连 8083 不带身份头 → 列表为空（不会返回任何人的通知）" "$(echo "$DIRECT" | j "len(d['data']['list'])")" "0"

@@ -204,6 +204,24 @@ export function cancelMeeting(id: number, reason?: string): Promise<void> {
   return http.post<void>(`/meetings/${id}/cancel`, { reason })
 }
 
+/** 修改会议入参（后端 MeetingUpdateDTO；version 从详情接口取回，原样带回） */
+export interface MeetingUpdateInput {
+  title: string
+  roomId: number
+  startTime: string
+  endTime: string
+  remark?: string
+  version: number
+}
+
+/**
+ * 修改会议（仅组织人 + 状态 20；改期到需审批会议室会回退到 10）。
+ * 参会人不在修改范围内（后端 MeetingUpdateDTO 的约定）。
+ */
+export function updateMeeting(id: number, input: MeetingUpdateInput): Promise<void> {
+  return http.put<void>(`/meetings/${id}`, input)
+}
+
 // ———————————————————— 延长 / 提前结束（T3.F2）————————————————————
 // 状态要求：**仅进行中（30）**；权限：**仅组织人**。前端只负责"不给无意义的入口"，
 // 真正的裁决在服务端（40002 / 40004 / 40006 / 40001）。

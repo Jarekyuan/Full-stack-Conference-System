@@ -11,17 +11,18 @@
  * 这条规则涉及三个量的取小，前端再算一遍就是重写一遍规则，迟早不一致。
  */
 import { useCallback, useEffect, useState } from 'react'
-import { App, Button, Card, Descriptions, Input, InputNumber, Modal, Space, Spin, Timeline, Typography } from 'antd'
+import { App, Button, Card, Descriptions, InputNumber, Modal, Space, Spin, Timeline, Typography } from 'antd'
 import dayjs from 'dayjs'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  cancelMeeting,
   extendMeeting,
   finishMeeting,
   getExtendLimit,
   getMeeting,
   type ExtendLimit,
 } from '@/api/meeting'
+import CancelMeetingModal from '@/components/CancelMeetingModal'
+import MeetingEditDrawer from '@/components/MeetingEditDrawer'
 import MeetingStatusTag, { meetingEventText, meetingStatusText } from '@/components/MeetingStatusTag'
 import { useAppRequest } from '@/hooks/useAppRequest'
 import { useUserStore } from '@/stores/userStore'
@@ -39,7 +40,7 @@ export default function MeetingDetail() {
   const { message } = App.useApp()
   const currentUser = useUserStore((s) => s.user)
   const [cancelOpen, setCancelOpen] = useState(false)
-  const [reason, setReason] = useState('')
+  const [editOpen, setEditOpen] = useState(false)
   // 延长/提前结束（T3.F2）：上限先向服务端要，再让用户在其中选
   const [extendOpen, setExtendOpen] = useState(false)
   const [limit, setLimit] = useState<ExtendLimit | null>(null)
@@ -60,29 +61,16 @@ export default function MeetingDetail() {
   // 否则上一场的"上限/取消原因"会留在新会议的弹窗里（同一路由元素复用、组件不重挂载）
   useEffect(() => {
     setCancelOpen(false)
+    setEditOpen(false)
     setExtendOpen(false)
     setFinishOpen(false)
     setLimit(null)
-    setReason('')
   }, [meetingId])
 
-  const { runAsync: doCancel, loading: cancelling } = useAppRequest(cancelMeeting, { toastError: false })
   // 延长/结束的三个请求：toastError 关掉——错误由调用点按场景给文案（40006/40002 的含义各不相同）
   const { runAsync: fetchLimit, loading: limitLoading } = useAppRequest(getExtendLimit, { toastError: true })
   const { runAsync: doExtend, loading: extending } = useAppRequest(extendMeeting, { toastError: false })
   const { runAsync: doFinish, loading: finishing } = useAppRequest(finishMeeting, { toastError: false })
-
-  const handleCancel = useCallback(async () => {
-    try {
-      await doCancel(meetingId, reason.trim() || undefined)
-      message.success('会议已取消')
-      setCancelOpen(false)
-      setReason('')
-      refresh() // 取消后状态即变 50，刷新详情与时间线
-    } catch (e) {
-      message.error(e instanceof ApiError ? e.message : '取消失败，请稍后重试')
-    }
-  }, [doCancel, meetingId, reason, message, refresh])
 
   /** 打开延长弹窗：先取上限（服务端算的 R-15），拿到再展示——避免让用户在"不知道能延多久"时填数字 */
   const handleOpenExtend = useCallback(async () => {
@@ -148,6 +136,8 @@ export default function MeetingDetail() {
 
   const isOrganiser = !!currentUser && currentUser.id === detail.organiserId
   const canCancel = isOrganiser && CANCELLABLE_STATUS.includes(detail.status)
+  /** 仅组织人 + 20 已预约可编辑（R-12；改到需审批会议室会回退到 10） */
+  const canEdit = isOrganiser && detail.status === 20
   /** 进行中 + 组织人 = 可延长/提前结束（30 是唯一入口，见 docs/01 迁移矩阵） */
   const canOperate = isOrganiser && detail.status === ONGOING_STATUS
 
@@ -203,6 +193,11 @@ export default function MeetingDetail() {
       />
 
       <Space>
+        {canEdit && (
+          <Button type="primary" onClick={() => setEditOpen(true)}>
+            编辑会议
+          </Button>
+        )}
         {canCancel && (
           <Button danger onClick={() => setCancelOpen(true)}>
             取消会议
@@ -219,24 +214,18 @@ export default function MeetingDetail() {
         )}
       </Space>
 
-      <Modal
-        title="取消会议"
+      <CancelMeetingModal
         open={cancelOpen}
-        confirmLoading={cancelling}
-        onCancel={() => setCancelOpen(false)}
-        onOk={handleCancel}
-        okText="确认取消"
-        okButtonProps={{ danger: true }}
-      >
-        <p>取消后时段将被释放，且不可恢复。可填写取消原因（选填）：</p>
-        <Input.TextArea
-          rows={3}
-          maxLength={200}
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          placeholder="如：议题变更，改期再约"
-        />
-      </Modal>
+        meetingId={meetingId}
+        onClose={() => setCancelOpen(false)}
+        onSuccess={refresh}
+      />
+      <MeetingEditDrawer
+        open={editOpen}
+        meetingId={meetingId}
+        onClose={() => setEditOpen(false)}
+        onSuccess={refresh}
+      />
 
       {/* 延长：上限与理由都来自服务端（R-15 的 min(下一场−缓冲, 当日 24:00) 不在前端重算） */}
       <Modal

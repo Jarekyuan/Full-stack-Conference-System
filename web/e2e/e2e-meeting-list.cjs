@@ -1,184 +1,241 @@
 /**
- * T2.F3 验收：我的会议列表 + 详情
- * ① 列表筛选分页正常 ② 详情时间线显示状态流转 ③ 取消后状态即变 50（+ 取消按钮仅组织人可见）
- * 前置：后端三服务 + vite dev(5173) 已启动
+ * T6.2 验收：我的会议（列表筛选 / 时间格式 / 编辑 / 取消 / 状态门槛）
  *
- * 可重复运行：每次用唯一标题建一场"待取消"的会议（时刻由 availability 预检挑空闲），
- * 验收完就地取消掉，不堆积数据。
+ * 覆盖：
+ *   ① 主题列定宽（colgroup 240px，不把表格撑长）
+ *   ② 时间显示完整起止日期：YYYY-MM-DD HH:mm 到 YYYY-MM-DD HH:mm
+ *   ③ 状态筛选 / 会议室筛选 / 会议日期筛选
+ *   ④ 操作列按状态：20 有编辑+取消；10 只有取消；50 只有详情
+ *   ⑤ 列表编辑成功（标题更新）
+ *   ⑥ 列表取消成功（状态变 50、按钮消失、详情时间线含取消原因）
+ *   ⑦ 非组织人看不到编辑/取消
+ *
+ * 数据用 API 造：D1 room1 已预约；D2 room3 待审批（room3 策略需审批）。
+ * 日期固定用“下一周”，避免今天恰好是周一/周日时选到过去时段。
  */
 const { chromium } = require('playwright');
+const { execSync } = require('child_process');
 const { disableRateLimit } = require('./lib/ratelimit.cjs');
 
 const BASE = 'http://localhost:5173';
+const API = 'http://localhost:8080/api';
+const MYSQL = 'docker exec smt-mysql mysql --default-character-set=utf8mb4 -uroot -proot123 -N -e';
 const TS = Date.now();
 const pad = (v) => String(v).padStart(2, '0');
+const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
 const MONDAY = (() => {
   const n = new Date();
   const d = new Date(n);
   d.setDate(n.getDate() - (n.getDay() === 0 ? 6 : n.getDay() - 1));
+  d.setDate(d.getDate() + 7); // 下一周，保证所有时段在未来
   return d;
 })();
 const dayOf = (o) => new Date(MONDAY.getTime() + o * 86400000);
-const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const SUN = dayOf(6); // 周日（未来），避免"今天已过去的钟点"被拒
+const D1 = dayOf(1); // 下周二
+const D2 = dayOf(2); // 下周三
+
+const results = [];
+const check = (name, ok, detail = '') => {
+  results.push({ name, ok });
+  console.log(`${ok ? '✓' : '✗'} ${name}${detail ? '  → ' + detail : ''}`);
+};
+const sql = (q) =>
+  execSync(`${MYSQL} ${JSON.stringify(q)}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    .split('\n').filter((l) => l.trim() && !l.includes('PAGER set to stdout') && !l.includes('Using a password'))
+    .join('\n').trim();
 
 (async () => {
-  const browser = await chromium.launch({ channel: 'chrome', headless: true });
-  /** 本轮造的会议（finally 里兜底取消）：中途失败时它可能还停在 20，会占着时段把下一轮堵死 */
-  let createdId = null;
-  const page = await browser.newPage({ viewport: { width: 1512, height: 1100 } });
-  const results = [];
-  const check = (name, ok, detail = '') => {
-    results.push({ name, ok });
-    console.log(`${ok ? '✓' : '✗'} ${name}${detail ? '  → ' + detail : ''}`);
-  };
-
-  const api = async (path, init = {}) =>
-    page.evaluate(
-      async ([p, i]) => {
-        const token = localStorage.getItem('meeting.accessToken') || '';
-        const res = await fetch(`/api${p}`, {
-          ...i,
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(i.headers || {}) },
-        });
-        return res.json();
-      },
-      [path, init],
-    );
-
-  const login = async (p, username, password) => {
-    await p.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
-    await p.getByPlaceholder('请输入用户名').fill(username);
-    await p.getByPlaceholder('请输入密码').fill(password);
-    await p.locator('button[type="submit"]').click();
-    await p.waitForURL('**/calendar', { timeout: 10000 });
-  };
-
-  const firstRowTitle = () => page.locator('.ant-table-tbody tr').first().locator('td').first().textContent();
-
+  const createdIds = [];
+  let browser;
   let restoreRateLimit = async () => {};
   try {
     restoreRateLimit = await disableRateLimit();
-    await login(page, 'user1', 'user123');
+    browser = await chromium.launch({ channel: 'chrome', headless: true });
+    const page = await browser.newPage({ viewport: { width: 1512, height: 1100 } });
+    await page.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
+    await page.getByPlaceholder('请输入用户名').fill('user1');
+    await page.getByPlaceholder('请输入密码').fill('user123');
+    await page.locator('button[type="submit"]').click();
+    await page.waitForURL('**/calendar', { timeout: 10000 });
+    const token = await page.evaluate(() => localStorage.getItem('meeting.accessToken'));
 
-    // 准备一场本次专用的会议（②③ 的目标；挑周日空闲整点）
-    let hour = -1;
-    for (let h = 10; h <= 17; h++) {
-      const r = await api('/rooms/availability', {
+    const api = async (path, init = {}) => {
+      const res = await fetch(`${API}${path}`, {
+        ...init,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(init.headers || {}) },
+      });
+      return res.json();
+    };
+    const freeSlot = async (roomId, date) => {
+      for (const h of [10, 11, 12, 13, 14, 15, 16, 17]) {
+        const r = await api('/rooms/availability', {
+          method: 'POST',
+          body: JSON.stringify({
+            roomIds: [roomId],
+            startTime: `${fmt(date)} ${pad(h)}:00:00`,
+            endTime: `${fmt(date)} ${pad(h + 1)}:00:00`,
+          }),
+        });
+        if (r.data?.items?.[0]?.available) return h;
+      }
+      return undefined;
+    };
+    const book = async (roomId, date, hour, title) => {
+      const r = await api('/meetings', {
         method: 'POST',
+        headers: { 'X-Idempotency-Token': crypto.randomUUID() },
         body: JSON.stringify({
-          roomIds: [1],
-          startTime: `${iso(SUN)} ${pad(h)}:00:00`,
-          endTime: `${iso(SUN)} ${pad(h + 1)}:00:00`,
+          title,
+          roomId,
+          startTime: `${fmt(date)} ${pad(hour)}:00:00`,
+          endTime: `${fmt(date)} ${pad(hour + 1)}:00:00`,
         }),
       });
-      if (r.data?.items?.[0]?.available) {
-        hour = h;
-        break;
-      }
-    }
-    check('预检找到周日空闲整点', hour > 0, hour > 0 ? `${iso(SUN)} ${hour}:00` : '无');
-    if (hour < 0) throw new Error('周日无空闲时段，请先清理测试数据');
+      if (r.code !== 0) throw new Error(`创建失败 code=${r.code} ${r.msg}`);
+      createdIds.push(r.data.meetingId);
+      return r.data.meetingId;
+    };
 
-    const title = `E2E详情-${TS}`;
-    const created = await api('/meetings', {
-      method: 'POST',
-      body: JSON.stringify({
-        title,
-        roomId: 1,
-        startTime: `${iso(SUN)} ${pad(hour)}:00:00`,
-        endTime: `${iso(SUN)} ${pad(hour + 1)}:00:00`,
-      }),
-      headers: { 'X-Idempotency-Token': `e2e-detail-${TS}` },
-    });
-    check('前置：创建待验收会议', created.code === 0, `id=${created.data?.meetingId}`);
-    const meetingId = created.data?.meetingId;
-    createdId = meetingId ?? null; // finally 里兜底用
+    const h1 = await freeSlot(1, D1);
+    const h2 = await freeSlot(3, D2);
+    check('预检找到 room1/room3 空闲整点', h1 !== undefined && h2 !== undefined, `${fmt(D1)} ${h1}:00 / ${fmt(D2)} ${h2}:00`);
+    if (h1 === undefined || h2 === undefined) throw new Error('空闲时段不足');
 
-    // ---------- ① 列表筛选 + 分页 ----------
-    await page.goto(`${BASE}/meetings`, { waitUntil: 'networkidle' });
-    await page.waitForTimeout(1200);
-    const rowCount = await page.locator('.ant-table-tbody tr.ant-table-row').count();
-    check('列表渲染出数据行', rowCount > 0, `${rowCount} 行`);
-    const totalText = await page.locator('.ant-pagination-total-text').textContent().catch(() => '');
-    check('显示总条数', /共\s*\d+\s*条/.test(totalText || ''), totalText || '');
+    const marker = `E2E列表${TS}`;
+    const titleA = `${marker}-已预约`;
+    const titleA2 = `${marker}-已编辑`;
+    const titleB = `${marker}-待审批`;
+    const idA = await book(1, D1, h1, titleA);
+    const idB = await book(3, D2, h2, titleB);
+    check('前置数据创建成功（20 + 10）', !!idA && !!idB, `A=${idA} B=${idB}`);
 
-    const page1First = (await firstRowTitle()) || '';
-    await page.locator('.ant-pagination-item-2').click();
-    await page.waitForTimeout(1000);
-    const page2First = (await firstRowTitle()) || '';
-    check('翻页后数据变化', page1First !== page2First && !!page2First, `第1页「${page1First.slice(0, 14)}」→ 第2页「${page2First.slice(0, 14)}」`);
-    await page.locator('.ant-pagination-item-1').click();
-    await page.waitForTimeout(800);
+    // 列表按开始时间倒序，测试会议在下一周，可能不在第 1 页——用唯一关键字把它们筛出来
+    const openList = async () => {
+      await page.goto(`${BASE}/meetings`, { waitUntil: 'networkidle' });
+      await page.waitForTimeout(800);
+      await page.getByPlaceholder('搜索会议主题').fill(marker);
+      await page.waitForTimeout(1600);
+    };
+    await openList();
 
-    // 状态筛选：选"待审批" → 表内所有标签都应是待审批，且条数与接口一致
-    await page.locator('.ant-select').first().click();
-    await page.locator('.ant-select-dropdown .ant-select-item-option').filter({ hasText: '待审批' }).first().click();
-    await page.waitForTimeout(1200);
-    await page.keyboard.press('Escape'); // 收起下拉，避免挡住表格
-    const tags = await page.locator('.ant-table-tbody .ant-tag').allTextContents();
-    check('状态筛选后全部为「待审批」', tags.length > 0 && tags.every((t) => t.includes('待审批')), tags.slice(0, 3).join(',') + `（共 ${tags.length} 个）`);
-    const pendingTotal = await api('/meetings?scope=mine&status=10&page=1&size=10');
-    const filterTotalText = await page.locator('.ant-pagination-total-text').textContent().catch(() => '');
-    check('筛选条数与接口一致', (filterTotalText || '').includes(String(pendingTotal.data.total)), `页面「${filterTotalText}」接口 total=${pendingTotal.data.total}`);
+    const rowByTitle = (title) => page.locator('.ant-table-tbody tr.ant-table-row', { hasText: title });
+    const rowA = rowByTitle(titleA);
+    const rowB = rowByTitle(titleB);
+    check('列表能看到两场测试会议', (await rowA.count()) === 1 && (await rowB.count()) === 1);
 
-    // ---------- ② 详情时间线 ----------
-    await page.goto(`${BASE}/meetings/${meetingId}`, { waitUntil: 'networkidle' });
-    await page.waitForTimeout(1000);
-    const detailText = await page.textContent('body');
-    check('详情展示会议主题与会议室', detailText.includes(title) && detailText.includes('青竹厅'));
-    check('详情展示参会人区块', detailText.includes('参会人'));
-    check('时间线含「创建预约」', detailText.includes('创建预约'));
-    check('时间线含状态流转「（无） → 已预约」', detailText.includes('（无） → 已预约'));
-    check('组织人可见取消按钮（本场由 user1 创建）', await page.getByRole('button', { name: '取消会议' }).isVisible());
+    // ---------- ① 主题列定宽 ----------
+    const firstColStyle = await page.locator('.ant-table colgroup col').first().getAttribute('style');
+    check('主题列定宽 240px', (firstColStyle || '').includes('240'), firstColStyle || '');
 
-    // ---------- ③ 取消 → 状态即变 50 ----------
-    await page.getByRole('button', { name: '取消会议' }).click();
-    await page.waitForTimeout(500);
-    await page.locator('.ant-modal-content textarea').fill('E2E 验收：议题变更');
-    await page.getByRole('button', { name: '确认取消' }).click();
-    await page.waitForTimeout(1500);
-
-    const afterText = await page.textContent('body');
-    check('取消后页面状态标签变「已取消」', afterText.includes('已取消'));
-    check('时间线新增「取消会议」', afterText.includes('取消会议'));
-    check('时间线显示「已预约 → 已取消」', afterText.includes('已预约 → 已取消'));
-    const afterDetail = await api(`/meetings/${meetingId}`);
-    check('接口复查状态 = 50', afterDetail.data?.status === 50, `status=${afterDetail.data?.status}`);
-    check('取消原因已记录', (afterDetail.data?.cancelReason || '').includes('议题变更'), afterDetail.data?.cancelReason || '');
-
-    // ---------- 权限：非组织人看不到取消按钮 ----------
-    const page2 = await browser.newPage({ viewport: { width: 1512, height: 1100 } });
-    await login(page2, 'user2', 'user123');
-    await page2.goto(`${BASE}/meetings/${meetingId}`, { waitUntil: 'networkidle' });
-    await page2.waitForTimeout(1000);
-    const otherText = await page2.textContent('body');
-    check('user2 能看到该会议详情（公开可查）', otherText.includes(title));
-    // 注意：不能用整页文本判断——时间线里的"取消会议"是事件文案，会误伤；要精确断言"按钮不存在"
+    // ---------- ② 时间格式 ----------
+    const rowTextA = (await rowA.textContent()) ?? '';
     check(
-      'user2 看不到「取消会议」按钮（仅组织人）',
-      (await page2.getByRole('button', { name: '取消会议' }).count()) === 0,
+      '时间显示完整起止日期',
+      new RegExp(`${fmt(D1)} ${pad(h1)}:00 到 ${fmt(D1)} ${pad(h1 + 1)}:00`).test(rowTextA),
+      rowTextA.match(/\d{4}-\d{2}-\d{2} \d{2}:\d{2} 到 \d{4}-\d{2}-\d{2} \d{2}:\d{2}/)?.[0] ?? '',
     );
-    await page2.close();
+
+    // ---------- ③ 状态 / 会议室 / 日期筛选 ----------
+    // 状态：待审批 → 只剩 B
+    await page.locator('.ant-select').nth(0).click();
+    await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: '待审批' }).first().click();
+    await page.waitForTimeout(1500);
+    await page.keyboard.press('Escape');
+    check('状态筛选：待审批只剩 B', (await rowB.count()) === 1 && (await rowA.count()) === 0);
+
+    await openList();
+    // 会议室：青竹厅 → A 在、B 不在
+    await page.locator('.ant-select').nth(1).click();
+    await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: '青竹厅' }).first().click();
+    await page.waitForTimeout(1500);
+    check('会议室筛选：青竹厅只剩 A', (await rowA.count()) === 1 && (await rowB.count()) === 0);
+
+    await openList();
+    // 日期：D1 → A 在、B（D2）不在
+    const dateInputs = page.locator('.ant-picker-input input');
+    await dateInputs.nth(0).click();
+    await dateInputs.nth(0).fill(fmt(D1));
+    await dateInputs.nth(1).fill(fmt(D1));
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(1800);
+    check('日期筛选：D1 只剩 A', (await rowA.count()) === 1 && (await rowB.count()) === 0,
+      `A=${await rowA.count()} B=${await rowB.count()}`);
+
+    await openList();
+
+    // ---------- ④ 操作列状态门槛 ----------
+    const rowA1 = rowByTitle(titleA);
+    const rowB1 = rowByTitle(titleB);
+    check('已预约行有编辑按钮', (await rowA1.getByRole('button', { name: /编\s*辑/ }).count()) === 1);
+    check('已预约行有取消按钮', (await rowA1.getByRole('button', { name: /取\s*消/ }).count()) === 1);
+    check('待审批行没有编辑按钮', (await rowB1.getByRole('button', { name: /编\s*辑/ }).count()) === 0);
+    check('待审批行有取消按钮', (await rowB1.getByRole('button', { name: /取\s*消/ }).count()) === 1);
+
+    // ---------- ⑤ 列表编辑 ----------
+    await rowA1.getByRole('button', { name: /编\s*辑/ }).click();
+    await page.waitForTimeout(1200);
+    check('编辑抽屉打开', (await page.getByText('编辑会议').count()) > 0);
+    const drawer = page.locator('.ant-drawer').last();
+    await page.getByPlaceholder('如：产品评审会').fill(titleA2);
+    await drawer.getByRole('button', { name: /保\s*存/ }).click();
+    await page.waitForTimeout(1800);
+    check('列表显示编辑后的标题', (await rowByTitle(titleA2).count()) === 1 && (await rowByTitle(titleA).count()) === 0);
+
+    // ---------- ⑥ 列表取消 ----------
+    const rowA2 = rowByTitle(titleA2);
+    await rowA2.getByRole('button', { name: /取\s*消/ }).click();
+    await page.waitForTimeout(600);
+    await page.locator('.ant-modal-content textarea').fill('E2E 列表取消：议题变更');
+    await page.getByRole('button', { name: '确认取消' }).click();
+    await page.waitForTimeout(1800);
+    const rowA3 = rowByTitle(titleA2);
+    check('取消后列表显示已取消', ((await rowA3.textContent()) ?? '').includes('已取消'));
+    check('取消后编辑/取消按钮消失',
+      (await rowA3.getByRole('button', { name: /编\s*辑/ }).count()) === 0 &&
+        (await rowA3.getByRole('button', { name: /取\s*消/ }).count()) === 0);
+
+    // ---------- 详情时间线 ----------
+    await page.goto(`${BASE}/meetings/${idA}`, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(1200);
+    const detailText = (await page.textContent('body')) ?? '';
+    check('详情状态为已取消', detailText.includes('已取消'));
+    check('详情时间线含取消原因', detailText.includes('E2E 列表取消：议题变更'));
+
+    // ---------- ⑦ 非组织人无操作入口 ----------
+    const p2 = await browser.newPage({ viewport: { width: 1512, height: 1100 } });
+    await p2.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
+    await p2.getByPlaceholder('请输入用户名').fill('user2');
+    await p2.getByPlaceholder('请输入密码').fill('user123');
+    await p2.locator('button[type="submit"]').click();
+    await p2.waitForURL('**/calendar', { timeout: 10000 });
+    await p2.goto(`${BASE}/meetings/${idB}`, { waitUntil: 'networkidle' });
+    await p2.waitForTimeout(1200);
+    check('非组织人看不到编辑按钮', (await p2.getByRole('button', { name: '编辑会议' }).count()) === 0);
+    check('非组织人看不到取消按钮', (await p2.getByRole('button', { name: '取消会议' }).count()) === 0);
+    await p2.close();
+    await page.close();
   } catch (e) {
-    console.error('验证中断:', e.message);
-    results.push({ name: '执行异常', ok: false });
+    check(`执行异常: ${e.message}`, false);
   } finally {
     await restoreRateLimit();
-    // ⚠️ 兜底清理放 finally（2026-10-16 评审 O8）：正常路径里"取消"本身就是用例的一步，
-    // 但**中途失败**时会停在 20 占着时段——playwright 最常见的失败就是某步超时，
-    // 多失败两次就把下一轮自己的"预检挑空闲"堵死。已取消（50）的会再取消会被状态机拒，忽略即可。
-    if (createdId) {
+    if (createdIds.length > 0) {
+      const ids = createdIds.map(Number).join(',');
       try {
-        await api(`/meetings/${createdId}/cancel`, { method: 'POST', body: JSON.stringify({ reason: 'E2E 兜底清理' }) });
-      } catch {
-        /* 已经是终态/已取消，忽略 */
+        sql(`DELETE FROM smt_meeting.notification WHERE meeting_id IN (${ids});
+             DELETE FROM smt_meeting.meeting_status_log WHERE meeting_id IN (${ids});
+             DELETE FROM smt_meeting.meeting_approval WHERE meeting_id IN (${ids});
+             DELETE FROM smt_meeting.meeting_participant WHERE meeting_id IN (${ids});
+             DELETE FROM smt_meeting.meeting WHERE id IN (${ids});`);
+        check('清理完成（测试会议无残留）', sql(`SELECT COUNT(*) FROM smt_meeting.meeting WHERE id IN (${ids});`) === '0');
+      } catch (cleanupErr) {
+        console.error('自清理失败:', cleanupErr.message);
       }
     }
-    await browser.close();
+    if (browser) await browser.close();
   }
-  const failed = results.filter((r) => !r.ok);
-  console.log(`\n结果：${results.length - failed.length}/${results.length} 通过`);
-  process.exit(failed.length ? 1 : 0);
+
+  const failed = results.filter((r) => !r.ok).length;
+  console.log(`\n结果：${results.length - failed}/${results.length} 通过`);
+  process.exit(failed ? 1 : 0);
 })();

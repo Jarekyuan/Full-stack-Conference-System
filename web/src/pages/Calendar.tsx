@@ -7,10 +7,10 @@
  *   快速切周时过期响应即使后到也不会画进网格（docs/02 4.2 明确要求）。
  * 本任务（T2.F1）做到"点空格带出预填时间"；预约 Drawer 表单由 T2.F2 接入。
  */
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Card, Input, Space, Spin, Tooltip } from 'antd'
 import dayjs, { type Dayjs } from 'dayjs'
-import { ChevronLeft, ChevronRight, Search } from 'lucide-react'
+import { ChevronLeft, ChevronRight, RefreshCw, Search } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { getRoomCalendar, type CalendarDay, type CalendarMeeting } from '@/api/meeting'
 import { listRooms, type Room } from '@/api/room'
@@ -72,6 +72,14 @@ export default function Calendar() {
   // 竞态守卫：周对不上的（过期）响应一律视为未加载，宁可多转一会儿圈也不画旧数据
   const payload = data && data.week === weekStr ? data : undefined
 
+  // 会议室维护/恢复后，已打开的日历页不会自动知道——回到页面时重查一次（房间列表 + 各房间日程）。
+  // 房间列表本身有后端缓存，但 RoomService 的写操作会整体失效缓存，所以这里能拿到最新状态。
+  useEffect(() => {
+    const onFocus = () => refresh()
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [refresh])
+
   const dates = useMemo(
     () => Array.from({ length: 7 }, (_, i) => week.add(i, 'day').format('YYYY-MM-DD')),
     [week],
@@ -127,6 +135,7 @@ export default function Calendar() {
             icon={<ChevronRight size={14} />}
             onClick={() => setWeek((w) => w.add(7, 'day'))}
           />
+          <Button size="small" aria-label="刷新" icon={<RefreshCw size={14} />} onClick={() => refresh()} />
           <span className="text-sm text-gray-500">
             {week.format('YYYY-MM-DD')} ~ {week.add(6, 'day').format('MM-DD')}
           </span>

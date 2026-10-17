@@ -1,6 +1,7 @@
 package com.smt.notification.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
@@ -17,7 +18,9 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
 
+import com.smt.common.exception.BusinessException;
 import com.smt.common.mq.MeetingDomainEvent;
+import com.smt.common.result.ErrorCode;
 import com.smt.notification.entity.Notification;
 import com.smt.notification.mapper.NotificationMapper;
 import com.smt.notification.mapper.RecipientMapper;
@@ -145,5 +148,49 @@ class NotificationServiceTest {
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.handle(noType))
                 .isInstanceOf(IllegalArgumentException.class);
         verify(notificationMapper, never()).insertBatch(any());
+    }
+
+    // ———— T6.2：删除通知 ————
+
+    @Test
+    void deleteOwnedShouldSucceed() {
+        when(notificationMapper.deleteById(1L, ORGANISER)).thenReturn(1);
+
+        service.delete(1L, ORGANISER);
+
+        verify(notificationMapper).deleteById(1L, ORGANISER);
+    }
+
+    @Test
+    void deleteNotOwnedShouldFailWith60001() {
+        when(notificationMapper.deleteById(1L, ORGANISER)).thenReturn(0);
+
+        assertThatThrownBy(() -> service.delete(1L, ORGANISER))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getCode())
+                .isEqualTo(ErrorCode.NOTIFICATION_NOT_FOUND.getCode());
+    }
+
+    @Test
+    void deleteBatchShouldDeduplicateBeforePassingToSql() {
+        when(notificationMapper.deleteByIds(ORGANISER, List.of(1L, 2L))).thenReturn(2);
+
+        int deleted = service.deleteBatch(ORGANISER, List.of(1L, 1L, 2L));
+
+        assertThat(deleted).isEqualTo(2);
+        // 重复 id 若原样拼进 IN，MySQL 不会报错，但白让 SQL 变长；去重是边界处的职责
+        verify(notificationMapper).deleteByIds(ORGANISER, List.of(1L, 2L));
+    }
+
+    @Test
+    void deleteBatchWithEmptyIdsShouldNotTouchDb() {
+        assertThat(service.deleteBatch(ORGANISER, List.of())).isZero();
+        verify(notificationMapper, never()).deleteByIds(any(), any());
+    }
+
+    @Test
+    void deleteAllShouldReturnDeletedCount() {
+        when(notificationMapper.deleteAll(ORGANISER)).thenReturn(3);
+        assertThat(service.deleteAll(ORGANISER)).isEqualTo(3);
     }
 }

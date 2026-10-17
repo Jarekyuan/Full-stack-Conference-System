@@ -82,6 +82,24 @@
   `e2e-booking.cjs` **19/19**、`e2e-dashboard.cjs` **11/11**、`verify-m4-cache.sh` **31/31**、
   `verify-review-batch4.sh` **33/33**、`npm run check` **46 例**。
 
+**T6.2 会议列表 / 通知中心 / 状态后果（2026-10-17）**：
+- **我的会议**：主题列定宽 240 + 省略；状态 + 会议室 + 会议日期（RangePicker）+ 关键字筛选；
+  时间显示 `YYYY-MM-DD HH:mm 到 YYYY-MM-DD HH:mm`；操作列“详情 / 编辑（组织人+20）/
+  取消（组织人+10/20）”，编辑 Drawer 与取消弹窗列表/详情共用（详情也补了编辑入口）。
+- **通知中心**：`APPROVAL_TODO` 先查会议状态（仍 10 → 审批中心，否则提示“已审核/不存在”）；
+  `MEETING_CREATED` → 会议列表；其余四类信息型通知只标已读不跳转（`notificationRouting` 纯函数单测）。
+  新增单条/批量/全部删除接口与勾选 UI；删除后用 REST 校准未读角标。
+- **会议室维护**：创建/改期/周期创建/审批通过都在**房间行锁内复查** `status=1` → `30002`；
+  日历页加刷新按钮 + 回到页面自动重查；历史会议/详情保留。
+- **用户停用**：`/users/search` 只列 `status=1`；停用时主动作废 refreshToken；
+  历史会议/参会记录保留。**已知取舍**：自包含 accessToken 最长 30 分钟内仍可用（不做网关级实时校验，
+  避免每请求多一次 Redis 查询）。
+- 验证：后端 **99 例**、`verify-state-consequences.sh` **21/21 连跑两次**、
+  `verify-m4-notify-api.sh` **43/43**（含删除）、`e2e-meeting-list.cjs` **21/21 连跑两次**、
+  `e2e-notify-center.cjs` **13/13 连跑两次**、`e2e-notify-routing.cjs` **9/9 连跑两次**、
+  `verify-m3-approval.sh` **32/32**、`verify-review-batch4.sh` **33/33**、
+  `e2e-org-users.cjs` **20/20**、`e2e-calendar-enhanced.cjs` **23/23**、`npm run check` **50 例**。
+
 **M4 演示脚本（可照做）**：user1 登录前端（:5173）→ 另开一个浏览器/接口以 approver1 身份审批 →
 user1 端**铃铛角标秒级 +1**（WS）→ 打开通知中心看到"审批通过"→ 点掉角标归零。
 `web/e2e/e2e-notify-center.cjs` 就是这条演示的可执行版本。
@@ -323,6 +341,17 @@ user1 端**铃铛角标秒级 +1**（WS）→ 打开通知中心看到"审批通
     **正确做法**：缓存只存基础数据；读出来之后按 `UserContext` 实时装配（`decorateInvited`），
     **装饰后的对象绝不写回缓存**。验证必须包含**两个方向**：先 A 后 B、先 B 后 A 都不串。
     推广：任何 `room/week/dept` 维度共享的缓存，都不能带 `userId` 维度的字段。
+
+25. **列表按开始时间倒序时，新造的未来会议不一定在第 1 页**（2026-10-17 T6.2 的 e2e 踩到）：
+    会议列表 `ORDER BY start_time DESC`，测试造的是“下周”的会议，而库里有更远的未来会议 →
+    新建的会议在第 2/3 页。e2e 用 `.ant-table-tbody tr` 直接找标题会超时，看起来像“列表没刷新”。
+    **规矩**：列表类 e2e 先用**唯一关键字**把目标数据筛出来，再断言；别假设“刚创建的就在第一页”。
+
+26. **给服务新增 mapper 调用后，既有单测的 mock 不会自动补数据**（2026-10-17 T6.2）：
+    审批通过新增“房间行锁内复查维护状态”的 `meetingRoomMapper.selectById`，`ApprovalServiceTest`
+    没 stub → 返回 null → 抛 `30001 会议室不存在`。表面是业务错误，根因是**测试夹具缺一行 mock**。
+    **看到单测报出一个“产品错误码”，先检查新加的依赖调用有没有在 setUp 里 mock**；补上后
+    维护分支再单独加一个用例（现在 5 例）。
 
 ---
 

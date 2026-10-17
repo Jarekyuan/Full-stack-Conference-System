@@ -7,6 +7,7 @@ import com.smt.auth.entity.SysUser;
 import com.smt.auth.mapper.SysDeptMapper;
 import com.smt.auth.mapper.SysRoleMapper;
 import com.smt.auth.mapper.SysUserMapper;
+import com.smt.auth.store.RefreshTokenStore;
 import com.smt.common.context.LoginUser;
 import com.smt.common.context.UserContext;
 import com.smt.common.exception.BusinessException;
@@ -43,6 +44,7 @@ class UserServiceTest {
     private SysUserMapper sysUserMapper;
     private SysRoleMapper sysRoleMapper;
     private SysDeptMapper sysDeptMapper;
+    private RefreshTokenStore refreshTokenStore;
     private UserService service;
 
     @BeforeEach
@@ -50,8 +52,9 @@ class UserServiceTest {
         sysUserMapper = mock(SysUserMapper.class);
         sysRoleMapper = mock(SysRoleMapper.class);
         sysDeptMapper = mock(SysDeptMapper.class);
+        refreshTokenStore = mock(RefreshTokenStore.class);
         service = new UserService(sysUserMapper, sysRoleMapper, sysDeptMapper,
-                mock(PasswordEncoder.class));
+                mock(PasswordEncoder.class), refreshTokenStore);
     }
 
     @AfterEach
@@ -173,6 +176,25 @@ class UserServiceTest {
                 .extracting(e -> ((BusinessException) e).getCode())
                 .isEqualTo(ErrorCode.SELF_OPERATION_FORBIDDEN.getCode());
         verify(sysUserMapper, never()).updateStatus(any(), any());
+    }
+
+    @Test
+    void disableShouldRevokeRefreshToken() {
+        when(sysUserMapper.updateStatus(TARGET_ID, 0)).thenReturn(1);
+
+        service.updateStatus(TARGET_ID, 0);
+
+        // 停用后 refreshToken 立即作废；accessToken 最长 30 分钟窗口是文档化的取舍
+        verify(refreshTokenStore).removeByUser(TARGET_ID);
+    }
+
+    @Test
+    void enableShouldNotRevokeRefreshToken() {
+        when(sysUserMapper.updateStatus(TARGET_ID, 1)).thenReturn(1);
+
+        service.updateStatus(TARGET_ID, 1);
+
+        verify(refreshTokenStore, never()).removeByUser(any());
     }
 
     @Test

@@ -8,6 +8,7 @@ import com.smt.common.mq.MeetingDomainEvent;
 import com.smt.common.util.PageBounds;
 import com.smt.meeting.entity.Meeting;
 import com.smt.meeting.entity.MeetingApproval;
+import com.smt.meeting.entity.MeetingRoom;
 import com.smt.meeting.enums.MeetingEventEnum;
 import com.smt.meeting.enums.MeetingStatusEnum;
 import com.smt.meeting.lock.MeetingLockHelper;
@@ -102,6 +103,17 @@ public class ApprovalService {
                             || locked.getStatus() != MeetingStatusEnum.PENDING_APPROVAL.getCode()) {
                         // 已被别人处理（通过/拒绝/申请人自己取消），或压根不在待审批态
                         throw new BusinessException(ErrorCode.APPROVAL_ALREADY_HANDLED);
+                    }
+
+                    // 会议室在待审批期间可能被置为维护：审批通过 = 从 0 到 1 占用时段，
+                    // 不能把会议批进一个已经不可用的房间（T6.2）。房间行已被上面的 FOR UPDATE 锁住，
+                    // 这里读到的是锁内最新状态。
+                    MeetingRoom room = meetingRoomMapper.selectById(locked.getRoomId());
+                    if (room == null) {
+                        throw new BusinessException(ErrorCode.ROOM_NOT_FOUND);
+                    }
+                    if (room.getStatus() != null && room.getStatus() == 1) {
+                        throw new BusinessException(ErrorCode.ROOM_MAINTENANCE);
                     }
 
                     // 复检：待审批期间时段可能已被抢（R-4：10 不占时段，所以这步不可省）

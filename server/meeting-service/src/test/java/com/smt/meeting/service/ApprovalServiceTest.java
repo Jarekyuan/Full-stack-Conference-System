@@ -23,6 +23,7 @@ import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.smt.meeting.entity.Meeting;
+import com.smt.meeting.entity.MeetingRoom;
 import com.smt.meeting.enums.MeetingEventEnum;
 import com.smt.meeting.lock.MeetingLockHelper;
 import com.smt.meeting.mapper.MeetingApprovalMapper;
@@ -62,6 +63,11 @@ class ApprovalServiceTest {
         conflictChecker = mock(ConflictChecker.class);
         stateMachine = mock(MeetingStateMachine.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
+        // T6.2：审批在房间行锁内复查维护状态；默认给一个可用房间，维护分支在单独用例里覆盖
+        MeetingRoom room = new MeetingRoom();
+        room.setId(6L);
+        room.setStatus(0);
+        when(roomMapper.selectById(6L)).thenReturn(room);
 
         MeetingLockHelper lockHelper = mock(MeetingLockHelper.class);
         when(lockHelper.executeWithLock(any(), any(), any(), any()))
@@ -100,6 +106,26 @@ class ApprovalServiceTest {
                 .extracting(e -> ((BusinessException) e).getCode())
                 .isEqualTo(ErrorCode.APPROVAL_CONFLICT.getCode());
         // 复检没过就**不能**动状态：否则时段被抢占的会议会被批成"已预约"，两场会叠在一起
+        verify(stateMachine, never()).transition(any(), any(), any(), anyString());
+        verify(approvalMapper, never()).insert(any());
+    }
+
+    @Test
+    void maintenanceRoomShouldFailWith30002() {
+        MeetingRoom maintenance = new MeetingRoom();
+        maintenance.setId(6L);
+        maintenance.setStatus(1);
+        when(roomMapper.selectById(6L)).thenReturn(maintenance);
+
+        Meeting m = meeting(10);
+        when(meetingMapper.selectById(MEETING_ID)).thenReturn(m);
+        when(meetingMapper.selectByIdForUpdate(MEETING_ID)).thenReturn(m);
+
+        assertThatThrownBy(() -> service.pass(MEETING_ID, "同意", APPROVER_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getCode())
+                .isEqualTo(ErrorCode.ROOM_MAINTENANCE.getCode());
+        // 维护中的房间不能被批成"已预约"；状态机与审批记录都不能动
         verify(stateMachine, never()).transition(any(), any(), any(), anyString());
         verify(approvalMapper, never()).insert(any());
     }

@@ -101,6 +101,8 @@ public class RecurringService {
         return lockHelper.executeWithLockOnDates(room.getId(), dates, () ->
                 transactionTemplate.execute(tx -> {
                     meetingRoomMapper.selectIdForUpdate(room.getId()); // 数据库兜底，与单场创建同一把
+                    // 锁内复查维护状态（同单场创建）：锁外快检与管理员的维护操作之间存在窗口
+                    loadAvailableRoom(room.getId());
 
                     List<RecurringConflictVO> conflicts = checkConflicts(room.getId(), occurrences);
                     if (!conflicts.isEmpty()) {

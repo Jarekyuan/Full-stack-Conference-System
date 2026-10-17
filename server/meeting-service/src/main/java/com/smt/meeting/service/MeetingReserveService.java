@@ -76,6 +76,8 @@ public class MeetingReserveService {
         return lockHelper.executeWithLock(room.getId(), dto.getStartTime(), dto.getEndTime(), () ->
                 transactionTemplate.execute(txStatus -> {
                     meetingRoomMapper.selectIdForUpdate(room.getId()); // 数据库兜底（Redis 锁失效仍拦得住）
+                    // 锁内复查维护状态：loadAvailableRoom 是锁外快检，管理员可能在这之后把房间置为维护
+                    ensureRoomNotMaintenanceAfterLock(room.getId());
                     // ★ 冲突检测必须在锁内：锁保证本时段串行，检测结果才可信
                     checkConflict(room.getId(), dto.getStartTime(), dto.getEndTime(), null);
 
@@ -184,6 +186,8 @@ public class MeetingReserveService {
         lockHelper.executeWithLock(room.getId(), dto.getStartTime(), dto.getEndTime(), () ->
                 transactionTemplate.execute(tx -> {
                     meetingRoomMapper.selectIdForUpdate(room.getId()); // 数据库兜底（Redis 锁失效仍拦得住）
+                    // 同上：改期的目标房间也要在锁内复查维护状态
+                    ensureRoomNotMaintenanceAfterLock(room.getId());
                     checkConflict(room.getId(), dto.getStartTime(), dto.getEndTime(), meetingId); // 排除自身
                     applyUpdate(meetingId, meeting.getOrganiserId(), dto, operatorId, backToApproval);
                     return null;
@@ -417,6 +421,18 @@ public class MeetingReserveService {
             throw new BusinessException(ErrorCode.ROOM_MAINTENANCE);
         }
         return room;
+    }
+
+    /**
+     * 锁内复查维护状态：`loadAvailableRoom` 在抢锁**之前**执行（快速失败），
+     * 管理员可能在这个窗口里把房间置为维护。进锁后重读一次（房间行已被 FOR UPDATE 锁住，
+     * 读到的是已提交的最新状态），把"检查→维护→落库"的窗口关掉。
+     */
+    private void ensureRoomNotMaintenanceAfterLock(Long roomId) {
+        MeetingRoom current = meetingRoomMapper.selectById(roomId);
+        if (current != null && current.getStatus() != null && current.getStatus() == 1) {
+            throw new BusinessException(ErrorCode.ROOM_MAINTENANCE);
+        }
     }
 
     /** 时间合法性 + 策略窗口（R-2 时长 / R-5 提前天数）；策略为空时只做基础校验 */

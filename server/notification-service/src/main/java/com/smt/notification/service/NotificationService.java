@@ -200,6 +200,29 @@ public class NotificationService {
         return notificationMapper.markAllRead(userId);
     }
 
+    /**
+     * 删除单条：不是我的/不存在 → 60001（与已读接口同一口径）。
+     * 已读状态不影响删除——用户的收件箱由用户自己管理。
+     */
+    public void delete(Long id, Long userId) {
+        if (notificationMapper.deleteById(id, userId) == 0) {
+            throw new BusinessException(ErrorCode.NOTIFICATION_NOT_FOUND);
+        }
+    }
+
+    /** 批量删除：只删自己的，返回实际删除行数（别人的 id 静默跳过，不泄露存在性） */
+    public int deleteBatch(Long userId, List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return 0;
+        }
+        return notificationMapper.deleteByIds(userId, ids.stream().distinct().toList());
+    }
+
+    /** 删除我的全部通知（返回实际删除行数） */
+    public int deleteAll(Long userId) {
+        return notificationMapper.deleteAll(userId);
+    }
+
     // ---------- 内部 ----------
 
     /**

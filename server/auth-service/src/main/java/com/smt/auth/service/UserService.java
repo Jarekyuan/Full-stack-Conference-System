@@ -9,6 +9,7 @@ import com.smt.auth.entity.SysUser;
 import com.smt.auth.mapper.SysDeptMapper;
 import com.smt.auth.mapper.SysRoleMapper;
 import com.smt.auth.mapper.SysUserMapper;
+import com.smt.auth.store.RefreshTokenStore;
 import com.smt.auth.vo.UserBriefVO;
 import com.smt.auth.vo.UserRoleItem;
 import com.smt.auth.vo.UserSearchVO;
@@ -19,6 +20,7 @@ import com.smt.common.result.ErrorCode;
 import com.smt.common.result.PageResult;
 import com.smt.common.util.PageBounds;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,6 +37,7 @@ import java.util.stream.Collectors;
 /**
  * 用户服务：搜索 / 分页 / 创建 / 启用停用（T1.12；v1.3 起角色走 RBAC 多角色 + 部门）
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class UserService {
@@ -43,6 +46,8 @@ public class UserService {
     private final SysRoleMapper sysRoleMapper;
     private final SysDeptMapper sysDeptMapper;
     private final PasswordEncoder passwordEncoder;
+    /** 停用用户时主动作废 refreshToken（accessToken 仍最长 30 分钟，见 T6.2 的已知取舍） */
+    private final RefreshTokenStore refreshTokenStore;
 
     /**
      * 选参会人搜索 / 按部门列人（T6.1）。
@@ -140,6 +145,17 @@ public class UserService {
         }
         if (sysUserMapper.updateStatus(id, status) == 0) {
             throw new BusinessException(ErrorCode.NOT_FOUND.getCode(), "用户不存在");
+        }
+        if (status == 0) {
+            // 停用后让 refreshToken 立即作废（否则要等用户下一次刷新才被状态检查拦下）。
+            // accessToken 是自包含 JWT，其他服务无法实时感知停用——最长 30 分钟窗口是已知取舍，
+            // 不做网关级实时校验（会给每个请求多加一次 Redis 查询），见 docs/05 T6.2。
+            try {
+                refreshTokenStore.removeByUser(id);
+            } catch (Exception e) {
+                log.warn("[用户] 停用后作废 refreshToken 失败（下次刷新仍会被状态检查拒绝）: userId={}, err={}",
+                        id, e.getMessage());
+            }
         }
     }
 

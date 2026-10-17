@@ -157,8 +157,9 @@ async function waitBadge(page, predicate, timeoutMs = 15000, label = '') {
     const itemVisible = await page.getByText('E2E-F1-推送验证').first().isVisible();
     check('通知列表里能看到刚推来的那条', itemVisible);
     await page.getByText('E2E-F1-推送验证').first().click();
-    // 点了会跳会议详情（带 meetingId）或留在列表；回来再看角标
-    await page.waitForTimeout(1500);
+    // T6.2：预约创建通知 → 会议列表（不再直接进详情）
+    await page.waitForTimeout(1200);
+    check('预约创建通知点击 → 会议列表', page.url().endsWith('/meetings'), page.url());
     await page.goto(`${BASE}/notifications`, { waitUntil: 'networkidle' });
     await page.waitForTimeout(1200);
     const afterRead = await waitBadge(page, (n) => n === before, 10000);
@@ -172,6 +173,31 @@ async function waitBadge(page, predicate, timeoutMs = 15000, label = '') {
     await page.getByRole('button', { name: /全部已读/ }).click();
     const afterAll = await waitBadge(page, (n) => n === 0, 15000);
     check('全部已读后角标归零', afterAll === 0, String(afterAll));
+
+    // ---------- ④.5 删除通知（T6.2）----------
+    await page.goto(`${BASE}/notifications`, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(1200);
+    const firstItem = page.locator('.ant-list-item').first();
+    const firstItemText = (await firstItem.textContent()) ?? '';
+    /** 唯一标题：两条测试通知的标题都以 E2E-F1- 开头，用它精确判断这一条是否消失 */
+    const firstTitle = firstItemText.match(/E2E-F1-[^\s]+/)?.[0] ?? '';
+    await firstItem.locator('.ant-checkbox-input').check({ force: true });
+    await page.waitForTimeout(300);
+    check('勾选一条后「删除选中（1）」可用',
+      (await page.getByRole('button', { name: /删除选中（1）/ }).count()) === 1);
+    await page.getByRole('button', { name: /删除选中/ }).click();
+    await page.locator('.ant-modal-confirm').getByRole('button', { name: /删\s*除/ }).click();
+    await page.waitForTimeout(1500);
+    // 不能用"正文前 20 字"判断：两条通知的类型标签/开头完全相同，会误判成没删掉
+    check('选中的通知已从列表消失',
+      !!firstTitle && (await page.locator('.ant-list-item', { hasText: firstTitle }).count()) === 0,
+      firstTitle || '（未提取到唯一标题）');
+
+    await page.getByRole('button', { name: /全部删除/ }).click();
+    await page.locator('.ant-modal-confirm').getByRole('button', { name: /全部删除/ }).click();
+    await page.waitForTimeout(1500);
+    check('全部删除后显示空状态', (await page.getByText('还没有通知').count()) > 0);
+    check('全部删除后角标为 0', (await badgeCount(page)) === 0);
 
     // ---------- ⑤ 断线自动重连：停掉 notification-service 再拉起 ----------
     console.log('  … 停掉 notification-service，验证前端自动重连（最多等 60s）');

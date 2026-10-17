@@ -34,6 +34,15 @@ public interface NotificationMapper {
     /** 全部已读；返回更新行数 */
     int markAllRead(@Param("userId") Long userId);
 
-    /** 按主键查（仅用于已读接口判断"0 行"的原因：不是我的 vs 已经读过） */
+    /** 按主键查（仅用于已读/删除接口判断"0 行"的原因：不是我的 vs 已经处理过） */
     Notification selectById(@Param("id") Long id);
+
+    /** 删除单条（带 userId，越权防线在 SQL 里；返回影响行数） */
+    int deleteById(@Param("id") Long id, @Param("userId") Long userId);
+
+    /** 删除选中的多条（只删自己的；返回实际删除行数） */
+    int deleteByIds(@Param("userId") Long userId, @Param("ids") List<Long> ids);
+
+    /** 删除我的全部通知（返回实际删除行数） */
+    int deleteAll(@Param("userId") Long userId);
 }

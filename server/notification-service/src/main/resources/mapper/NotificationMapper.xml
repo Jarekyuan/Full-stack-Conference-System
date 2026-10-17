@@ -78,4 +78,23 @@
         SELECT id, user_id, type, title, content, meeting_id, read_flag, created_at
         FROM notification WHERE id = #{id}
     </select>
+
+    <!-- 删除单条：user_id 条件是越权防线（不能靠调用方先查后判） -->
+    <delete id="deleteById">
+        DELETE FROM notification WHERE id = #{id} AND user_id = #{userId}
+    </delete>
+
+    <!-- 批量删除：只删自己的；不在列表里的/别人的 id 自然不影响行数 -->
+    <delete id="deleteByIds">
+        DELETE FROM notification
+        WHERE user_id = #{userId}
+          AND id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+    <delete id="deleteAll">
+        DELETE FROM notification WHERE user_id = #{userId}
+    </delete>
 </mapper>
