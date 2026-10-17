@@ -6,6 +6,7 @@ import java.time.LocalDate;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -36,6 +37,7 @@ import com.smt.meeting.vo.AvailabilityVO;
 import com.smt.meeting.vo.CalendarMeetingVO;
 import com.smt.meeting.vo.MeetingConflictVO;
 import com.smt.meeting.vo.RoomCalendarVO;
+import com.smt.meeting.vo.RoomCalendarsVO;
 
 /**
  * 可用性与日历查询（docs/04 4.3）
@@ -115,6 +117,31 @@ public class AvailabilityService {
             return decorateInvited(cached, userId);
         }
         return rebuild(roomId, weekStart, key, userId);
+    }
+
+    /**
+     * 批量周日程（T6.3）：逐房间复用 {@link #calendar(Long, LocalDate, Long)}，
+     * 因而**缓存、single-flight、invited 装饰全部沿用同一套逻辑**；这里只负责聚合与逐房间容错。
+     *
+     * <p>HTTP 从 N 个请求降到 1 个；冷缓存时后端仍按房间回源（当前 7 个房间的量级可接受）。
+     * 若将来房间数上百，再把“读缓存/回源”也批量化（MGET + room_id IN 一条 SQL）。
+     */
+    public RoomCalendarsVO calendars(List<Long> roomIds, LocalDate week, Long userId) {
+        LocalDate weekStart = week.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        List<RoomCalendarVO> items = new ArrayList<>();
+        List<Long> failed = new ArrayList<>();
+        // 去重但保留请求顺序：重复 id 只会得到重复结果，白多一次缓存/DB 查询
+        for (Long roomId : new LinkedHashSet<>(roomIds)) {
+            try {
+                items.add(calendar(roomId, week, userId));
+            } catch (Exception e) {
+                // 单房间失败不拖垮整周：与前端原来的 Promise.allSettled 语义一致
+                log.warn("[日历] 批量查询中单房间失败: roomId={}, week={}, err={}",
+                        roomId, weekStart, e.getMessage());
+                failed.add(roomId);
+            }
+        }
+        return new RoomCalendarsVO(weekStart, weekStart.plusDays(6), items, failed);
     }
 
     // ---------- 缓存内部 ----------

@@ -28,22 +28,22 @@ export const CALENDAR_CATEGORY_META: Record<
 > = {
   pending: {
     label: '待审批',
-    blockClass: 'bg-amber-100 border-amber-400 text-amber-900',
+    blockClass: 'bg-amber-100 border-amber-400 text-amber-900 dark:bg-amber-950/60 dark:border-amber-500 dark:text-amber-200',
     dotClass: 'bg-amber-400',
   },
   mine: {
     label: '我预订',
-    blockClass: 'bg-blue-100 border-blue-500 text-blue-900',
+    blockClass: 'bg-blue-100 border-blue-500 text-blue-900 dark:bg-blue-950/60 dark:border-blue-500 dark:text-blue-200',
     dotClass: 'bg-blue-500',
   },
   invited: {
     label: '邀请我的',
-    blockClass: 'bg-emerald-100 border-emerald-500 text-emerald-900',
+    blockClass: 'bg-emerald-100 border-emerald-500 text-emerald-900 dark:bg-emerald-950/60 dark:border-emerald-500 dark:text-emerald-200',
     dotClass: 'bg-emerald-500',
   },
   other: {
     label: '其他（含已过期）',
-    blockClass: 'bg-gray-100 border-gray-300 text-gray-600',
+    blockClass: 'bg-gray-100 border-gray-300 text-gray-600 dark:bg-slate-800 dark:border-slate-600 dark:text-slate-300',
     dotClass: 'bg-gray-400',
   },
 }

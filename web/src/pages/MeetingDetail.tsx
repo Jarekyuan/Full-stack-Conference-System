@@ -180,10 +180,10 @@ export default function MeetingDetail() {
           children: (
             <div>
               <b>{meetingEventText(log.event)}</b>
-              <span className="ml-2 text-gray-500">
+              <span className="ml-2 text-gray-500 dark:text-slate-400">
                 {meetingStatusText(log.fromStatus)} → {meetingStatusText(log.toStatus)}
               </span>
-              <div className="text-xs text-gray-400">
+              <div className="text-xs text-gray-400 dark:text-slate-500">
                 {dayjs(log.createdAt).format('YYYY-MM-DD HH:mm')}　{log.operatorName ?? '系统'}
                 {log.remark ? `　${log.remark}` : ''}
               </div>

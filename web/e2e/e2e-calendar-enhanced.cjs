@@ -103,12 +103,28 @@ const apiGet = async (path, token) =>
 
     browser = await chromium.launch({ channel: 'chrome', headless: true });
     const page = await browser.newPage({ viewport: { width: 1512, height: 1100 } });
+    // T6.3：日历页应只发批量请求（/rooms/calendar），不再逐房间 /rooms/{id}/calendar
+    const batchCalls = [];
+    const singleCalls = [];
+    page.on('request', (req) => {
+      const url = req.url();
+      if (/\/api\/rooms\/calendar\?/.test(url)) batchCalls.push(url);
+      else if (/\/api\/rooms\/\d+\/calendar/.test(url)) singleCalls.push(url);
+    });
     await page.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
     await page.getByPlaceholder('请输入用户名').fill('user1');
     await page.getByPlaceholder('请输入密码').fill('user123');
     await page.locator('button[type="submit"]').click();
     await page.waitForURL('**/calendar', { timeout: 10000 });
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(2000);
+
+    // ---------- ⓪ 批量请求 ----------
+    check('日历页不再逐房间请求', singleCalls.length === 0, `single=${singleCalls.length}`);
+    check(
+      '日历页发批量请求（StrictMode 下同 URL 最多 2 次）',
+      batchCalls.length > 0 && new Set(batchCalls).size === 1,
+      `batch=${batchCalls.length} unique=${new Set(batchCalls).size}`,
+    );
 
     // ---------- ① 图例 ----------
     const legendText = (await page.textContent('body')) ?? '';

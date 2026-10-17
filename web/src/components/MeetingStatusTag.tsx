@@ -15,17 +15,17 @@ export const MEETING_STATUS_META: Record<
   number,
   { text: string; color: string; blockClass: string }
 > = {
-  10: { text: '待审批', color: 'orange', blockClass: 'bg-amber-100 border-amber-400 text-amber-900' },
-  20: { text: '已预约', color: 'blue', blockClass: 'bg-blue-100 border-blue-400 text-blue-900' },
-  30: { text: '进行中', color: 'green', blockClass: 'bg-emerald-100 border-emerald-400 text-emerald-900' },
-  40: { text: '已结束', color: 'default', blockClass: 'bg-gray-100 border-gray-300 text-gray-500' },
-  50: { text: '已取消', color: 'default', blockClass: 'bg-gray-100 border-gray-300 text-gray-400' },
-  60: { text: '已拒绝', color: 'red', blockClass: 'bg-red-100 border-red-400 text-red-900' },
+  10: { text: '待审批', color: 'orange', blockClass: 'bg-amber-100 border-amber-400 text-amber-900 dark:bg-amber-950/60 dark:border-amber-500 dark:text-amber-200' },
+  20: { text: '已预约', color: 'blue', blockClass: 'bg-blue-100 border-blue-400 text-blue-900 dark:bg-blue-950/60 dark:border-blue-500 dark:text-blue-200' },
+  30: { text: '进行中', color: 'green', blockClass: 'bg-emerald-100 border-emerald-400 text-emerald-900 dark:bg-emerald-950/60 dark:border-emerald-500 dark:text-emerald-200' },
+  40: { text: '已结束', color: 'default', blockClass: 'bg-gray-100 border-gray-300 text-gray-500 dark:bg-slate-800 dark:border-slate-600 dark:text-slate-400' },
+  50: { text: '已取消', color: 'default', blockClass: 'bg-gray-100 border-gray-300 text-gray-400 dark:bg-slate-800 dark:border-slate-600 dark:text-slate-500' },
+  60: { text: '已拒绝', color: 'red', blockClass: 'bg-red-100 border-red-400 text-red-900 dark:bg-red-950/50 dark:border-red-700 dark:text-red-200' },
 }
 
 /** 会议块的配色类（日历网格用）；未知状态给中性灰兜底 */
 export function statusBlockClass(status: number): string {
-  return MEETING_STATUS_META[status]?.blockClass ?? 'bg-gray-100 border-gray-400 text-gray-700'
+  return MEETING_STATUS_META[status]?.blockClass ?? 'bg-gray-100 border-gray-400 text-gray-700 dark:bg-slate-800 dark:border-slate-600 dark:text-slate-300'
 }
 
 /** 状态文案（时间线等只想要文字的场景用） */

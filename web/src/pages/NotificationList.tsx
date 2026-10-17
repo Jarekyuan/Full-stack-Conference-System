@@ -250,7 +250,7 @@ export default function NotificationList() {
           const unread = item.readFlag === 0
           return (
             <List.Item
-              className={`cursor-pointer rounded px-3 hover:bg-slate-50 ${unread ? 'bg-blue-50/40' : ''}`}
+              className={`cursor-pointer rounded px-3 hover:bg-slate-50 dark:hover:bg-slate-800 ${unread ? 'bg-blue-50/40 dark:bg-blue-950/30' : ''}`}
               onClick={() => void handleClick(item)}
               actions={[
                 unread ? (
@@ -280,7 +280,7 @@ export default function NotificationList() {
                   }
                   description={
                     <div>
-                      <div className="text-slate-600">{item.content}</div>
+                      <div className="text-slate-600 dark:text-slate-300">{item.content}</div>
                       <Text type="secondary" className="text-xs">
                         {item.createdAt}
                       </Text>

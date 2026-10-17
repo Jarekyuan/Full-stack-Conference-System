@@ -12,7 +12,7 @@ import { Alert, Button, Card, Input, Space, Spin, Tooltip } from 'antd'
 import dayjs, { type Dayjs } from 'dayjs'
 import { ChevronLeft, ChevronRight, RefreshCw, Search } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { getRoomCalendar, type CalendarDay, type CalendarMeeting } from '@/api/meeting'
+import { getRoomCalendars, type CalendarDay, type CalendarMeeting } from '@/api/meeting'
 import { listRooms, type Room } from '@/api/room'
 import { CALENDAR_CATEGORY_META, type CalendarCategory } from '@/components/calendarAppearance'
 import { CalendarGrid, type EmptySlot } from '@/components/CalendarGrid'
@@ -51,20 +51,16 @@ export default function Calendar() {
   const { data, loading, refresh } = useAppRequest<WeekPayload>(
     async () => {
       const rooms = await listRooms({ status: 0 })
-      // 用 allSettled 而非 all：6 个会议室里只要 1 个失败（网络抖动、会议室刚被删 → 30001），
-      // Promise.all 会让整个 service reject → 新一周的网格**完全不渲染**、只剩空白 + 一条 toast，
-      // 用户会以为"这一周没有任何会议"（评审 R14）。失败的房间单独标记，其余照常画。
-      const settled = await Promise.allSettled(rooms.map((room) => getRoomCalendar(room.id, weekStr)))
-      const daysByRoom = new Map<number, CalendarDay[]>()
-      const failedRoomIds: number[] = []
-      settled.forEach((result, index) => {
-        if (result.status === 'fulfilled') {
-          daysByRoom.set(result.value.roomId, result.value.days)
-        } else {
-          failedRoomIds.push(rooms[index].id)
-        }
-      })
-      return { week: weekStr, rooms, daysByRoom, failedRoomIds }
+      if (rooms.length === 0) {
+        return { week: weekStr, rooms, daysByRoom: new Map<number, CalendarDay[]>(), failedRoomIds: [] }
+      }
+      // T6.3：一次批量请求取全部会议室（原来 N 个房间 = N 个 /rooms/{id}/calendar 请求）。
+      // 后端仍按房间缓存/逐房间容错；failedRoomIds 用于保留“单个房间失败不空白整周”的语义。
+      const calendars = await getRoomCalendars(rooms.map((room) => room.id), weekStr)
+      const daysByRoom = new Map<number, CalendarDay[]>(
+        calendars.items.map((item) => [item.roomId, item.days]),
+      )
+      return { week: weekStr, rooms, daysByRoom, failedRoomIds: calendars.failedRoomIds }
     },
     { manual: false, refreshDeps: [weekStr] },
   )
@@ -136,7 +132,7 @@ export default function Calendar() {
             onClick={() => setWeek((w) => w.add(7, 'day'))}
           />
           <Button size="small" aria-label="刷新" icon={<RefreshCw size={14} />} onClick={() => refresh()} />
-          <span className="text-sm text-gray-500">
+          <span className="text-sm text-gray-500 dark:text-slate-400">
             {week.format('YYYY-MM-DD')} ~ {week.add(6, 'day').format('MM-DD')}
           </span>
         </Space>
@@ -148,7 +144,7 @@ export default function Calendar() {
           allowClear
           value={roomKeyword}
           onChange={(e) => setRoomKeyword(e.target.value)}
-          prefix={<Search size={14} className="text-slate-400" />}
+          prefix={<Search size={14} className="text-slate-400 dark:text-slate-500" />}
           placeholder="搜索会议室名称 / 位置 / 设备"
           style={{ width: 280 }}
         />
@@ -156,14 +152,14 @@ export default function Calendar() {
           {LEGEND_CATEGORIES.map((category) => {
             const meta = CALENDAR_CATEGORY_META[category]
             return (
-              <span key={category} className="flex items-center gap-1.5 text-xs text-slate-500">
+              <span key={category} className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
                 <span className={`inline-block h-2.5 w-2.5 rounded-sm ${meta.dotClass}`} />
                 {meta.label}
               </span>
             )
           })}
           <Tooltip title="已过期优先置灰；其余按 待审批 > 我预订 > 邀请我的 > 其他">
-            <span className="cursor-help text-xs text-slate-400">颜色说明</span>
+            <span className="cursor-help text-xs text-slate-400 dark:text-slate-500">颜色说明</span>
           </Tooltip>
         </div>
       </div>

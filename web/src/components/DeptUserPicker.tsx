@@ -148,7 +148,7 @@ export default function DeptUserPicker({ value = [], onChange, disabled }: DeptU
         cancelText="取消"
         destroyOnClose
       >
-        <div className="mb-2 flex min-h-[28px] flex-wrap items-center gap-1 rounded bg-slate-50 px-2 py-1">
+        <div className="mb-2 flex min-h-[28px] flex-wrap items-center gap-1 rounded bg-slate-50 dark:bg-slate-900 px-2 py-1">
           {draft.length === 0 ? (
             <Text type="secondary" className="text-xs">
               还未选择参会人
@@ -168,7 +168,7 @@ export default function DeptUserPicker({ value = [], onChange, disabled }: DeptU
 
         <div className="flex gap-4">
           {/* 左：部门树 */}
-          <div className="w-56 shrink-0 border-r border-slate-100 pr-3">
+          <div className="w-56 shrink-0 border-r border-slate-100 dark:border-slate-800 pr-3">
             <Spin spinning={treeLoading}>
               <Tree
                 blockNode

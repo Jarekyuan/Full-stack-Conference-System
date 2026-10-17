@@ -185,6 +185,27 @@ check "缓存命中后 user1 仍是 invited=true（反向也不串）" "$([ "$F1
 F2=$(invited_flag "$U2")
 check "user2（组织人）invited=false" "$([ "$F2" = "False" ] && echo 1 || echo 0)" "invited=$F2"
 
+# ---------- ④.5 批量接口（T6.3） ----------
+# 一次取多个会议室（故意传重复 id，验证 Service 去重）；room1 里应能看到 MID 的 invited 标记
+BATCH=$(get_api "/api/rooms/calendar?week=$FUTURE_WEEK&roomIds=1,6,1" "$U1")
+read -r B_CODE B_ITEMS B_FAILED B_DAYS_OK B_INVITED B_WEEK <<< "$(echo "$BATCH" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+data = d.get('data') or {}
+items = data.get('items') or []
+room1 = next((x for x in items if x['roomId'] == 1), None) or {}
+meeting = next((m for day in (room1.get('days') or []) for m in day.get('meetings', []) if m['meetingId'] == $MID), None) or {}
+days_ok = int(all(len(x.get('days') or []) == 7 for x in items))
+print(d.get('code'), len(items), len(data.get('failedRoomIds') or []), days_ok,
+      meeting.get('invited'), data.get('weekStart'))
+")"
+check "批量日历 code=0" "$([ "$B_CODE" = "0" ] && echo 1 || echo 0)" "code=$B_CODE"
+check "批量日历去重后返回 2 个房间" "$([ "$B_ITEMS" = "2" ] && echo 1 || echo 0)" "items=$B_ITEMS"
+check "批量日历无失败房间" "$([ "$B_FAILED" = "0" ] && echo 1 || echo 0)" "failed=$B_FAILED"
+check "批量日历每个房间补齐 7 天" "$([ "$B_DAYS_OK" = "1" ] && echo 1 || echo 0)"
+check "批量日历 invited 装饰正确（user1=true）" "$([ "$B_INVITED" = "True" ] && echo 1 || echo 0)" "invited=$B_INVITED"
+check "批量日历 weekStart 正确" "$([ "$B_WEEK" = "$FUTURE_WEEK" ] && echo 1 || echo 0)" "weekStart=$B_WEEK"
+
 # ---------- ⑤ 按部门选人接口 ----------
 SEARCH_OUT=$(get_api "/api/users/search?deptId=2" "$U1" | python3 -c '
 import sys, json

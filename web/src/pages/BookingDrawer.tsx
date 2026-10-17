@@ -419,7 +419,7 @@ export default function BookingDrawer({ open, prefill, rooms, onClose, onSuccess
         okText="知道了"
         cancelButtonProps={{ style: { display: 'none' } }}
       >
-        <p className="mb-2 text-slate-500">以下场次与已有会议冲突，调整开始时间或缩短重复区间后重试：</p>
+        <p className="mb-2 text-slate-500 dark:text-slate-400">以下场次与已有会议冲突，调整开始时间或缩短重复区间后重试：</p>
         {recurringConflicts?.map((c) => (
           <div key={`${c.occurrenceStart}-${c.meetingId}`} className="mb-1">
             第 {c.occurrenceStart.slice(0, 10)} 那一场：{c.startTime.slice(11, 16)}-{c.endTime.slice(11, 16)}{' '}

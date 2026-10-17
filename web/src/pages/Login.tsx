@@ -11,6 +11,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Button, Card, Form, Input, Typography } from 'antd'
 import { Lock, User } from 'lucide-react'
 import { login } from '@/api/auth'
+import ThemeToggle from '@/components/ThemeToggle'
 import { useAppRequest } from '@/hooks/useAppRequest'
 import { useUserStore } from '@/stores/userStore'
 
@@ -56,7 +57,10 @@ export default function Login() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50">
+    <div className="relative flex min-h-screen items-center justify-center bg-slate-50 dark:bg-slate-950">
+      <div className="absolute right-4 top-4">
+        <ThemeToggle />
+      </div>
       <Card className="w-[380px] shadow-sm">
         <div className="mb-6 text-center">
           <Typography.Title level={4} className="!mb-1">

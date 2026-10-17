@@ -100,6 +100,21 @@
   `verify-m3-approval.sh` **32/32**、`verify-review-batch4.sh` **33/33**、
   `e2e-org-users.cjs` **20/20**、`e2e-calendar-enhanced.cjs` **23/23**、`npm run check` **50 例**。
 
+**T6.3 日历批量接口 + 暗黑模式（2026-10-17）**：
+- **日历批量**：新增 `GET /api/rooms/calendar?week=&roomIds=`（最多 50 个、去重）；
+  Service 逐房间复用 `calendar()`（缓存/single-flight/`invited` 装饰完全一致），单房间失败进
+  `failedRoomIds`；前端 `Calendar.tsx` 只发 1 个批量日历请求（+1 个会议室列表）。
+  实测请求从 **7 个/次（StrictMode 14）降到 1 个/次（StrictMode 2，同 URL）**。
+- **暗黑模式**（方案：antd `darkAlgorithm` + Tailwind `darkMode:'class'`）：
+  `themeStore` 三态 `light/dark/system` + persist；监听系统 `prefers-color-scheme`；
+  `AppThemeProvider` 切 antd 算法并同步 `<html class="dark" data-theme color-scheme>`；
+  `index.html` 内联防闪烁脚本（键与 persist 一致：`meeting.theme`）；
+  `ThemeToggle` 在顶栏与登录页；Tailwind 自定义颜色补 `dark:`（日历四色/六状态/网格/遮罩/组织用户/通知/登录/布局）；
+  ECharts **不引主题包**（按需 core 不带 dark 主题），坐标轴/图例/悬浮框颜色按主题显式切换、背景透明。
+- 验证：后端 **99 例**、`verify-calendar-optimize.sh` **24/24 连跑两次**（含批量去重/7 天/invited）、
+  `e2e-calendar-enhanced.cjs` **25/25**（含“不再逐房间请求”）、`e2e-theme.cjs` **13/13 连跑两次**、
+  `e2e-meeting-list.cjs` **21/21**、`npm run check` **53 例**、`npm run build` 通过。
+
 **M4 演示脚本（可照做）**：user1 登录前端（:5173）→ 另开一个浏览器/接口以 approver1 身份审批 →
 user1 端**铃铛角标秒级 +1**（WS）→ 打开通知中心看到"审批通过"→ 点掉角标归零。
 `web/e2e/e2e-notify-center.cjs` 就是这条演示的可执行版本。
@@ -352,6 +367,20 @@ user1 端**铃铛角标秒级 +1**（WS）→ 打开通知中心看到"审批通
     没 stub → 返回 null → 抛 `30001 会议室不存在`。表面是业务错误，根因是**测试夹具缺一行 mock**。
     **看到单测报出一个“产品错误码”，先检查新加的依赖调用有没有在 setUp 里 mock**；补上后
     维护分支再单独加一个用例（现在 5 例）。
+
+27. **改 `tailwind.config.js`（尤其新增 `darkMode`）后必须重启 Vite dev server**（2026-10-17 T6.3）：
+    HMR 不会按新配置重新生成 `dark:` 变体。现象很有迷惑性：antd 组件已经被 `darkAlgorithm` 变暗、
+    `<html class="dark">` 也正确，但 Tailwind 自定义区域（日历网格/遮罩等）仍是白底；
+    浏览器里 `document.styleSheets` 只找到 1 条 `.dark` 规则（我们自己的 `html.dark body`），
+    Tailwind 的一条都没有。重启后规则数变 31，深色正常。
+    **判据**：暗色下 antd 暗、Tailwind 区域不暗 → 先数 `.dark` CSS 规则，别怀疑组件。
+
+28. **批量给 class 加 `dark:` 变体时，替换会命中刚加进去的 dark 类**（2026-10-17 T6.3）：
+    按顺序把 `text-slate-500 → text-slate-500 dark:text-slate-400`，随后又把 `text-slate-400`
+    替换一遍，就会把 `dark:text-slate-400` 改成 `dark:text-slate-400 dark:text-slate-500`；
+    `hover:bg-slate-50` 也会被 `bg-slate-50` 再命中，生成错误的 `hover:... dark:bg-...`。
+    **规矩**：先处理完整状态块与 `hover:` 复合类，再处理普通类；最后统一做一次 token 去重，
+    并人工看一遍 `dark:.*dark:` 的行。纯机械替换一定会制造这类“看起来能跑但语义错”的类。
 
 ---
 

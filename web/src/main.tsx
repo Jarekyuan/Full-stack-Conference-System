@@ -8,12 +8,12 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { RouterProvider } from 'react-router-dom'
-import { App as AntdApp, ConfigProvider } from 'antd'
-import zhCN from 'antd/locale/zh_CN'
+import { App as AntdApp } from 'antd'
 import 'dayjs/locale/zh-cn'
 import dayjs from 'dayjs'
 
 import { router } from './router'
+import AppThemeProvider from './theme/AppThemeProvider'
 import './index.css'
 
 dayjs.locale('zh-cn')
@@ -25,10 +25,10 @@ if (!container) {
 
 createRoot(container).render(
   <StrictMode>
-    <ConfigProvider locale={zhCN}>
+    <AppThemeProvider>
       <AntdApp>
         <RouterProvider router={router} />
       </AntdApp>
-    </ConfigProvider>
+    </AppThemeProvider>
   </StrictMode>,
 )

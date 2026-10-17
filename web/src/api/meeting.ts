@@ -49,6 +49,21 @@ export function getRoomCalendar(roomId: number, week: string): Promise<RoomCalen
   return http.get<RoomCalendar>(`/rooms/${roomId}/calendar`, { params: { week } })
 }
 
+/** 批量周日程响应（T6.3）：items 与 failedRoomIds 并存，单房间失败不拖垮整周 */
+export interface RoomCalendars {
+  weekStart: string
+  weekEnd: string
+  items: RoomCalendar[]
+  failedRoomIds: number[]
+}
+
+/** 批量周日程：一次取多个会议室（日历页只发这一个日历请求，roomIds 逗号分隔） */
+export function getRoomCalendars(roomIds: number[], week: string): Promise<RoomCalendars> {
+  return http.get<RoomCalendars>('/rooms/calendar', {
+    params: { week, roomIds: roomIds.join(',') },
+  })
+}
+
 // ———————————————————— 可用性（T2.F2 预约表单实时校验）————————————————————
 // 注意：只读查询**不加锁**，只是 UI 辅助；最终以提交时的冲突校验为准（docs/04 7.4"查询与提交分离"）。
 

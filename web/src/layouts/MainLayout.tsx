@@ -20,8 +20,10 @@ import {
   Users,
 } from 'lucide-react'
 import { logout as logoutApi } from '@/api/auth'
+import ThemeToggle from '@/components/ThemeToggle'
 import { useNotificationSocket } from '@/hooks/useWebSocket'
 import { useNotificationStore } from '@/stores/notificationStore'
+import { useResolvedTheme } from '@/stores/themeStore'
 import { useUserStore } from '@/stores/userStore'
 
 const { Sider, Header, Content } = Layout
@@ -44,6 +46,7 @@ export default function MainLayout() {
   useNotificationSocket()
 
   const { token } = theme.useToken()
+  const isDark = useResolvedTheme() === 'dark'
 
   const roles = user?.roles ?? []
   const isAdmin = roles.includes(ROLE_ADMIN)
@@ -101,10 +104,10 @@ export default function MainLayout() {
 
   return (
     <Layout className="min-h-screen">
-      <Sider theme="light" width={220}>
-        <div className="flex h-16 items-center justify-center border-b border-slate-100 px-4">
-          <MessageSquareText size={20} className="mr-2 text-blue-600" />
-          <span className="text-base font-semibold text-slate-800">会议室预约</span>
+      <Sider theme={isDark ? 'dark' : 'light'} width={220}>
+        <div className="flex h-16 items-center justify-center border-b border-slate-100 dark:border-slate-800 px-4">
+          <MessageSquareText size={20} className="mr-2 text-blue-600 dark:text-blue-400" />
+          <span className="text-base font-semibold text-slate-800 dark:text-slate-100">会议室预约</span>
         </div>
         <Menu
           mode="inline"
@@ -120,19 +123,23 @@ export default function MainLayout() {
           style={{ background: token.colorBgContainer, padding: '0 24px' }}
         >
           <div className="flex items-center gap-4">
+            {/* 主题切换（T6.3）：亮 / 暗 / 跟随系统 */}
+            <ThemeToggle />
             {/* 铃铛角标（T4.F1）：未读数来自 notificationStore——首屏 REST 拉一次，
                 之后由 WS 的权威值实时覆盖（见 hooks/useWebSocket） */}
             <Badge count={unreadCount} size="small" offset={[2, -2]}>
               <Bell
                 size={18}
-                className="cursor-pointer text-slate-500"
+                className="cursor-pointer text-slate-500 dark:text-slate-400"
                 onClick={() => navigate('/notifications')}
               />
             </Badge>
             <Dropdown menu={{ items: userMenu }} placement="bottomRight">
               <div className="flex cursor-pointer items-center gap-2">
                 <Avatar size="small" icon={<UserIcon size={14} />} />
-                <span className="text-slate-700">{user?.realName ?? user?.username ?? '未登录'}</span>
+                <span className="text-slate-700 dark:text-slate-200">
+                  {user?.realName ?? user?.username ?? '未登录'}
+                </span>
               </div>
             </Dropdown>
           </div>

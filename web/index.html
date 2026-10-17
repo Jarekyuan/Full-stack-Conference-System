@@ -4,6 +4,33 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>会议室预约系统</title>
+    <!--
+      暗色模式防闪烁：在 React 挂载前先按持久化模式/系统偏好给 <html> 加 dark。
+      持久化键与 themeStore 的 persist name 一致（meeting.theme），结构是 zustand 的 {state:{mode}}。
+    -->
+    <script>
+      ;(function () {
+        try {
+          var mode = 'system'
+          var raw = localStorage.getItem('meeting.theme')
+          if (raw) {
+            var saved = JSON.parse(raw)
+            if (saved && saved.state && saved.state.mode) mode = saved.state.mode
+          }
+          var dark =
+            mode === 'dark' ||
+            (mode === 'system' &&
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches)
+          var root = document.documentElement
+          if (dark) root.classList.add('dark')
+          root.dataset.theme = dark ? 'dark' : 'light'
+          root.style.colorScheme = dark ? 'dark' : 'light'
+        } catch (e) {
+          /* localStorage 被禁用时按亮色启动，不影响页面 */
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

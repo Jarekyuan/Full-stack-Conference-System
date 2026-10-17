@@ -5,6 +5,8 @@
  */
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
+  // T6.3：class 策略；由 themeStore/AppThemeProvider 在 <html> 上切 dark
+  darkMode: 'class',
   theme: {
     extend: {},
   },

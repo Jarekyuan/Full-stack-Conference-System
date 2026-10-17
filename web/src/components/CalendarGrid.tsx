@@ -211,21 +211,21 @@ function DayCell({
   return (
     <div
       data-testid={`day-cell-${room.id}-${date}`}
-      className={`relative border-l border-gray-100 ${ratio >= 1 ? 'bg-gray-50' : 'hover:bg-blue-50/40'}`}
+      className={`relative border-l border-gray-100 dark:border-slate-800 ${ratio >= 1 ? 'bg-gray-50 dark:bg-slate-950' : 'hover:bg-blue-50/40 dark:hover:bg-blue-950/30'}`}
       style={{ height: CELL_HEIGHT }}
       onClick={handleEmptyClick}
     >
       {HOUR_LINES.map((m) => (
         <div
           key={m}
-          className="pointer-events-none absolute inset-x-0 border-t border-gray-100"
+          className="pointer-events-none absolute inset-x-0 border-t border-gray-100 dark:border-slate-800"
           style={{ top: pct(m) }}
         />
       ))}
       {ratio > 0 && (
         <div
           data-testid={`past-overlay-${room.id}-${date}`}
-          className="pointer-events-none absolute inset-x-0 top-0 bg-gray-100/80"
+          className="pointer-events-none absolute inset-x-0 top-0 bg-gray-100/80 dark:bg-slate-900/80"
           style={{ height: `${ratio * 100}%` }}
         />
       )}
@@ -251,14 +251,14 @@ function DayCell({
 function TimeAxis({ showEnd = false }: { showEnd?: boolean }) {
   const labels = showEnd ? RULER_MINUTES : RULER_MINUTES.filter((m) => m < DAY_END_MINUTES)
   return (
-    <div className="relative border-r border-gray-100" style={{ height: CELL_HEIGHT }}>
+    <div className="relative border-r border-gray-100 dark:border-slate-800" style={{ height: CELL_HEIGHT }}>
       {labels.map((m, index) => {
         const isFirst = index === 0
         const isLast = index === labels.length - 1
         return (
           <div
             key={m}
-            className="absolute right-1 text-[10px] leading-none text-gray-400"
+            className="absolute right-1 text-[10px] leading-none text-gray-400 dark:text-slate-400"
             style={{
               top: pct(m),
               transform: isFirst ? undefined : isLast && showEnd ? 'translateY(-100%)' : 'translateY(-50%)',
@@ -295,9 +295,9 @@ function RoomRowInner({
   return (
     <div className="grid items-stretch" style={{ gridTemplateColumns: COLUMNS }} data-testid={`room-row-${room.id}`}>
       <Popover content={<RoomInfoCard room={room} />} placement="right" mouseEnterDelay={0.15}>
-        <div className="flex cursor-help flex-col justify-center border-r border-gray-100 px-2">
+        <div className="flex cursor-help flex-col justify-center border-r border-gray-100 dark:border-slate-800 px-2">
           <div className="truncate text-sm font-medium">{room.name}</div>
-          <div className="truncate text-xs text-gray-400">{room.location}</div>
+          <div className="truncate text-xs text-gray-400 dark:text-slate-400">{room.location}</div>
         </div>
       </Popover>
       <TimeAxis showEnd={isLastRoom} />
@@ -332,26 +332,26 @@ function CalendarGridInner({
 }: CalendarGridProps) {
   return (
     <div className="overflow-x-auto">
-      <div className="min-w-[900px] rounded border border-gray-200 bg-white">
+      <div className="min-w-[900px] rounded border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900">
         {/* 表头：周几 + 日期 */}
-        <div className="grid border-b border-gray-200 bg-gray-50" style={{ gridTemplateColumns: COLUMNS }}>
-          <div className="px-2 py-2 text-xs font-medium text-gray-500">会议室</div>
-          <div className="px-2 py-2 text-xs font-medium text-gray-500">时间</div>
+        <div className="grid border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-800" style={{ gridTemplateColumns: COLUMNS }}>
+          <div className="px-2 py-2 text-xs font-medium text-gray-500 dark:text-slate-400">会议室</div>
+          <div className="px-2 py-2 text-xs font-medium text-gray-500 dark:text-slate-400">时间</div>
           {dates.map((date) => {
             const d = dayjs(date)
             const isToday = d.isSame(dayjs(), 'day')
             return (
-              <div key={date} className="border-l border-gray-100 px-2 py-2 text-center">
-                <div className={`text-xs ${isToday ? 'font-medium text-blue-600' : 'text-gray-500'}`}>
+              <div key={date} className="border-l border-gray-100 dark:border-slate-800 px-2 py-2 text-center">
+                <div className={`text-xs ${isToday ? 'font-medium text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-slate-400'}`}>
                   周{'日一二三四五六'[d.day()]}
                 </div>
-                <div className={`text-xs ${isToday ? 'text-blue-600' : 'text-gray-400'}`}>{d.format('MM-DD')}</div>
+                <div className={`text-xs ${isToday ? 'text-blue-600 dark:text-blue-400' : 'text-gray-400 dark:text-slate-400'}`}>{d.format('MM-DD')}</div>
               </div>
             )
           })}
         </div>
         {rooms.length === 0 ? (
-          <div className="py-10 text-center text-sm text-gray-400">{emptyText ?? '暂无可用会议室'}</div>
+          <div className="py-10 text-center text-sm text-gray-400 dark:text-slate-400">{emptyText ?? '暂无可用会议室'}</div>
         ) : (
           rooms.map((room, index) => (
             <RoomRow

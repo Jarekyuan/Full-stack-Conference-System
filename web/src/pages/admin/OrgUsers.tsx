@@ -139,20 +139,20 @@ function DeptFormModal({
     >
       <div className="space-y-4 pt-2">
         <div>
-          <div className="mb-1 text-sm text-slate-600">上级部门</div>
+          <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">上级部门</div>
           <Text type="secondary">{dept ? '父级不可变（本次不改上级）' : parent?.name ?? '根节点'}</Text>
         </div>
         <div>
-          <div className="mb-1 text-sm text-slate-600">部门名称</div>
+          <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">部门名称</div>
           <Controller
             name="name"
             control={control}
             render={({ field }) => <Input {...field} placeholder="如：研发部" maxLength={50} />}
           />
-          {errors.name && <div className="mt-1 text-xs text-red-500">{errors.name.message}</div>}
+          {errors.name && <div className="mt-1 text-xs text-red-500 dark:text-red-400">{errors.name.message}</div>}
         </div>
         <div>
-          <div className="mb-1 text-sm text-slate-600">同级排序（小的在前）</div>
+          <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">同级排序（小的在前）</div>
           <Controller
             name="sortOrder"
             control={control}
@@ -168,12 +168,12 @@ function DeptFormModal({
             )}
           />
           {errors.sortOrder && (
-            <div className="mt-1 text-xs text-red-500">{errors.sortOrder.message}</div>
+            <div className="mt-1 text-xs text-red-500 dark:text-red-400">{errors.sortOrder.message}</div>
           )}
         </div>
         {dept && (
           <div>
-            <div className="mb-1 text-sm text-slate-600">状态</div>
+            <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">状态</div>
             <Controller
               name="status"
               control={control}
@@ -336,7 +336,7 @@ function UserFormModal({
     >
       <div className="space-y-4 pt-2">
         <div>
-          <div className="mb-1 text-sm text-slate-600">用户名（登录名）</div>
+          <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">用户名（登录名）</div>
           <Controller
             name="username"
             control={control}
@@ -349,12 +349,12 @@ function UserFormModal({
             }
           />
           {errors.username && (
-            <div className="mt-1 text-xs text-red-500">{errors.username.message}</div>
+            <div className="mt-1 text-xs text-red-500 dark:text-red-400">{errors.username.message}</div>
           )}
         </div>
         {!user && (
           <div>
-            <div className="mb-1 text-sm text-slate-600">初始密码</div>
+            <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">初始密码</div>
             <Controller
               name="password"
               control={control}
@@ -363,32 +363,32 @@ function UserFormModal({
               )}
             />
             {errors.password && (
-              <div className="mt-1 text-xs text-red-500">{errors.password.message}</div>
+              <div className="mt-1 text-xs text-red-500 dark:text-red-400">{errors.password.message}</div>
             )}
           </div>
         )}
         <div>
-          <div className="mb-1 text-sm text-slate-600">姓名</div>
+          <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">姓名</div>
           <Controller
             name="realName"
             control={control}
             render={({ field }) => <Input {...field} placeholder="真实姓名" maxLength={50} />}
           />
           {errors.realName && (
-            <div className="mt-1 text-xs text-red-500">{errors.realName.message}</div>
+            <div className="mt-1 text-xs text-red-500 dark:text-red-400">{errors.realName.message}</div>
           )}
         </div>
         <div>
-          <div className="mb-1 text-sm text-slate-600">邮箱（通知用，可空）</div>
+          <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">邮箱（通知用，可空）</div>
           <Controller
             name="email"
             control={control}
             render={({ field }) => <Input {...field} placeholder="name@example.com" maxLength={100} />}
           />
-          {errors.email && <div className="mt-1 text-xs text-red-500">{errors.email.message}</div>}
+          {errors.email && <div className="mt-1 text-xs text-red-500 dark:text-red-400">{errors.email.message}</div>}
         </div>
         <div>
-          <div className="mb-1 text-sm text-slate-600">所属部门</div>
+          <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">所属部门</div>
           <Controller
             name="deptId"
             control={control}
@@ -406,7 +406,7 @@ function UserFormModal({
           />
         </div>
         <div>
-          <div className="mb-1 text-sm text-slate-600">角色（至少一个）</div>
+          <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">角色（至少一个）</div>
           <Controller
             name="roleIds"
             control={control}
@@ -422,10 +422,10 @@ function UserFormModal({
             )}
           />
           {errors.roleIds && (
-            <div className="mt-1 text-xs text-red-500">{errors.roleIds.message}</div>
+            <div className="mt-1 text-xs text-red-500 dark:text-red-400">{errors.roleIds.message}</div>
           )}
           {isSelf && (
-            <div className="mt-1 text-xs text-amber-600">
+            <div className="mt-1 text-xs text-amber-600 dark:text-amber-400">
               不能移除自己的 ADMIN 角色（否则会把自己锁在管理端之外）
             </div>
           )}
@@ -660,7 +660,7 @@ export default function OrgUsers() {
   return (
     <div className="flex gap-4">
       {/* 左：部门树 */}
-      <div className="w-72 shrink-0 border-r border-slate-100 pr-4">
+      <div className="w-72 shrink-0 border-r border-slate-100 dark:border-slate-800 pr-4">
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-base font-medium">组织架构</h2>
           <Button

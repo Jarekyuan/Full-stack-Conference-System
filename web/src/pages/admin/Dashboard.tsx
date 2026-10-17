@@ -19,6 +19,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import type { EChartsCoreOption } from 'echarts/core'
 import { fetchMyStats, fetchRoomUsage, type MyMeetingStats, type RoomUsage } from '@/api/stats'
 import { useAppRequest } from '@/hooks/useAppRequest'
+import { useResolvedTheme } from '@/stores/themeStore'
 
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
@@ -52,6 +53,18 @@ function Chart({ option, height = 320 }: { option: EChartsCoreOption; height?: n
 export default function Dashboard() {
   // 默认近 30 天（与后端缺省一致；显式传入是为了让"改区间重查"统一走同一条参数路径）
   const [range, setRange] = useState<[Dayjs, Dayjs]>([dayjs().subtract(29, 'day'), dayjs()])
+  const dark = useResolvedTheme() === 'dark'
+  /** ECharts 不引主题包（按需引入的 core 不带 dark 主题），把用到的颜色显式跟着主题走 */
+  const chartColors = useMemo(
+    () => ({
+      axis: dark ? '#cbd5e1' : '#6b7280',
+      split: dark ? '#334155' : '#e5e7eb',
+      tooltipBg: dark ? '#1e293b' : '#ffffff',
+      tooltipBorder: dark ? '#334155' : '#e5e7eb',
+      tooltipText: dark ? '#e5e7eb' : '#111827',
+    }),
+    [dark],
+  )
 
   const usage = useAppRequest(
     () => fetchRoomUsage(range[0].format('YYYY-MM-DD'), range[1].format('YYYY-MM-DD')),
@@ -62,8 +75,12 @@ export default function Dashboard() {
   const usageOption = useMemo<EChartsCoreOption>(() => {
     const data: RoomUsage | undefined = usage.data
     return {
+      backgroundColor: 'transparent',
       tooltip: {
         trigger: 'axis',
+        backgroundColor: chartColors.tooltipBg,
+        borderColor: chartColors.tooltipBorder,
+        textStyle: { color: chartColors.tooltipText },
         // 悬浮时把"原始值"也带上：只显示百分比的话没法判断"0.5% 是不是数据错了"
         formatter: (params: unknown) => {
           const p = (params as { dataIndex: number }[])[0]
@@ -74,8 +91,21 @@ export default function Dashboard() {
         },
       },
       grid: { left: 48, right: 16, top: 32, bottom: 40 },
-      xAxis: { type: 'category', data: (data?.items ?? []).map((i) => i.roomName) },
-      yAxis: { type: 'value', name: '占用率(%)' },
+      xAxis: {
+        type: 'category',
+        data: (data?.items ?? []).map((i) => i.roomName),
+        axisLabel: { color: chartColors.axis },
+        axisLine: { lineStyle: { color: chartColors.split } },
+        splitLine: { lineStyle: { color: chartColors.split } },
+      },
+      yAxis: {
+        type: 'value',
+        name: '占用率(%)',
+        nameTextStyle: { color: chartColors.axis },
+        axisLabel: { color: chartColors.axis },
+        axisLine: { lineStyle: { color: chartColors.split } },
+        splitLine: { lineStyle: { color: chartColors.split } },
+      },
       series: [
         {
           name: '占用率',
@@ -86,18 +116,44 @@ export default function Dashboard() {
         },
       ],
     }
-  }, [usage.data])
+  }, [usage.data, chartColors])
 
   const mineOption = useMemo<EChartsCoreOption>(() => {
     const data: MyMeetingStats | undefined = mine.data
     return {
-      tooltip: { trigger: 'axis' },
-      legend: { data: ['会议数', '时长(分钟)'] },
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: chartColors.tooltipBg,
+        borderColor: chartColors.tooltipBorder,
+        textStyle: { color: chartColors.tooltipText },
+      },
+      legend: { data: ['会议数', '时长(分钟)'], textStyle: { color: chartColors.axis } },
       grid: { left: 48, right: 48, top: 40, bottom: 40 },
-      xAxis: { type: 'category', data: (data?.daily ?? []).map((d) => d.date.slice(5)) },
+      xAxis: {
+        type: 'category',
+        data: (data?.daily ?? []).map((d) => d.date.slice(5)),
+        axisLabel: { color: chartColors.axis },
+        axisLine: { lineStyle: { color: chartColors.split } },
+        splitLine: { lineStyle: { color: chartColors.split } },
+      },
       yAxis: [
-        { type: 'value', name: '场次' },
-        { type: 'value', name: '分钟' },
+        {
+          type: 'value',
+          name: '场次',
+          nameTextStyle: { color: chartColors.axis },
+          axisLabel: { color: chartColors.axis },
+          axisLine: { lineStyle: { color: chartColors.split } },
+          splitLine: { lineStyle: { color: chartColors.split } },
+        },
+        {
+          type: 'value',
+          name: '分钟',
+          nameTextStyle: { color: chartColors.axis },
+          axisLabel: { color: chartColors.axis },
+          axisLine: { lineStyle: { color: chartColors.split } },
+          splitLine: { lineStyle: { color: chartColors.split } },
+        },
       ],
       series: [
         { name: '会议数', type: 'line', smooth: true, data: (data?.daily ?? []).map((d) => d.count) },
@@ -110,7 +166,7 @@ export default function Dashboard() {
         },
       ],
     }
-  }, [mine.data])
+  }, [mine.data, chartColors])
 
   const summary = usage.data
     ? `本区间共 ${usage.data.items.reduce((s, i) => s + i.meetingCount, 0)} 场会议，合计 ${usage.data.totalMinutes} 分钟`
