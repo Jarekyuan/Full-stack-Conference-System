@@ -2,6 +2,8 @@ package com.smt.auth.service;
 
 import cn.hutool.core.util.StrUtil;
 import com.smt.auth.dto.UserCreateDTO;
+import com.smt.auth.dto.UserUpdateDTO;
+import com.smt.auth.entity.SysDept;
 import com.smt.auth.entity.SysRole;
 import com.smt.auth.entity.SysUser;
 import com.smt.auth.mapper.SysDeptMapper;
@@ -11,6 +13,7 @@ import com.smt.auth.vo.UserBriefVO;
 import com.smt.auth.vo.UserRoleItem;
 import com.smt.auth.vo.UserSearchVO;
 import com.smt.auth.vo.UserVO;
+import com.smt.common.context.UserContext;
 import com.smt.common.exception.BusinessException;
 import com.smt.common.result.ErrorCode;
 import com.smt.common.result.PageResult;
@@ -20,8 +23,13 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -51,12 +59,18 @@ public class UserService {
                 .toList();
     }
 
-    /** 分页（可按部门筛选；角色一次批量装配，避免逐行 N+1） */
-    public PageResult<UserVO> page(int page, int size, Long deptId) {
+    /**
+     * 分页（可按部门/整棵子树筛选；角色一次批量装配，避免逐行 N+1）。
+     *
+     * <p>{@code includeChildren=true} 时把子树展开成 id 列表再查——部门量小（单页树），
+     * 比在 SQL 里写递归 CTE 更直观，也避免 MySQL 递归深度/写法差异。
+     */
+    public PageResult<UserVO> page(int page, int size, Long deptId, boolean includeChildren) {
         // 分页边界统一由 PageBounds 钳制（page 溢出会让 offset 变负数 → LIMIT 报错 → 500，评审 R1）
         PageBounds bounds = PageBounds.of(page, size);
-        long total = sysUserMapper.countAll(deptId);
-        List<UserVO> list = sysUserMapper.selectPage(deptId, bounds.offset(), bounds.size());
+        List<Long> deptIds = resolveDeptIds(deptId, includeChildren);
+        long total = sysUserMapper.countAll(deptIds);
+        List<UserVO> list = sysUserMapper.selectPage(deptIds, bounds.offset(), bounds.size());
         fillRoles(list);
         return PageResult.of(list, total, bounds.page(), bounds.size());
     }
@@ -84,9 +98,38 @@ public class UserService {
         return user.getId();
     }
 
+    /**
+     * 编辑用户（T1.20）：改姓名/邮箱/部门/角色。
+     * 用户名与密码不在本接口修改（理由见 {@link UserUpdateDTO} 的类注释）。
+     */
+    @Transactional
+    public void update(Long id, UserUpdateDTO dto) {
+        if (sysUserMapper.selectById(id) == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND.getCode(), "用户不存在");
+        }
+        ensureDeptExists(dto.getDeptId());
+        List<Long> roleIds = ensureRolesExist(dto.getRoleIds());
+        ensureSelfKeepsAdmin(id, roleIds);
+
+        SysUser user = new SysUser();
+        user.setId(id);
+        user.setRealName(dto.getRealName());
+        user.setEmail(dto.getEmail());
+        user.setDeptId(dto.getDeptId());
+        sysUserMapper.updateProfile(user);
+
+        // 角色是"全量替换"语义：先清空再批量重建（同一事务，失败一起回滚）
+        sysRoleMapper.deleteUserRoles(id);
+        sysRoleMapper.batchInsertUserRoles(id, roleIds);
+    }
+
     public void updateStatus(Long id, Integer status) {
         if (status == null || (status != 0 && status != 1)) {
             throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(), "status 只能为 0（停用）或 1（启用）");
+        }
+        // 防止唯一管理员把自己停用后锁死（与"移除自己的 ADMIN 角色"同一类保护）
+        if (status == 0 && id.equals(UserContext.getUserId())) {
+            throw new BusinessException(ErrorCode.SELF_OPERATION_FORBIDDEN);
         }
         if (sysUserMapper.updateStatus(id, status) == 0) {
             throw new BusinessException(ErrorCode.NOT_FOUND.getCode(), "用户不存在");
@@ -103,6 +146,51 @@ public class UserService {
                 .collect(Collectors.groupingBy(UserRoleItem::getUserId,
                         Collectors.mapping(UserRoleItem::getCode, Collectors.toList())));
         list.forEach(vo -> vo.setRoles(rolesByUser.getOrDefault(vo.getId(), List.of())));
+    }
+
+    /**
+     * 把 deptId + includeChildren 解析成 SQL 的 IN 列表。
+     * null = 不按部门过滤（全部用户，含未分配部门的用户）。
+     * BFS 展开 + visited：脏数据成环时不死循环（树正常时 visited 只起防护作用）。
+     */
+    private List<Long> resolveDeptIds(Long deptId, boolean includeChildren) {
+        if (deptId == null) {
+            return null;
+        }
+        if (!includeChildren) {
+            return List.of(deptId);
+        }
+        Map<Long, List<Long>> childrenByParent = sysDeptMapper.selectAll().stream()
+                .collect(Collectors.groupingBy(SysDept::getParentId,
+                        Collectors.mapping(SysDept::getId, Collectors.toList())));
+        List<Long> result = new ArrayList<>();
+        Set<Long> visited = new HashSet<>();
+        Deque<Long> queue = new ArrayDeque<>();
+        queue.add(deptId);
+        while (!queue.isEmpty()) {
+            Long current = queue.poll();
+            if (!visited.add(current)) {
+                continue;
+            }
+            result.add(current);
+            queue.addAll(childrenByParent.getOrDefault(current, List.of()));
+        }
+        return result;
+    }
+
+    /**
+     * 不能移除自己的 ADMIN 角色：唯一管理员把自己降权后，管理端（含本页面）再也进不去，
+     * 而且没有任何界面入口能恢复——这类自锁只能在数据库里手工救。
+     */
+    private void ensureSelfKeepsAdmin(Long id, List<Long> roleIds) {
+        if (!id.equals(UserContext.getUserId())) {
+            return;
+        }
+        boolean keepsAdmin = sysRoleMapper.selectByIds(roleIds).stream()
+                .anyMatch(role -> "ADMIN".equals(role.getCode()));
+        if (!keepsAdmin) {
+            throw new BusinessException(ErrorCode.SELF_OPERATION_FORBIDDEN);
+        }
     }
 
     /**

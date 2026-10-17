@@ -5,7 +5,6 @@
  * 页面地图见 02 文档 4.1；T1.F3 阶段各业务页用 Placeholder 占位，后续任务逐个替换。
  */
 import { createBrowserRouter, Navigate } from 'react-router-dom'
-import Placeholder from '@/components/Placeholder'
 import { RequireAuth, RequireRole } from '@/components/RouteGuards'
 import NotificationList from '@/pages/NotificationList'
 import Dashboard from '@/pages/admin/Dashboard'
@@ -15,6 +14,7 @@ import Calendar from '@/pages/Calendar'
 import Login from '@/pages/Login'
 import MeetingDetail from '@/pages/MeetingDetail'
 import MeetingList from '@/pages/MeetingList'
+import OrgUsers from '@/pages/admin/OrgUsers'
 import RoomManage from '@/pages/admin/RoomManage'
 
 export const router = createBrowserRouter([
@@ -51,7 +51,7 @@ export const router = createBrowserRouter([
             path: 'admin/users',
             element: (
               <RequireRole roles={['ADMIN']}>
-                <Placeholder title="用户管理" />
+                <OrgUsers />
               </RequireRole>
             ),
           },

@@ -64,7 +64,7 @@ export default function MainLayout() {
             label: '管理端',
             children: [
               { key: '/admin/rooms', icon: <Building2 size={16} />, label: '会议室管理' },
-              { key: '/admin/users', icon: <Users size={16} />, label: '用户管理' },
+              { key: '/admin/users', icon: <Users size={16} />, label: '组织与用户' },
               { key: '/admin/dashboard', icon: <LayoutDashboard size={16} />, label: '统计看板' },
             ],
           },

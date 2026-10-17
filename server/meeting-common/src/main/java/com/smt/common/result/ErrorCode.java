@@ -27,6 +27,8 @@ public enum ErrorCode {
     REFRESH_TOKEN_INVALID(20003, "登录状态已失效，请重新登录"),
     USER_DISABLED(20004, "账号已被禁用"),
     USERNAME_EXISTS(20005, "用户名已存在"),
+    /** 防止唯一管理员自锁：停用自己 / 移除自己的 ADMIN 角色 */
+    SELF_OPERATION_FORBIDDEN(20006, "不能对自己的账号执行该操作"),
 
     // ---- 3xxxx 会议室 ----
     ROOM_NOT_FOUND(30001, "会议室不存在"),

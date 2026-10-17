@@ -24,11 +24,14 @@ public interface SysUserMapper {
     /** 用户名/姓名模糊搜索（选参会人场景，最多 20 条；LEFT JOIN 部门直出 deptName） */
     List<UserSearchVO> searchBrief(@Param("keyword") String keyword);
 
-    /** 统计总数（分页配套 COUNT；可按部门筛选） */
-    long countAll(@Param("deptId") Long deptId);
+    /**
+     * 统计总数（分页配套 COUNT）。
+     * deptIds 为 null = 全部；否则限定在这些部门内（T1.20 的 includeChildren 已在 Service 展开成 id 列表）。
+     */
+    long countAll(@Param("deptIds") List<Long> deptIds);
 
     /** 分页查询（手写 LIMIT；LEFT JOIN 部门直出 deptName；roles 由 Service 批量装配） */
-    List<UserVO> selectPage(@Param("deptId") Long deptId,
+    List<UserVO> selectPage(@Param("deptIds") List<Long> deptIds,
                             @Param("offset") int offset,
                             @Param("size") int size);
 
@@ -37,4 +40,7 @@ public interface SysUserMapper {
 
     /** 更新状态（0 停用 / 1 启用） */
     int updateStatus(@Param("id") Long id, @Param("status") Integer status);
+
+    /** 编辑用户资料（T1.20：姓名/邮箱/部门；用户名与密码不在此接口） */
+    int updateProfile(SysUser user);
 }

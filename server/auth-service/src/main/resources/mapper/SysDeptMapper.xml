@@ -23,6 +23,24 @@
         ORDER BY parent_id, sort_order, id
     </select>
 
+    <!-- 部门树节点（T1.20）：直属成员数由相关子查询直出。
+         sys_user.dept_id 有 idx_dept，子查询走索引；部门量小，树一次查完 -->
+    <resultMap id="DeptVOMap" type="com.smt.auth.vo.DeptVO">
+        <id column="id" property="id"/>
+        <result column="parent_id" property="parentId"/>
+        <result column="name" property="name"/>
+        <result column="sort_order" property="sortOrder"/>
+        <result column="status" property="status"/>
+        <result column="user_count" property="userCount"/>
+    </resultMap>
+
+    <select id="selectTreeNodes" resultMap="DeptVOMap">
+        SELECT d.id, d.parent_id, d.name, d.sort_order, d.status,
+               (SELECT COUNT(*) FROM sys_user u WHERE u.dept_id = d.id) AS user_count
+        FROM sys_dept d
+        ORDER BY d.parent_id, d.sort_order, d.id
+    </select>
+
     <select id="selectById" resultMap="BaseResultMap">
         SELECT <include refid="BaseColumns"/>
         FROM sys_dept

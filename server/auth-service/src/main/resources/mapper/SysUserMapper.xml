@@ -69,12 +69,22 @@
         LIMIT 20
     </select>
 
-    <!-- 用户总数（可按部门筛选；命中 idx_dept） -->
+    <!-- 部门条件：null = 全部；否则 IN (...)（includeChildren 的子树已在 Service 展开成 id 列表） -->
+    <sql id="DeptCondition">
+        <if test="deptIds != null">
+            AND dept_id IN
+            <foreach collection="deptIds" item="deptId" open="(" separator="," close=")">
+                #{deptId}
+            </foreach>
+        </if>
+    </sql>
+
+    <!-- 用户总数（可按部门/子树筛选；命中 idx_dept） -->
     <select id="countAll" resultType="long">
         SELECT COUNT(*)
         FROM sys_user
         <where>
-            <if test="deptId != null">AND dept_id = #{deptId}</if>
+            <include refid="DeptCondition"/>
         </where>
     </select>
 
@@ -85,7 +95,12 @@
         FROM sys_user u
         LEFT JOIN sys_dept d ON d.id = u.dept_id
         <where>
-            <if test="deptId != null">AND u.dept_id = #{deptId}</if>
+            <if test="deptIds != null">
+                AND u.dept_id IN
+                <foreach collection="deptIds" item="deptId" open="(" separator="," close=")">
+                    #{deptId}
+                </foreach>
+            </if>
         </where>
         ORDER BY u.id
         LIMIT #{offset}, #{size}
@@ -101,6 +116,15 @@
     <update id="updateStatus">
         UPDATE sys_user
         SET status = #{status}
+        WHERE id = #{id}
+    </update>
+
+    <!-- 编辑资料（T1.20）：只改这三列——username/password 不出现在 SQL 里，杜绝"顺手改掉" -->
+    <update id="updateProfile">
+        UPDATE sys_user
+        SET real_name = #{realName},
+            email = #{email},
+            dept_id = #{deptId}
         WHERE id = #{id}
     </update>
 

@@ -1,6 +1,7 @@
 package com.smt.auth.controller;
 
 import com.smt.auth.dto.UserCreateDTO;
+import com.smt.auth.dto.UserUpdateDTO;
 import com.smt.auth.service.UserService;
 import com.smt.auth.vo.UserSearchVO;
 import com.smt.auth.vo.UserVO;
@@ -41,14 +42,23 @@ public class UserController {
     @PreAuthorize("hasRole('ADMIN')")
     public Result<PageResult<UserVO>> page(@RequestParam(defaultValue = "1") int page,
                                            @RequestParam(defaultValue = "10") int size,
-                                           @RequestParam(required = false) Long deptId) {
-        return Result.success(userService.page(page, size, deptId));
+                                           @RequestParam(required = false) Long deptId,
+                                           @RequestParam(defaultValue = "false") boolean includeChildren) {
+        return Result.success(userService.page(page, size, deptId, includeChildren));
     }
 
     @PostMapping
     @PreAuthorize("hasRole('ADMIN')")
     public Result<Long> create(@Valid @RequestBody UserCreateDTO dto) {
         return Result.success(userService.create(dto));
+    }
+
+    /** 编辑用户（T1.20）：姓名/邮箱/部门/角色；用户名与密码不在本接口 */
+    @PutMapping("/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public Result<Void> update(@PathVariable Long id, @Valid @RequestBody UserUpdateDTO dto) {
+        userService.update(id, dto);
+        return Result.success();
     }
 
     @PutMapping("/{id}/status")

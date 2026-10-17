@@ -28,9 +28,10 @@ public class DeptService {
 
     /** 部门树：parent_id=0 为根；父节点缺失的脏数据按根展示（不静默丢数据） */
     public List<DeptVO> tree() {
-        List<SysDept> all = sysDeptMapper.selectAll();
+        // 树节点直接带直属成员数（T1.20）：SQL 子查询一次查完，Service 只做父子组装
+        List<DeptVO> all = sysDeptMapper.selectTreeNodes();
         Map<Long, DeptVO> nodes = new LinkedHashMap<>();
-        all.forEach(dept -> nodes.put(dept.getId(), toVO(dept)));
+        all.forEach(dept -> nodes.put(dept.getId(), dept));
 
         List<DeptVO> roots = new ArrayList<>();
         for (DeptVO node : nodes.values()) {
@@ -91,13 +92,4 @@ public class DeptService {
         sysDeptMapper.deleteById(id);
     }
 
-    private DeptVO toVO(SysDept dept) {
-        DeptVO vo = new DeptVO();
-        vo.setId(dept.getId());
-        vo.setParentId(dept.getParentId());
-        vo.setName(dept.getName());
-        vo.setSortOrder(dept.getSortOrder());
-        vo.setStatus(dept.getStatus());
-        return vo;
-    }
 }
