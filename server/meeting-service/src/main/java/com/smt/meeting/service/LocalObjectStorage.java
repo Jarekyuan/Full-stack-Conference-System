@@ -30,7 +30,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -58,10 +58,11 @@ public class LocalObjectStorage implements ObjectStorage {
     private final String baseUrl;
     private final byte[] secret = UUID.randomUUID().toString().getBytes(StandardCharsets.UTF_8);
     /**
-     * 按 uploadId 串行化 complete：避免两个 complete 并发时交错清理分片。
+     * 按 uploadId 的读写锁：write/list/presign 走读锁，complete/abort/delete 走写锁。
      * 分配后不回收（uploadId 唯一，本地实现生命周期有限）。
      */
-    private final ConcurrentHashMap<String, ReentrantLock> uploadLocks = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ReentrantReadWriteLock> uploadLocks =
+            new ConcurrentHashMap<>();
 
     public LocalObjectStorage(StorageProperties properties) {
         this.root = Paths.get(properties.getLocal().getDir()).toAbsolutePath().normalize();
@@ -71,6 +72,11 @@ public class LocalObjectStorage implements ObjectStorage {
         } catch (IOException e) {
             throw new UncheckedIOException("无法创建本地对象目录", e);
         }
+    }
+
+    private ReentrantReadWriteLock lockFor(String uploadId) {
+        // fair=true：写者排队后不会被源源不断的读请求饿死
+        return uploadLocks.computeIfAbsent(uploadId, key -> new ReentrantReadWriteLock(true));
     }
 
     @Override
@@ -94,9 +100,16 @@ public class LocalObjectStorage implements ObjectStorage {
     @Override
     public List<UploadedPart> listParts(String objectKey, String uploadId) {
         Path dir = dir(uploadId);
-        requireActiveSession(dir);
-        requireObjectKey(dir, objectKey);
-        return listPartsInternal(dir);
+        ReentrantReadWriteLock.ReadLock lock = lockFor(uploadId).readLock();
+        lock.lock();
+        try {
+            // 持读锁后复查：complete/abort 持写锁，分片不会在列举期间消失
+            requireActiveSession(dir);
+            requireObjectKey(dir, objectKey);
+            return listPartsInternal(dir);
+        } finally {
+            lock.unlock();
+        }
     }
 
     @Override
@@ -105,15 +118,21 @@ public class LocalObjectStorage implements ObjectStorage {
             throw new BusinessException(ErrorCode.PARAM_ERROR);
         }
         Path dir = dir(uploadId);
-        requireActiveSession(dir);
-        requireObjectKey(dir, objectKey);
-        return signedUrl("PUT", uploadId, partNumber, ttl);
+        ReentrantReadWriteLock.ReadLock lock = lockFor(uploadId).readLock();
+        lock.lock();
+        try {
+            requireActiveSession(dir);
+            requireObjectKey(dir, objectKey);
+            return signedUrl("PUT", uploadId, partNumber, ttl);
+        } finally {
+            lock.unlock();
+        }
     }
 
     @Override
     public StoredObject completeMultipart(String objectKey, String uploadId, List<PartETag> parts) {
         Path dir = dir(uploadId);
-        ReentrantLock lock = uploadLocks.computeIfAbsent(uploadId, key -> new ReentrantLock());
+        ReentrantReadWriteLock.WriteLock lock = lockFor(uploadId).writeLock();
         lock.lock();
         try {
             return completeMultipartLocked(dir, objectKey, uploadId, parts);
@@ -166,7 +185,7 @@ public class LocalObjectStorage implements ObjectStorage {
             for (int i = 1; i <= uploaded.size(); i++) {
                 Files.deleteIfExists(dir.resolve("part-" + i));
             }
-            return head(objectKey);
+            return storedObject(objectKey, dir);
         } catch (IOException e) {
             deleteQuietly(temp);
             throw new UncheckedIOException("合并本地分片失败", e);
@@ -176,11 +195,17 @@ public class LocalObjectStorage implements ObjectStorage {
     @Override
     public void abortMultipart(String objectKey, String uploadId) {
         Path dir = dir(uploadId);
-        // 会话不存在或已上传完成：幂等空操作，不能误删已完成对象
-        if (!Files.isDirectory(dir) || Files.exists(dir.resolve(OBJECT_FILE))) {
-            return;
+        ReentrantReadWriteLock.WriteLock lock = lockFor(uploadId).writeLock();
+        lock.lock();
+        try {
+            // 会话不存在或已上传完成：幂等空操作，不能误删已完成对象
+            if (!Files.isDirectory(dir) || Files.exists(dir.resolve(OBJECT_FILE))) {
+                return;
+            }
+            deleteDirectory(dir);
+        } finally {
+            lock.unlock();
         }
-        deleteDirectory(dir);
     }
 
     @Override
@@ -189,11 +214,16 @@ public class LocalObjectStorage implements ObjectStorage {
         if (dir == null) {
             throw new BusinessException(ErrorCode.UPLOAD_SESSION_NOT_FOUND);
         }
+        String uploadId = dir.getFileName().toString();
+        ReentrantReadWriteLock.ReadLock lock = lockFor(uploadId).readLock();
+        lock.lock();
         try {
-            return new StoredObject(objectKey,
-                    Files.size(dir.resolve(OBJECT_FILE)), contentType(dir));
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
+            if (!objectReady(dir, objectKey)) {
+                throw new BusinessException(ErrorCode.UPLOAD_SESSION_NOT_FOUND);
+            }
+            return storedObject(objectKey, dir);
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -203,14 +233,34 @@ public class LocalObjectStorage implements ObjectStorage {
         if (dir == null) {
             throw new BusinessException(ErrorCode.UPLOAD_SESSION_NOT_FOUND);
         }
-        return signedUrl("GET", dir.getFileName().toString(), null, ttl);
+        String uploadId = dir.getFileName().toString();
+        ReentrantReadWriteLock.ReadLock lock = lockFor(uploadId).readLock();
+        lock.lock();
+        try {
+            if (!objectReady(dir, objectKey)) {
+                throw new BusinessException(ErrorCode.UPLOAD_SESSION_NOT_FOUND);
+            }
+            return signedUrl("GET", uploadId, null, ttl);
+        } finally {
+            lock.unlock();
+        }
     }
 
     @Override
     public void delete(String objectKey) {
         Path dir = findCompletedDir(objectKey);
-        if (dir != null) {
-            deleteDirectory(dir);
+        if (dir == null) {
+            return;
+        }
+        String uploadId = dir.getFileName().toString();
+        ReentrantReadWriteLock.WriteLock lock = lockFor(uploadId).writeLock();
+        lock.lock();
+        try {
+            if (objectReady(dir, objectKey)) {
+                deleteDirectory(dir);
+            }
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -231,7 +281,18 @@ public class LocalObjectStorage implements ObjectStorage {
             throw new BusinessException(ErrorCode.PARAM_ERROR);
         }
         Path dir = dir(uploadId);
-        requireActiveSession(dir);
+        ReentrantReadWriteLock.ReadLock lock = lockFor(uploadId).readLock();
+        lock.lock();
+        try {
+            // 排队等 complete 结束后必须看到已完成状态，不能再写分片
+            requireActiveSession(dir);
+            return writePartLocked(dir, partNumber, input, maxBytes);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private String writePartLocked(Path dir, int partNumber, InputStream input, long maxBytes) {
         Path temp = dir.resolve("part-" + partNumber + "." + UUID.randomUUID() + ".tmp");
         MessageDigest digest = md5Digest();
         long total = 0;
@@ -357,8 +418,10 @@ public class LocalObjectStorage implements ObjectStorage {
 
     private Path findCompletedDir(String objectKey) {
         for (Path dir : sessionDirs()) {
-            if (Files.isRegularFile(dir.resolve(OBJECT_FILE))
-                    && objectKeyMatches(dir, objectKey)) {
+            if (!UUID_PATTERN.matcher(dir.getFileName().toString()).matches()) {
+                continue;
+            }
+            if (objectReady(dir, objectKey)) {
                 return dir;
             }
         }
@@ -377,10 +440,25 @@ public class LocalObjectStorage implements ObjectStorage {
         }
     }
 
+    private boolean objectReady(Path dir, String objectKey) {
+        return Files.isRegularFile(dir.resolve(OBJECT_FILE))
+                && objectKeyMatches(dir, objectKey);
+    }
+
     private boolean objectKeyMatches(Path dir, String objectKey) {
         try {
             Path keyFile = dir.resolve(OBJECT_KEY_FILE);
             return Files.exists(keyFile) && Files.readString(keyFile).equals(objectKey);
+        } catch (IOException e) {
+            // 扫描/校验期间目录可能被并发删除：视为不匹配，由调用方给出 70006
+            return false;
+        }
+    }
+
+    private StoredObject storedObject(String objectKey, Path dir) {
+        try {
+            return new StoredObject(objectKey,
+                    Files.size(dir.resolve(OBJECT_FILE)), contentType(dir));
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }

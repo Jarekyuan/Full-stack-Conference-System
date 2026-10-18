@@ -341,6 +341,142 @@ class LocalObjectStorageTest {
     }
 
     @Test
+    void overwriteDuringCompleteNeverProducesMixedObject() throws Exception {
+        LocalObjectStorage storage = storage();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        byte[] first = repeated('A', 256 * 1024);
+        byte[] second = repeated('B', 256 * 1024);
+        byte[] overwrite = repeated('C', 256 * 1024);
+        try {
+            for (int round = 0; round < 10; round++) {
+                String key = "minutes/1/overwrite-race-" + round + ".m4a";
+                ObjectStorage.MultipartInit init = storage.initMultipart(key, CONTENT_TYPE);
+                storage.writePart(init.uploadId(), 1, first);
+                storage.writePart(init.uploadId(), 2, second);
+                List<ObjectStorage.PartETag> parts =
+                        partEtags(storage.listParts(key, init.uploadId()));
+
+                CountDownLatch start = new CountDownLatch(1);
+                Future<ObjectStorage.StoredObject> complete = pool.submit(() -> {
+                    start.await();
+                    return storage.completeMultipart(key, init.uploadId(), parts);
+                });
+                Future<String> write = pool.submit(() -> {
+                    start.await();
+                    return storage.writePart(init.uploadId(), 1, overwrite);
+                });
+                start.countDown();
+
+                Outcome<ObjectStorage.StoredObject> completeOutcome = outcome(complete);
+                Outcome<String> writeOutcome = outcome(write);
+
+                if (completeOutcome.error() == null) {
+                    assertThat(completeOutcome.value().size())
+                            .isEqualTo(first.length + second.length);
+                    assertThat(storage.readObject(init.uploadId()))
+                            .isEqualTo(concat(first, second));
+                    assertBusinessError(writeOutcome.error(), 70006);
+                } else {
+                    assertBusinessError(completeOutcome.error(), 70007);
+                    assertThat(writeOutcome.error()).isNull();
+                    assertCode(70006, () -> storage.head(key));
+                    assertThat(Files.readAllBytes(
+                            tempDir.resolve(init.uploadId()).resolve("part-1")))
+                            .isEqualTo(overwrite);
+                }
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void listPartsDuringCompleteNeverThrowsIoError() throws Exception {
+        LocalObjectStorage storage = storage();
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        int partCount = 16;
+        int partSize = 128 * 1024;
+        try {
+            for (int round = 0; round < 5; round++) {
+                String key = "minutes/1/list-race-" + round + ".m4a";
+                ObjectStorage.MultipartInit init = storage.initMultipart(key, CONTENT_TYPE);
+                for (int i = 1; i <= partCount; i++) {
+                    storage.writePart(init.uploadId(), i,
+                            repeated((char) ('a' + i), partSize));
+                }
+                List<ObjectStorage.PartETag> parts =
+                        partEtags(storage.listParts(key, init.uploadId()));
+                Future<ObjectStorage.StoredObject> complete = pool.submit(
+                        () -> storage.completeMultipart(key, init.uploadId(), parts));
+
+                List<Throwable> unexpected = new ArrayList<>();
+                while (!complete.isDone()) {
+                    try {
+                        storage.listParts(key, init.uploadId());
+                    } catch (BusinessException e) {
+                        assertThat(e.getCode()).isEqualTo(70006);
+                    } catch (Throwable t) {
+                        unexpected.add(t);
+                    }
+                    Thread.yield();
+                }
+                assertThat(unexpected).isEmpty();
+                assertThat(complete.get(30, TimeUnit.SECONDS).size())
+                        .isEqualTo((long) partCount * partSize);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void abortDuringCompleteIsClean() throws Exception {
+        LocalObjectStorage storage = storage();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        int partCount = 16;
+        int partSize = 128 * 1024;
+        long expectedSize = (long) partCount * partSize;
+        try {
+            for (int round = 0; round < 5; round++) {
+                String key = "minutes/1/abort-race-" + round + ".m4a";
+                ObjectStorage.MultipartInit init = storage.initMultipart(key, CONTENT_TYPE);
+                for (int i = 1; i <= partCount; i++) {
+                    storage.writePart(init.uploadId(), i,
+                            repeated((char) ('a' + i), partSize));
+                }
+                List<ObjectStorage.PartETag> parts =
+                        partEtags(storage.listParts(key, init.uploadId()));
+
+                CountDownLatch start = new CountDownLatch(1);
+                Future<ObjectStorage.StoredObject> complete = pool.submit(() -> {
+                    start.await();
+                    return storage.completeMultipart(key, init.uploadId(), parts);
+                });
+                Future<Void> abort = pool.submit(() -> {
+                    start.await();
+                    storage.abortMultipart(key, init.uploadId());
+                    return null;
+                });
+                start.countDown();
+
+                Outcome<ObjectStorage.StoredObject> completeOutcome = outcome(complete);
+                Outcome<Void> abortOutcome = outcome(abort);
+
+                assertThat(abortOutcome.error()).isNull();
+                if (completeOutcome.error() == null) {
+                    assertThat(completeOutcome.value().size()).isEqualTo(expectedSize);
+                    assertThat(storage.head(key).size()).isEqualTo(expectedSize);
+                } else {
+                    assertBusinessError(completeOutcome.error(), 70006);
+                    assertCode(70006, () -> storage.head(key));
+                }
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
     void completeRejectsWrongEtag() {
         LocalObjectStorage storage = storage();
         ObjectStorage.MultipartInit init = initWithTwoParts(storage);
@@ -495,6 +631,35 @@ class LocalObjectStorageTest {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("MD5 不可用", e);
         }
+    }
+
+    private static byte[] repeated(char value, int length) {
+        byte[] bytes = new byte[length];
+        Arrays.fill(bytes, (byte) value);
+        return bytes;
+    }
+
+    private static byte[] concat(byte[] first, byte[] second) {
+        byte[] result = new byte[first.length + second.length];
+        System.arraycopy(first, 0, result, 0, first.length);
+        System.arraycopy(second, 0, result, first.length, second.length);
+        return result;
+    }
+
+    private static void assertBusinessError(Throwable error, int code) {
+        assertThat(error).isInstanceOfSatisfying(BusinessException.class,
+                exception -> assertThat(exception.getCode()).isEqualTo(code));
+    }
+
+    private static <T> Outcome<T> outcome(Future<T> future) throws Exception {
+        try {
+            return new Outcome<>(future.get(30, TimeUnit.SECONDS), null);
+        } catch (ExecutionException e) {
+            return new Outcome<>(null, e.getCause());
+        }
+    }
+
+    private record Outcome<T>(T value, Throwable error) {
     }
 
     private static void assertCode(int code, ThrowingCallable callable) {

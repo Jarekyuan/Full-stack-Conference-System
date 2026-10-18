@@ -2919,10 +2919,11 @@ git commit -m "feat(minutes): ObjectStorage 抽象 + COS/本地实现"
   `ObjectStorage`），否则 `LocalFileController` 按具体类型注入会失败、local 模式启动即崩。
 - **错误契约**：接口 Javadoc 固化 70006/70007 语义；本地实现补齐会话/完成态校验、对象键校验、
   ETag 归一化（去引号、忽略大小写）、分片编号必须为 1..n、重复/缺失/空分片一律 70007。
-- **本地并发安全**：分片写唯一临时文件 `part-N.{uuid}.tmp`，边写边算 MD5，落盘后 `ATOMIC_MOVE`
-  替换 `part-N`（last-writer-wins，不会混字节）；complete 用唯一 `object.bin.{uuid}.tmp` +
-  按 uploadId 的 `ReentrantLock` 串行化，成功后原子替换并删除 `part-*`，失败清理临时文件；
-  已完成后 `write/list/presignPart` 均返回 70006。
+- **本地并发安全**：按 uploadId 使用 `ReentrantReadWriteLock`——write/list/presign 持读锁，
+  complete/abort/delete 持写锁；持锁后重查会话，排队等 complete 的写请求返回 70006。
+  分片写唯一临时文件 `part-N.{uuid}.tmp`，边写边算 MD5，落盘后 `ATOMIC_MOVE` 替换
+  `part-N`（last-writer-wins，不会混字节）；complete 用唯一 `object.bin.{uuid}.tmp`，
+  成功后原子替换并删除 `part-*`，失败清理临时文件；已完成后 `write/list/presignPart` 均返回 70006。
 - **预签名**：uploadId 用严格 UUID 正则 + `UUID.fromString` + `resolved.startsWith(root)` 校验；
   HMAC 密钥为进程内随机值，重启后旧 URL 失效（仅本地实现）。
 - **上传端点**：去掉 `@RequestBody byte[]`，先查 `Content-Length`（超限直接 413，不缓冲），
@@ -2931,8 +2932,9 @@ git commit -m "feat(minutes): ObjectStorage 抽象 + COS/本地实现"
   异常映射 400/403/404/409/413/500。COS 的 `EntityTooSmall` 也翻译为 70007。
 - **依赖**：`cos_api` 升至 5.6.283、`poi-ooxml` 升至 5.5.1（均可解析）；POI 的 `log4j-api`
   被 Spring Boot BOM 管理为 2.21.1（POI 5.5.1 自身 BOM 为 2.24.3），编译无冲突，运行期待 Task 8 验证。
-- **测试**：`LocalObjectStorageTest` 24 例（含 8 线程并发写同一分片、并发 complete 恰好一成功、
-  流式超限 70005）、`LocalFileControllerTest` 9 例（含 206 Range、Content-Length 撒谎时流式兜底 413），
+- **测试**：`LocalObjectStorageTest` 27 例（含 8 线程并发写同一分片、并发 complete 恰好一成功、
+  流式超限 70005，以及 complete 期间覆盖分片 / 轮询 listParts / 并发 abort 三类交叉竞态）、
+  `LocalFileControllerTest` 9 例（含 206 Range、Content-Length 撒谎时流式兜底 413），
   `RoomMapperTest` 4/4；local provider 上下文烟雾测试 4/4。
 
 ---
