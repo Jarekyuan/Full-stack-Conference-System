@@ -1,6 +1,7 @@
 package com.smt.meeting.service;
 
 import com.smt.meeting.mapper.MeetingMapper;
+import com.smt.meeting.mapper.MeetingParticipantMapper;
 import com.smt.meeting.vo.MeetingDetailVO;
 import com.smt.meeting.vo.MinutesDetailVO;
 import com.smt.meeting.vo.MinutesInsightsVO;
@@ -36,13 +37,15 @@ class MinutesExportServiceTest {
 
     private MinutesService minutesService;
     private MeetingMapper meetingMapper;
+    private MeetingParticipantMapper participantMapper;
     private MinutesExportService service;
 
     @BeforeEach
     void setUp() {
         minutesService = mock(MinutesService.class);
         meetingMapper = mock(MeetingMapper.class);
-        service = new MinutesExportService(minutesService, meetingMapper);
+        participantMapper = mock(MeetingParticipantMapper.class);
+        service = new MinutesExportService(minutesService, meetingMapper, participantMapper);
     }
 
     @Test
@@ -51,13 +54,16 @@ class MinutesExportServiceTest {
         when(minutesService.transcript(MEETING_ID, USER_ID))
                 .thenReturn(new TranscriptVO(List.of(segment())));
         when(meetingMapper.selectDetailById(MEETING_ID)).thenReturn(meeting());
+        when(participantMapper.selectDetailByMeetingId(MEETING_ID))
+                .thenReturn(List.of(participant(7L, "李四")));
 
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         service.export(MEETING_ID, USER_ID, output);
 
         byte[] bytes = output.toByteArray();
         assertThat(readParagraphText(bytes))
-                .contains("周会", "会议摘要", "结论一", "[00:00:01] 张三：你好");
+                .contains("周会", "会议摘要", "结论一", "参会人：李四",
+                        "[00:00:01] 张三：你好");
 
         try (XWPFDocument document = new XWPFDocument(new ByteArrayInputStream(bytes))) {
             assertThat(document.getTables()).hasSize(2);
@@ -102,8 +108,15 @@ class MinutesExportServiceTest {
         meeting.setOrganiserName("李四");
         meeting.setStartTime(LocalDateTime.of(2026, 10, 18, 10, 0));
         meeting.setEndTime(LocalDateTime.of(2026, 10, 18, 11, 0));
-        meeting.setParticipants(List.of());
+        // selectDetailById 不装配参会人，导出服务需通过 MeetingParticipantMapper 补齐。
         return meeting;
+    }
+
+    private MeetingDetailVO.ParticipantVO participant(Long userId, String realName) {
+        MeetingDetailVO.ParticipantVO participant = new MeetingDetailVO.ParticipantVO();
+        participant.setUserId(userId);
+        participant.setRealName(realName);
+        return participant;
     }
 
     private MinutesDetailVO detailWithSummary() {

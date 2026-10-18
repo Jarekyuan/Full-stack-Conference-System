@@ -4,6 +4,7 @@ import com.smt.common.exception.BusinessException;
 import com.smt.common.result.ErrorCode;
 import com.smt.meeting.aop.Log;
 import com.smt.meeting.mapper.MeetingMapper;
+import com.smt.meeting.mapper.MeetingParticipantMapper;
 import com.smt.meeting.vo.MeetingDetailVO;
 import com.smt.meeting.vo.MinutesDetailVO;
 import com.smt.meeting.vo.MinutesSummaryVO;
@@ -38,6 +39,7 @@ public class MinutesExportService {
 
     private final MinutesService minutesService;
     private final MeetingMapper meetingMapper;
+    private final MeetingParticipantMapper participantMapper;
 
     public String fileName(Long meetingId) {
         MeetingDetailVO meeting = meetingMapper.selectDetailById(meetingId);
@@ -53,6 +55,10 @@ public class MinutesExportService {
         }
         TranscriptVO transcript = minutesService.transcript(meetingId, userId);
         MeetingDetailVO meeting = meetingMapper.selectDetailById(meetingId);
+        if (meeting != null) {
+            // selectDetailById 不装配 participants（由 Service 另行查），这里补上后才不会导出成“-”。
+            meeting.setParticipants(participantMapper.selectDetailByMeetingId(meetingId));
+        }
 
         try (XWPFDocument document = new XWPFDocument()) {
             title(document, meeting == null ? "会议纪要" : meeting.getTitle());
