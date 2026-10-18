@@ -1,17 +1,21 @@
 package com.smt.meeting.controller;
 
 import com.smt.common.context.UserContext;
+import com.smt.common.exception.BusinessException;
+import com.smt.common.result.ErrorCode;
 import com.smt.common.result.Result;
 import com.smt.meeting.aop.RateLimit;
 import com.smt.meeting.dto.MinutesImportDTO;
 import com.smt.meeting.dto.SpeakerUpdateDTO;
 import com.smt.meeting.service.MinutesAiService;
+import com.smt.meeting.service.MinutesExportService;
 import com.smt.meeting.service.MinutesService;
 import com.smt.meeting.vo.AiGenerateVO;
 import com.smt.meeting.vo.AudioUrlVO;
 import com.smt.meeting.vo.MinutesDetailVO;
 import com.smt.meeting.vo.MinutesSpeakerVO;
 import com.smt.meeting.vo.TranscriptVO;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -20,7 +24,12 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 
 /**
  * 会议纪要接口（对外路径 /api/meetings/{id}/minutes/**，网关剥离 /api）。
@@ -33,6 +42,7 @@ public class MinutesController {
 
     private final MinutesService minutesService;
     private final MinutesAiService minutesAiService;
+    private final MinutesExportService minutesExportService;
 
     @GetMapping("/{id}/minutes")
     public Result<MinutesDetailVO> detail(@PathVariable Long id) {
@@ -42,6 +52,23 @@ public class MinutesController {
     @GetMapping("/{id}/minutes/transcript")
     public Result<TranscriptVO> transcript(@PathVariable Long id) {
         return Result.success(minutesService.transcript(id, UserContext.getUserId()));
+    }
+
+    @GetMapping("/{id}/minutes/export")
+    public void export(@PathVariable Long id,
+                       @RequestParam(defaultValue = "docx") String format,
+                       HttpServletResponse response) throws IOException {
+        if (!"docx".equalsIgnoreCase(format)) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR);
+        }
+        String fileName = minutesExportService.fileName(id);
+        response.setContentType(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        response.setHeader("Content-Disposition",
+                "attachment; filename*=UTF-8''"
+                        + URLEncoder.encode(fileName, StandardCharsets.UTF_8)
+                        .replace("+", "%20"));
+        minutesExportService.export(id, UserContext.getUserId(), response.getOutputStream());
     }
 
     @GetMapping("/{id}/minutes/audio-url")
