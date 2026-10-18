@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 纪要发言人 SQL（手写 XML） -->
+<mapper namespace="com.smt.meeting.mapper.MinutesSpeakerMapper">
+
+    <resultMap id="BaseResultMap" type="com.smt.meeting.entity.MinutesSpeaker">
+        <id column="id" property="id"/>
+        <result column="minutes_id" property="minutesId"/>
+        <result column="speaker_key" property="speakerKey"/>
+        <result column="display_name" property="displayName"/>
+        <result column="color" property="color"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <!-- 按纪要查询：命中 uk_minutes_speaker 最左前缀 (minutes_id)；ORDER BY id 即导入顺序 -->
+    <select id="selectByMinutesId" resultMap="BaseResultMap">
+        SELECT id, minutes_id, speaker_key, display_name, color, created_at, updated_at
+        FROM meeting_minutes_speaker
+        WHERE minutes_id = #{minutesId}
+        ORDER BY id
+    </select>
+
+    <!-- 重新导入前清空该纪要的发言人 -->
+    <delete id="deleteByMinutesId">
+        DELETE FROM meeting_minutes_speaker
+        WHERE minutes_id = #{minutesId}
+    </delete>
+
+    <!-- 批量新增：<foreach> 拼多值 VALUES，一次往返写完全部发言人 -->
+    <insert id="batchInsert">
+        INSERT INTO meeting_minutes_speaker (minutes_id, speaker_key, display_name, color)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (#{item.minutesId}, #{item.speakerKey}, #{item.displayName}, #{item.color})
+        </foreach>
+    </insert>
+
+    <!-- 命中 uk_minutes_speaker(minutes_id, speaker_key) -->
+    <update id="updateDisplayName">
+        UPDATE meeting_minutes_speaker
+        SET display_name = #{displayName}, color = #{color}
+        WHERE minutes_id = #{minutesId} AND speaker_key = #{speakerKey}
+    </update>
+
+</mapper>

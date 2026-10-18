@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 会议纪要 SQL（手写 XML）：AI 状态迁移均带前态条件（CAS），影响 0 行 = 状态已被并发变更 -->
+<mapper namespace="com.smt.meeting.mapper.MeetingMinutesMapper">
+
+    <resultMap id="BaseResultMap" type="com.smt.meeting.entity.MeetingMinutes">
+        <id column="id" property="id"/>
+        <result column="meeting_id" property="meetingId"/>
+        <result column="room_id" property="roomId"/>
+        <result column="audio_file_id" property="audioFileId"/>
+        <result column="transcript_source" property="transcriptSource"/>
+        <result column="duration_ms" property="durationMs"/>
+        <result column="ai_status" property="aiStatus"/>
+        <!-- JSON 列按字符串读写，由 Service 负责序列化/反序列化 -->
+        <result column="summary_json" property="summaryJson"/>
+        <result column="ai_model" property="aiModel"/>
+        <result column="ai_error" property="aiError"/>
+        <result column="ai_attempts" property="aiAttempts"/>
+        <result column="ai_started_at" property="aiStartedAt"/>
+        <result column="ai_finished_at" property="aiFinishedAt"/>
+        <result column="created_by" property="createdBy"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="BaseColumns">
+        id, meeting_id, room_id, audio_file_id, transcript_source, duration_ms,
+        ai_status, summary_json, ai_model, ai_error, ai_attempts,
+        ai_started_at, ai_finished_at, created_by, created_at, updated_at
+    </sql>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM meeting_minutes
+        WHERE id = #{id}
+    </select>
+
+    <!-- 命中 uk_meeting -->
+    <select id="selectByMeetingId" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM meeting_minutes
+        WHERE meeting_id = #{meetingId}
+    </select>
+
+    <!-- 事务内锁住纪要行（导入/生成等"读-判-写"流程用），命中 uk_meeting 的单行记录锁 -->
+    <select id="selectByMeetingIdForUpdate" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM meeting_minutes
+        WHERE meeting_id = #{meetingId}
+        FOR UPDATE
+    </select>
+
+    <!-- 新增纪要：summary_json 等 AI 字段走数据库默认值；主键回填 -->
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO meeting_minutes
+            (meeting_id, room_id, audio_file_id, transcript_source, duration_ms,
+             ai_status, created_by)
+        VALUES
+            (#{meetingId}, #{roomId}, #{audioFileId}, #{transcriptSource}, #{durationMs},
+             #{aiStatus}, #{createdBy})
+    </insert>
+
+    <!-- 导入录音：只回填音频文件与时长，不触碰 AI 状态 -->
+    <update id="updateImport">
+        UPDATE meeting_minutes
+        SET audio_file_id = #{audioFileId},
+            duration_ms = #{durationMs},
+            transcript_source = #{transcriptSource}
+        WHERE id = #{id}
+    </update>
+
+    <!-- 重置：回到 0 未生成，并清空上一次生成结果与重试计数 -->
+    <update id="resetAi">
+        UPDATE meeting_minutes
+        SET ai_status = 0, summary_json = NULL, ai_error = NULL, ai_attempts = 0,
+            ai_started_at = NULL, ai_finished_at = NULL
+        WHERE id = #{id}
+    </update>
+
+    <!-- 请求生成：0 未生成 / 30 成功 / 40 失败 → 10 待生成 -->
+    <update id="requestGenerate">
+        UPDATE meeting_minutes
+        SET ai_status = 10, ai_error = NULL, ai_attempts = 0,
+            ai_started_at = NULL, ai_finished_at = NULL
+        WHERE id = #{id} AND ai_status IN (0, 30, 40)
+    </update>
+
+    <!-- 开始生成：10 → 20 -->
+    <update id="markRunning">
+        UPDATE meeting_minutes
+        SET ai_status = 20, ai_started_at = #{startedAt}, ai_error = NULL
+        WHERE id = #{id} AND ai_status = 10
+    </update>
+
+    <!-- 生成成功：20 → 30 -->
+    <update id="markSuccess">
+        UPDATE meeting_minutes
+        SET ai_status = 30, summary_json = #{summaryJson}, ai_model = #{model},
+            ai_finished_at = #{finishedAt}, ai_error = NULL
+        WHERE id = #{id} AND ai_status = 20
+    </update>
+
+    <!-- 失败待重试：20 → 10（记录错误与已尝试次数） -->
+    <update id="markRetry">
+        UPDATE meeting_minutes
+        SET ai_status = 10, ai_error = #{error}, ai_attempts = #{attempts},
+            ai_finished_at = #{finishedAt}
+        WHERE id = #{id} AND ai_status = 20
+    </update>
+
+    <!-- 失败终止：20 → 40 -->
+    <update id="markFailed">
+        UPDATE meeting_minutes
+        SET ai_status = 40, ai_error = #{error}, ai_attempts = #{attempts},
+            ai_finished_at = #{finishedAt}
+        WHERE id = #{id} AND ai_status = 20
+    </update>
+
+    <!-- 待生成队列：命中 idx_ai_status(ai_status, updated_at) -->
+    <select id="selectAiPending" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM meeting_minutes
+        WHERE ai_status = 10
+        ORDER BY updated_at
+        LIMIT #{limit}
+    </select>
+
+    <!-- 生成超时：卡在 20 且开始时间早于阈值（按开始时间升序，先卡住的先处理） -->
+    <select id="selectAiStuck" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM meeting_minutes
+        WHERE ai_status = 20 AND ai_started_at &lt; #{before}
+        ORDER BY ai_started_at
+        LIMIT #{limit}
+    </select>
+
+</mapper>

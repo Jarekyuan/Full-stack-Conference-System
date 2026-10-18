@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 转写分段 SQL（手写 XML） -->
+<mapper namespace="com.smt.meeting.mapper.TranscriptSegmentMapper">
+
+    <resultMap id="BaseResultMap" type="com.smt.meeting.entity.TranscriptSegment">
+        <id column="id" property="id"/>
+        <result column="minutes_id" property="minutesId"/>
+        <result column="seq" property="seq"/>
+        <result column="speaker_key" property="speakerKey"/>
+        <result column="start_ms" property="startMs"/>
+        <result column="end_ms" property="endMs"/>
+        <result column="text" property="text"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <!-- 按纪要查询：命中 uk_minutes_seq 最左前缀 (minutes_id)，ORDER BY seq 与索引顺序一致 -->
+    <select id="selectByMinutesId" resultMap="BaseResultMap">
+        SELECT id, minutes_id, seq, speaker_key, start_ms, end_ms, text, created_at
+        FROM meeting_transcript_segment
+        WHERE minutes_id = #{minutesId}
+        ORDER BY seq
+    </select>
+
+    <!-- 重新导入前清空该纪要的转写分段 -->
+    <delete id="deleteByMinutesId">
+        DELETE FROM meeting_transcript_segment
+        WHERE minutes_id = #{minutesId}
+    </delete>
+
+    <!-- 批量新增：<foreach> 拼多值 VALUES（uk_minutes_seq 保证 seq 不重复） -->
+    <insert id="batchInsert">
+        INSERT INTO meeting_transcript_segment
+            (minutes_id, seq, speaker_key, start_ms, end_ms, text)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (#{item.minutesId}, #{item.seq}, #{item.speakerKey},
+             #{item.startMs}, #{item.endMs}, #{item.text})
+        </foreach>
+    </insert>
+
+    <!-- 分段总数：命中 uk_minutes_seq 最左前缀 (minutes_id) -->
+    <select id="countByMinutesId" resultType="long">
+        SELECT COUNT(*)
+        FROM meeting_transcript_segment
+        WHERE minutes_id = #{minutesId}
+    </select>
+
+</mapper>

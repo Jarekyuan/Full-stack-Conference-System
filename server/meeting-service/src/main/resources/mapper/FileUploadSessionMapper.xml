@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 分片上传会话 SQL（手写 XML） -->
+<mapper namespace="com.smt.meeting.mapper.FileUploadSessionMapper">
+
+    <resultMap id="BaseResultMap" type="com.smt.meeting.entity.FileUploadSession">
+        <id column="id" property="id"/>
+        <result column="upload_id" property="uploadId"/>
+        <result column="biz_type" property="bizType"/>
+        <result column="biz_id" property="bizId"/>
+        <result column="object_key" property="objectKey"/>
+        <result column="original_name" property="originalName"/>
+        <result column="size_bytes" property="sizeBytes"/>
+        <result column="content_type" property="contentType"/>
+        <result column="chunk_size" property="chunkSize"/>
+        <result column="total_parts" property="totalParts"/>
+        <result column="status" property="status"/>
+        <result column="file_id" property="fileId"/>
+        <result column="created_by" property="createdBy"/>
+        <result column="expires_at" property="expiresAt"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="BaseColumns">
+        id, upload_id, biz_type, biz_id, object_key, original_name, size_bytes,
+        content_type, chunk_size, total_parts, status, file_id, created_by,
+        expires_at, created_at, updated_at
+    </sql>
+
+    <!-- 新增上传会话：file_id/created_at/updated_at 走数据库默认值；主键回填 -->
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO file_upload_session
+            (upload_id, biz_type, biz_id, object_key, original_name, size_bytes,
+             content_type, chunk_size, total_parts, status, created_by, expires_at)
+        VALUES
+            (#{uploadId}, #{bizType}, #{bizId}, #{objectKey}, #{originalName}, #{sizeBytes},
+             #{contentType}, #{chunkSize}, #{totalParts}, #{status}, #{createdBy}, #{expiresAt})
+    </insert>
+
+    <!-- 命中 uk_upload_id -->
+    <select id="selectByUploadId" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM file_upload_session
+        WHERE upload_id = #{uploadId}
+    </select>
+
+    <!-- 完成上传：CAS 仅允许 进行中(0) → 已完成(10)，并回填 file_object.id -->
+    <update id="markCompleted">
+        UPDATE file_upload_session
+        SET status = 10, file_id = #{fileId}
+        WHERE upload_id = #{uploadId} AND status = 0
+    </update>
+
+    <!-- 中止(20)/过期(30)迁移：CAS 仅允许 进行中(0) 的会话 -->
+    <update id="markStatus">
+        UPDATE file_upload_session
+        SET status = #{status}
+        WHERE upload_id = #{uploadId} AND status = 0
+    </update>
+
+    <!-- 过期会话扫描：命中 idx_status_expires(status, expires_at) -->
+    <select id="selectExpired" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM file_upload_session
+        WHERE status = 0 AND expires_at &lt; #{now}
+        ORDER BY expires_at
+        LIMIT #{limit}
+    </select>
+
+</mapper>

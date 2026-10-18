@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 文件对象元数据 SQL（手写 XML） -->
+<mapper namespace="com.smt.meeting.mapper.FileObjectMapper">
+
+    <resultMap id="BaseResultMap" type="com.smt.meeting.entity.FileObject">
+        <id column="id" property="id"/>
+        <result column="biz_type" property="bizType"/>
+        <result column="biz_id" property="bizId"/>
+        <result column="object_key" property="objectKey"/>
+        <result column="original_name" property="originalName"/>
+        <result column="size_bytes" property="sizeBytes"/>
+        <result column="content_type" property="contentType"/>
+        <result column="status" property="status"/>
+        <result column="uploaded_by" property="uploadedBy"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="BaseColumns">
+        id, biz_type, biz_id, object_key, original_name, size_bytes, content_type,
+        status, uploaded_by, created_at, updated_at
+    </sql>
+
+    <!-- 新增文件对象：created_at/updated_at 走数据库默认值；主键回填供业务引用 -->
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO file_object
+            (biz_type, biz_id, object_key, original_name, size_bytes, content_type, status, uploaded_by)
+        VALUES
+            (#{bizType}, #{bizId}, #{objectKey}, #{originalName}, #{sizeBytes},
+             #{contentType}, #{status}, #{uploadedBy})
+    </insert>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM file_object
+        WHERE id = #{id}
+    </select>
+
+    <!-- 命中 uk_object_key -->
+    <select id="selectByObjectKey" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM file_object
+        WHERE object_key = #{objectKey}
+    </select>
+
+    <!-- 软删除：10 = 已删除（XML 无法引用 Java 常量） -->
+    <update id="markDeleted">
+        UPDATE file_object
+        SET status = 10
+        WHERE id = #{id}
+    </update>
+
+</mapper>
