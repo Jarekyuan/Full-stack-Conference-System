@@ -173,3 +173,31 @@ export const http = {
 }
 
 export default instance
+
+/**
+ * 文件下载：独立实例，不经过 Result 解包拦截器。
+ * 导出接口返回二进制，若走主实例会把 Blob 当成 Result 解析并误报业务错误。
+ * 401 不在这里自动刷新——下载失败由调用方 toast，保持传输层简单。
+ */
+const downloadClient = axios.create({ baseURL: '/api', timeout: 120_000 })
+
+downloadClient.interceptors.request.use((config) => {
+  const token = getAccessToken()
+  if (token) {
+    config.headers.set('Authorization', `Bearer ${token}`)
+  }
+  return config
+})
+
+/** 触发浏览器下载；url 不含 /api 前缀（由 baseURL 提供） */
+export async function downloadFile(url: string, filename: string): Promise<void> {
+  const response = await downloadClient.get(url, { responseType: 'blob' })
+  const objectUrl = URL.createObjectURL(response.data as Blob)
+  const anchor = document.createElement('a')
+  anchor.href = objectUrl
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(objectUrl)
+}
