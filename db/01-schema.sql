@@ -271,3 +271,106 @@ CREATE TABLE IF NOT EXISTS meeting_status_log (
   PRIMARY KEY (id),
   KEY idx_meeting (meeting_id)
 ) ENGINE = InnoDB COMMENT = '会议状态变更日志表';
+
+-- ----------------------------------------------------------------------------
+-- 16. file_object 文件对象元数据（会议纪要音频；预留会议材料/会议室图片）
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS file_object (
+  id            BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
+  biz_type      VARCHAR(32)  NOT NULL COMMENT '业务类型：MINUTES_AUDIO',
+  biz_id        BIGINT       NOT NULL COMMENT '业务主键：会议 id',
+  object_key    VARCHAR(255) NOT NULL COMMENT '对象存储 key（服务端生成）',
+  original_name VARCHAR(255) NOT NULL COMMENT '原始文件名',
+  size_bytes    BIGINT       NOT NULL COMMENT '文件字节数',
+  content_type  VARCHAR(100) NOT NULL COMMENT 'MIME 类型',
+  status        TINYINT      NOT NULL DEFAULT 0 COMMENT '0 正常 / 10 已删除',
+  uploaded_by   BIGINT       NOT NULL COMMENT '上传人 user_id',
+  created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_object_key (object_key),
+  KEY idx_biz (biz_type, biz_id)
+) ENGINE = InnoDB COMMENT = '文件对象元数据';
+
+-- ----------------------------------------------------------------------------
+-- 17. file_upload_session 分片上传会话
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS file_upload_session (
+  id            BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
+  upload_id     VARCHAR(128) NOT NULL COMMENT 'COS uploadId；本地 provider 为本地会话 id',
+  biz_type      VARCHAR(32)  NOT NULL COMMENT '业务类型：MINUTES_AUDIO',
+  biz_id        BIGINT       NOT NULL COMMENT '业务主键：会议 id',
+  object_key    VARCHAR(255) NOT NULL COMMENT '目标对象 key',
+  original_name VARCHAR(255) NOT NULL COMMENT '原始文件名',
+  size_bytes    BIGINT       NOT NULL COMMENT '声明文件大小',
+  content_type  VARCHAR(100) NOT NULL COMMENT 'MIME 类型',
+  chunk_size    INT          NOT NULL COMMENT '分片大小（字节）',
+  total_parts   INT          NOT NULL COMMENT '分片总数',
+  status        TINYINT      NOT NULL DEFAULT 0 COMMENT '0 进行中 / 10 已完成 / 20 已中止 / 30 已过期',
+  file_id       BIGINT       DEFAULT NULL COMMENT '完成后关联的 file_object.id',
+  created_by    BIGINT       NOT NULL COMMENT '发起人 user_id',
+  expires_at    DATETIME     NOT NULL COMMENT '会话过期时间',
+  created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_upload_id (upload_id),
+  KEY idx_creator_status (created_by, status),
+  KEY idx_expires (expires_at)
+) ENGINE = InnoDB COMMENT = '分片上传会话';
+
+-- ----------------------------------------------------------------------------
+-- 18. meeting_minutes 会议纪要（一场会议一份）
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS meeting_minutes (
+  id                BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
+  meeting_id        BIGINT       NOT NULL COMMENT '会议ID',
+  room_id           BIGINT       NOT NULL COMMENT '会议室ID（冗余，便于排障）',
+  audio_file_id     BIGINT       DEFAULT NULL COMMENT 'file_object.id',
+  transcript_source VARCHAR(32)  NOT NULL DEFAULT 'TENCENT_ASR' COMMENT '转写来源',
+  duration_ms       BIGINT       NOT NULL DEFAULT 0 COMMENT '录音时长（毫秒）',
+  ai_status         TINYINT      NOT NULL DEFAULT 0 COMMENT '0 未生成 / 10 待生成 / 20 生成中 / 30 成功 / 40 失败',
+  summary_json      JSON         DEFAULT NULL COMMENT '结构化纪要',
+  ai_model          VARCHAR(64)  DEFAULT NULL COMMENT '生成模型',
+  ai_error          VARCHAR(500) DEFAULT NULL COMMENT '用户可读失败原因',
+  ai_attempts       INT          NOT NULL DEFAULT 0 COMMENT '已尝试次数',
+  ai_started_at     DATETIME     DEFAULT NULL COMMENT '本次开始时间',
+  ai_finished_at    DATETIME     DEFAULT NULL COMMENT '本次结束时间',
+  created_by        BIGINT       NOT NULL COMMENT '导入人',
+  created_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  updated_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_meeting (meeting_id),
+  KEY idx_ai_status (ai_status)
+) ENGINE = InnoDB COMMENT = '会议纪要';
+
+-- ----------------------------------------------------------------------------
+-- 19. meeting_minutes_speaker 纪要发言人
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS meeting_minutes_speaker (
+  id           BIGINT      NOT NULL AUTO_INCREMENT COMMENT '主键',
+  minutes_id   BIGINT      NOT NULL COMMENT '会议纪要ID',
+  speaker_key  VARCHAR(32) NOT NULL COMMENT 'ASR 原始说话人编号',
+  display_name VARCHAR(50) NOT NULL COMMENT '展示名，默认“说话人 N”',
+  color        VARCHAR(16) NOT NULL COMMENT '展示色 #RRGGBB',
+  created_at   DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  updated_at   DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_minutes_speaker (minutes_id, speaker_key)
+) ENGINE = InnoDB COMMENT = '纪要发言人';
+
+-- ----------------------------------------------------------------------------
+-- 20. meeting_transcript_segment 转写分段
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS meeting_transcript_segment (
+  id          BIGINT      NOT NULL AUTO_INCREMENT COMMENT '主键',
+  minutes_id  BIGINT      NOT NULL COMMENT '会议纪要ID',
+  seq         INT         NOT NULL COMMENT '从 0 开始的顺序号',
+  speaker_key VARCHAR(32) NOT NULL COMMENT 'ASR 原始说话人编号',
+  start_ms    BIGINT      NOT NULL COMMENT '相对音频开始的毫秒偏移',
+  end_ms      BIGINT      NOT NULL COMMENT '结束毫秒偏移',
+  text        TEXT        NOT NULL COMMENT '分段文本',
+  created_at  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (id),
+  KEY idx_minutes_seq (minutes_id, seq),
+  KEY idx_minutes_start (minutes_id, start_ms)
+) ENGINE = InnoDB COMMENT = '转写分段';
