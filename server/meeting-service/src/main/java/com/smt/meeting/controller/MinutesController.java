@@ -54,6 +54,7 @@ public class MinutesController {
         return Result.success(minutesService.transcript(id, UserContext.getUserId()));
     }
 
+    @RateLimit("minutes-export")
     @GetMapping("/{id}/minutes/export")
     public void export(@PathVariable Long id,
                        @RequestParam(defaultValue = "docx") String format,
@@ -61,20 +62,18 @@ public class MinutesController {
         if (!"docx".equalsIgnoreCase(format)) {
             throw new BusinessException(ErrorCode.PARAM_ERROR);
         }
-        Long userId = UserContext.getUserId();
-        // 先做存在性 + 数据权限校验（detail 内 assertCanView），再设置 docx 响应头：
-        // 否则 70001/60001 出错时响应已带 docx Content-Type，异常处理器的 JSON 无法序列化（客户端看不到错误码）。
-        if (minutesService.detail(id, userId) == null) {
-            throw new BusinessException(ErrorCode.MINUTES_NOT_FOUND);
-        }
-        String fileName = minutesExportService.fileName(id);
+        // 先完整构建文档（内部完成存在性/数据权限校验），成功后才写响应头：
+        // 构建期间的异常仍由全局异常处理器输出 JSON，避免响应已带 docx 类型却返回错误码。
+        MinutesExportService.ExportDocument document =
+                minutesExportService.build(id, UserContext.getUserId());
         response.setContentType(
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
         response.setHeader("Content-Disposition",
                 "attachment; filename*=UTF-8''"
-                        + URLEncoder.encode(fileName, StandardCharsets.UTF_8)
+                        + URLEncoder.encode(document.fileName(), StandardCharsets.UTF_8)
                         .replace("+", "%20"));
-        minutesExportService.export(id, userId, response.getOutputStream());
+        response.setContentLength(document.bytes().length);
+        response.getOutputStream().write(document.bytes());
     }
 
     @GetMapping("/{id}/minutes/audio-url")
