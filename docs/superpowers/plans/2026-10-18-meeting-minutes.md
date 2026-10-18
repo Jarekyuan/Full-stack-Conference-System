@@ -5975,6 +5975,11 @@ git commit -m "feat(minutes): 前端纪要/文件 API 与语音文本联动纯�
 - Create: `web/src/hooks/useMultipartUpload.ts`
 - Create: `web/src/hooks/useMultipartUpload.test.ts`
 
+> **评审修订（2026-10-19）**：初版在 pause→resume、reset/卸载与错误分类上有缺陷，已改为
+> **run 隔离**实现：每次 upload 捕获独立 runId + AbortController + 局部 session/completed；
+> pause/reset/卸载递增 runId 并 abort，旧 run 静默退出；重试改为 1s/2s/4s 共 4 次尝试，
+> 401/403 重新签 URL；70006 清本地会话后重新 init，网络错误保留续传状态。完整代码见下方。
+
 - [ ] **Step 1: 实现 `useMultipartUpload.ts`**
 
 ```ts
@@ -5983,40 +5988,56 @@ git commit -m "feat(minutes): 前端纪要/文件 API 与语音文本联动纯�
  *
  * 关键点：
  * ① 前端只拿预签名 URL 直传，文件字节不经过后端；
- * ② 每片失败按 1s/2s 退避重试；暂停用 AbortController 取消在途请求；
+ * ② 每片失败按 1s/2s/4s 退避（首传 + 3 次重试，共 4 次尝试）；暂停用 AbortController 取消在途请求；
  * ③ uploadId + 已完成分片写 localStorage，刷新页面后按后端 listParts 续传；
- * ④ 上传完成后必须拿到 ETag（COS CORS 要 ExposeHeader: ETag）。
+ * ④ 上传完成后必须拿到 ETag（COS CORS 要 ExposeHeader: ETag）；
+ * ⑤ 每次 upload 有独立 runId/AbortController：pause/reset/unmount 递增 runId 并 abort，
+ *    旧 run 静默退出，不能再写状态、localStorage 或调用 complete。
  */
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   completeMultipart,
   getPartUrls,
   getUploadSession,
   initMultipart,
   type MultipartInit,
+  type MultipartSession,
 } from '@/api/file'
 import { ApiError } from '@/api/types'
 
 const CONCURRENCY = 3
 const PART_BATCH = 50
-const MAX_RETRIES = 3
+/** 1 次首传 + 3 次重试；重试前分别等待 1s/2s/4s（设计文档 §4.4）。 */
+const RETRY_DELAYS_MS = [1000, 2000, 4000] as const
+/** 单个分片 PUT 的超时；超时按可重试错误处理。 */
+const PART_TIMEOUT_MS = 60_000
+/** localStorage 写入节流：每 10 片或每 1 秒最多一次（init/末片立即写）。 */
+const PERSIST_EVERY_PARTS = 10
+const PERSIST_INTERVAL_MS = 1000
+/** 分片会话不存在/已过期（docs/04 错误码表）。 */
+const CODE_UPLOAD_SESSION_EXPIRED = 70006
+const EMPTY_FILE_MESSAGE = '文件为空，请选择有效的音频文件'
 
 export type UploadStatus = 'idle' | 'uploading' | 'paused' | 'done' | 'error'
 
-interface ActiveSession {
+export interface ActiveSession {
   uploadId: string
   objectKey: string
   chunkSize: number
   totalParts: number
 }
 
-interface StoredSession {
+export interface StoredSession {
   uploadId: string
   objectKey: string
   chunkSize: number
   totalParts: number
   completed: [number, string][]
 }
+
+export type ResumeDecision =
+  | { action: 'resume'; session: ActiveSession; completed: Map<number, string> }
+  | { action: 'restart' }
 
 export function buildResumeKey(meetingId: number, file: File): string {
   return `minutes-upload:${meetingId}:${file.name}:${file.size}:${file.lastModified}`
@@ -6042,7 +6063,8 @@ export function missingParts(totalParts: number, completed: Iterable<number>): n
 
 /** 浏览器有时不给 File.type；按扩展名兜底，后端会同时校验扩展名与 MIME。 */
 export function audioContentType(file: File): string {
-  if (file.type) return file.type
+  const declared = normalizeDeclaredType(file.type)
+  if (declared) return declared
   const extension = file.name.split('.').pop()?.toLowerCase()
   const byExtension: Record<string, string> = {
     m4a: 'audio/mp4',
@@ -6054,13 +6076,76 @@ export function audioContentType(file: File): string {
   return (extension && byExtension[extension]) || 'application/octet-stream'
 }
 
+/** 仅重试网络抖动/超时/限流/服务端 5xx；400/401/403/404 等确定性错误不重试。 */
+export function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 429 || (status >= 500 && status <= 599)
+}
+
+/** localStorage 里的会话必须字段完整且数值合理，否则按“无会话”处理。 */
+export function isValidStoredSession(value: unknown): value is StoredSession {
+  if (!value || typeof value !== 'object') return false
+  const session = value as Record<string, unknown>
+  if (typeof session.uploadId !== 'string' || session.uploadId.length === 0) return false
+  if (typeof session.objectKey !== 'string') return false
+  if (!Number.isInteger(session.chunkSize) || (session.chunkSize as number) <= 0) return false
+  if (!Number.isInteger(session.totalParts) || (session.totalParts as number) <= 0) return false
+  if (!Array.isArray(session.completed)) return false
+  return (session.completed as unknown[]).every((entry) => {
+    if (!Array.isArray(entry) || entry.length !== 2) return false
+    const [partNumber, etag] = entry as unknown[]
+    return Number.isInteger(partNumber) && (partNumber as number) > 0 && typeof etag === 'string'
+  })
+}
+
+/**
+ * 续传决策：只有后端会话仍在进行中（status=0）且分片布局一致时才复用；
+ * 已完成/已中止/分片数或分片大小不一致都重新 init（由调用方清掉 localStorage）。
+ * 已完成分片以后端 listParts（uploadedParts）为准，不信任本地记录。
+ */
+export function resolveResumeSession(
+  stored: StoredSession,
+  remote: MultipartSession,
+): ResumeDecision {
+  if (
+    remote.status !== 0 ||
+    remote.totalParts !== stored.totalParts ||
+    remote.chunkSize !== stored.chunkSize
+  ) {
+    return { action: 'restart' }
+  }
+  return {
+    action: 'resume',
+    session: {
+      uploadId: stored.uploadId,
+      objectKey: stored.objectKey,
+      chunkSize: stored.chunkSize,
+      totalParts: stored.totalParts,
+    },
+    completed: new Map(remote.uploadedParts.map((part) => [part.partNumber, part.etag])),
+  }
+}
+
+function normalizeDeclaredType(type: string): string {
+  const normalized = type.trim().toLowerCase()
+  return normalized === 'audio/wave' || normalized === 'audio/x-wav' ? 'audio/wav' : normalized
+}
+
 function readStored(key: string): StoredSession | null {
+  let raw: string | null = null
   try {
-    const raw = localStorage.getItem(key)
-    return raw ? (JSON.parse(raw) as StoredSession) : null
+    raw = localStorage.getItem(key)
   } catch {
     return null
   }
+  if (!raw) return null
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (isValidStoredSession(parsed)) return parsed
+  } catch {
+    // JSON 损坏：按无效会话处理，下面清掉
+  }
+  clearStored(key)
+  return null
 }
 
 function writeStored(key: string, session: StoredSession): void {
@@ -6079,126 +6164,225 @@ function clearStored(key: string): void {
   }
 }
 
+/** 确定性失败（4xx、缺 ETag 等）：不重试，直接让整个 run 失败。 */
+class NonRetryableUploadError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'NonRetryableUploadError'
+  }
+}
+
+/** 单次 PUT 超时：可重试，与 pause/abort 区分。 */
+class UploadTimeoutError extends Error {
+  constructor() {
+    super('分片上传超时')
+    this.name = 'UploadTimeoutError'
+  }
+}
+
+/** 可被 abort 立即唤醒的重试等待，避免暂停后还要等满退避时间。 */
+function delay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve()
+      return
+    }
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const finish = () => {
+      if (timer) clearTimeout(timer)
+      signal.removeEventListener('abort', finish)
+      resolve()
+    }
+    timer = setTimeout(finish, ms)
+    signal.addEventListener('abort', finish, { once: true })
+  })
+}
+
+/** PUT 一片：把 run 的取消信号与单次超时合成为一个 signal。 */
+async function fetchPartWithTimeout(
+  url: string,
+  body: Blob,
+  runSignal: AbortSignal,
+  timeoutMs: number,
+): Promise<Response> {
+  const combined = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    combined.abort()
+  }, timeoutMs)
+  const onRunAbort = () => combined.abort()
+  if (runSignal.aborted) combined.abort()
+  else runSignal.addEventListener('abort', onRunAbort, { once: true })
+
+  try {
+    return await fetch(url, { method: 'PUT', body, signal: combined.signal })
+  } catch (e) {
+    // 暂停/取消优先于超时：runSignal 已 abort 时交给调用方静默退出。
+    if (timedOut && !runSignal.aborted) throw new UploadTimeoutError()
+    throw e
+  } finally {
+    clearTimeout(timer)
+    runSignal.removeEventListener('abort', onRunAbort)
+  }
+}
+
+interface PutPartOptions {
+  partNumber: number
+  uploadId: string
+  initialUrl: string
+  blob: Blob
+  runSignal: AbortSignal
+  isCurrent: () => boolean
+}
+
+/**
+ * 上传单个分片并返回 ETag；返回 null 表示 run 已被暂停/取消。
+ * 重试策略：网络错误/超时/408/429/5xx 退避重试；401/403 重新签发一次 URL；其余 4xx 立即失败。
+ */
+async function putPartWithRetry(options: PutPartOptions): Promise<string | null> {
+  const { partNumber, uploadId, blob, runSignal, isCurrent } = options
+  let url = options.initialUrl
+  let attempt = 0
+  let reSigned = false
+
+  for (;;) {
+    if (!isCurrent() || runSignal.aborted) return null
+
+    let response: Response
+    try {
+      response = await fetchPartWithTimeout(url, blob, runSignal, PART_TIMEOUT_MS)
+    } catch (e) {
+      if (!isCurrent() || runSignal.aborted) return null
+      const retryable = e instanceof UploadTimeoutError || e instanceof TypeError
+      if (!retryable) throw e
+      if (attempt >= RETRY_DELAYS_MS.length) throw e
+      await delay(RETRY_DELAYS_MS[attempt], runSignal)
+      attempt += 1
+      continue
+    }
+
+    if (!isCurrent() || runSignal.aborted) return null
+
+    if (response.ok) {
+      const etag = response.headers.get('ETag')
+      if (!etag) {
+        throw new NonRetryableUploadError('未拿到 ETag，请检查 COS CORS 的 ExposeHeader')
+      }
+      return etag
+    }
+
+    if ((response.status === 401 || response.status === 403) && !reSigned) {
+      reSigned = true
+      const urls = await getPartUrls(uploadId, [partNumber])
+      if (!isCurrent() || runSignal.aborted) return null
+      const fresh = urls.find((item) => item.partNumber === partNumber)
+      if (!fresh) throw new NonRetryableUploadError(`分片 ${partNumber} 未拿到上传地址`)
+      url = fresh.url
+      continue
+    }
+
+    if (isRetryableStatus(response.status) && attempt < RETRY_DELAYS_MS.length) {
+      await delay(RETRY_DELAYS_MS[attempt], runSignal)
+      attempt += 1
+      continue
+    }
+    throw new NonRetryableUploadError(`分片 ${partNumber} 上传失败（HTTP ${response.status}）`)
+  }
+}
+
 export function useMultipartUpload(meetingId: number) {
   const [progress, setProgress] = useState(0)
   const [status, setStatus] = useState<UploadStatus>('idle')
   const [error, setError] = useState<string | null>(null)
 
-  const pausedRef = useRef(false)
+  const runIdRef = useRef(0)
   const abortRef = useRef<AbortController | null>(null)
   const fileRef = useRef<File | null>(null)
-  const sessionRef = useRef<ActiveSession | null>(null)
-  const completedRef = useRef<Map<number, string>>(new Map())
   const keyRef = useRef('')
 
-  const persist = useCallback(() => {
-    const active = sessionRef.current
-    if (!active || !keyRef.current) return
-    writeStored(keyRef.current, {
-      ...active,
-      completed: [...completedRef.current.entries()],
-    })
-  }, [])
-
-  const uploadParts = useCallback(
-    async (file: File, session: ActiveSession, missing: number[]) => {
-      for (let offset = 0; offset < missing.length; offset += PART_BATCH) {
-        if (pausedRef.current) return
-        const batch = missing.slice(offset, offset + PART_BATCH)
-        const urls = await getPartUrls(session.uploadId, batch)
-        const urlMap = new Map(urls.map((item) => [item.partNumber, item.url]))
-        const queue = [...batch]
-
-        const worker = async () => {
-          while (queue.length > 0) {
-            if (pausedRef.current) return
-            const partNumber = queue.shift()!
-            const url = urlMap.get(partNumber)
-            if (!url) throw new Error(`分片 ${partNumber} 未拿到上传地址`)
-            const [start, end] = partRange(partNumber, session.chunkSize, file.size)
-            const blob = file.slice(start, end)
-
-            let lastError: unknown = null
-            for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-              try {
-                const response = await fetch(url, {
-                  method: 'PUT',
-                  body: blob,
-                  signal: abortRef.current?.signal,
-                })
-                if (!response.ok) {
-                  throw new Error(`分片 ${partNumber} 上传失败（HTTP ${response.status}）`)
-                }
-                const etag = response.headers.get('ETag') ?? response.headers.get('etag')
-                if (!etag) {
-                  throw new Error('未拿到 ETag，请检查 COS CORS 的 ExposeHeader')
-                }
-                completedRef.current.set(partNumber, etag)
-                persist()
-                setProgress(
-                  Math.round((completedRef.current.size / session.totalParts) * 100),
-                )
-                lastError = null
-                break
-              } catch (e) {
-                if ((e as Error).name === 'AbortError') return
-                lastError = e
-                if (attempt < MAX_RETRIES - 1) {
-                  await new Promise((resolve) => setTimeout(resolve, 1000 * 2 ** attempt))
-                }
-              }
-            }
-            if (lastError) throw lastError
-          }
-        }
-
-        await Promise.all(
-          Array.from({ length: Math.min(CONCURRENCY, queue.length) }, () => worker()),
-        )
-        if (pausedRef.current) return
-      }
+  // 卸载只取消在途请求，不清 localStorage——回到页面后还能续传。
+  useEffect(
+    () => () => {
+      runIdRef.current += 1
+      abortRef.current?.abort()
     },
-    [persist],
+    [],
   )
 
   const upload = useCallback(
     async (file: File): Promise<number | null> => {
-      const nextKey = buildResumeKey(meetingId, file)
-      if (keyRef.current !== nextKey) {
-        // 同一页面里换文件：不能复用上一份文件的 uploadId/已完成分片
-        sessionRef.current = null
-        completedRef.current = new Map()
-        setProgress(0)
-      }
+      const runId = ++runIdRef.current
+      abortRef.current?.abort()
+      const controller = new AbortController()
+      abortRef.current = controller
+      const key = buildResumeKey(meetingId, file)
+      // 同一页面换文件时先把进度归零；同文件续传则保留进度，等会话解析后再校正。
+      if (keyRef.current !== key) setProgress(0)
       fileRef.current = file
-      keyRef.current = nextKey
-      pausedRef.current = false
-      abortRef.current = new AbortController()
+      keyRef.current = key
+      const isCurrent = () => runIdRef.current === runId
+
       setStatus('uploading')
       setError(null)
 
       try {
-        let session: ActiveSession | null = sessionRef.current
-        const stored = readStored(keyRef.current)
-        if (stored) {
-          try {
-            const remote = await getUploadSession(stored.uploadId)
-            if (remote.status === 0 && remote.totalParts === stored.totalParts) {
-              session = {
-                uploadId: stored.uploadId,
-                objectKey: stored.objectKey,
-                chunkSize: stored.chunkSize,
-                totalParts: stored.totalParts,
-              }
-              completedRef.current = new Map(
-                remote.uploadedParts.map((part) => [part.partNumber, part.etag]),
-              )
-              sessionRef.current = session
-            }
-          } catch {
-            clearStored(keyRef.current)
+        if (file.size <= 0) throw new Error(EMPTY_FILE_MESSAGE)
+
+        // 本次 run 的会话/已完成分片只存在局部变量里，旧 run 无法污染新 run。
+        let session: ActiveSession | null = null
+        let completed = new Map<number, string>()
+
+        let lastPersistAt = Date.now()
+        let partsSincePersist = 0
+        const persistNow = () => {
+          if (!isCurrent() || !session) return
+          writeStored(key, { ...session, completed: [...completed.entries()] })
+          lastPersistAt = Date.now()
+          partsSincePersist = 0
+        }
+        const persistAfterPart = () => {
+          if (!isCurrent() || !session) return
+          partsSincePersist += 1
+          if (
+            partsSincePersist >= PERSIST_EVERY_PARTS ||
+            Date.now() - lastPersistAt >= PERSIST_INTERVAL_MS ||
+            completed.size === session.totalParts
+          ) {
+            persistNow()
           }
         }
+
+        const stored = readStored(key)
+        if (stored) {
+          let remote: MultipartSession | null = null
+          try {
+            remote = await getUploadSession(stored.uploadId)
+          } catch (e) {
+            if (!isCurrent()) return null
+            if (e instanceof ApiError && e.code === CODE_UPLOAD_SESSION_EXPIRED) {
+              // 会话已过期：丢掉本地记录，下面 init 一个全新会话。
+              clearStored(key)
+            } else {
+              // 网络/5xx：保留本地状态，用户稍后重试仍可续传。
+              throw e
+            }
+          }
+          if (!isCurrent()) return null
+
+          if (remote) {
+            const decision = resolveResumeSession(stored, remote)
+            if (decision.action === 'resume') {
+              session = decision.session
+              completed = decision.completed
+            } else {
+              // 已完成/已中止/分片布局不一致：旧会话不可继续，重新 init。
+              clearStored(key)
+            }
+          }
+        }
+
+        if (!isCurrent()) return null
 
         if (!session) {
           const created: MultipartInit = await initMultipart({
@@ -6208,67 +6392,144 @@ export function useMultipartUpload(meetingId: number) {
             fileSize: file.size,
             contentType: audioContentType(file),
           })
+          if (!isCurrent()) return null
           session = {
             uploadId: created.uploadId,
             objectKey: created.objectKey,
             chunkSize: created.chunkSize,
             totalParts: created.totalParts,
           }
-          sessionRef.current = session
-          completedRef.current = new Map()
-          writeStored(keyRef.current, { ...session, completed: [] })
+          completed = new Map()
+          writeStored(key, { ...session, completed: [] })
+          lastPersistAt = Date.now()
+          partsSincePersist = 0
         }
 
         const active = session
-        setProgress(Math.round((completedRef.current.size / active.totalParts) * 100))
-        const missing = missingParts(active.totalParts, completedRef.current.keys())
-        await uploadParts(file, active, missing)
-        if (pausedRef.current) {
-          setStatus('paused')
-          return null
+        if (isCurrent()) {
+          setProgress(Math.round((completed.size / active.totalParts) * 100))
+        }
+        const missing = missingParts(active.totalParts, completed.keys())
+
+        // 任一分片最终失败：标记本地 failed 并 abort 整个 run，兄弟 worker 立即退出。
+        let failed = false
+        let firstError: unknown = null
+        const failRun = (e: unknown) => {
+          if (failed) return
+          failed = true
+          firstError = e
+          controller.abort()
         }
 
-        const parts = [...completedRef.current.entries()]
+        const uploadBatch = async (batch: number[]) => {
+          const urls = await getPartUrls(active.uploadId, batch)
+          if (!isCurrent() || controller.signal.aborted) return
+          const urlMap = new Map(urls.map((item) => [item.partNumber, item.url]))
+          const queue = [...batch]
+
+          const worker = async () => {
+            while (queue.length > 0) {
+              if (!isCurrent() || controller.signal.aborted) return
+              const partNumber = queue.shift()!
+              const url = urlMap.get(partNumber)
+              if (!url) {
+                failRun(new NonRetryableUploadError(`分片 ${partNumber} 未拿到上传地址`))
+                return
+              }
+              const [start, end] = partRange(partNumber, active.chunkSize, file.size)
+              const blob = file.slice(start, end)
+
+              try {
+                const etag = await putPartWithRetry({
+                  partNumber,
+                  uploadId: active.uploadId,
+                  initialUrl: url,
+                  blob,
+                  runSignal: controller.signal,
+                  isCurrent,
+                })
+                if (etag === null || !isCurrent() || controller.signal.aborted) return
+                completed.set(partNumber, etag)
+                persistAfterPart()
+                if (isCurrent()) {
+                  setProgress(Math.round((completed.size / active.totalParts) * 100))
+                }
+              } catch (e) {
+                failRun(e)
+                return
+              }
+            }
+          }
+
+          await Promise.allSettled(
+            Array.from({ length: Math.min(CONCURRENCY, queue.length) }, () => worker()),
+          )
+        }
+
+        for (let offset = 0; offset < missing.length; offset += PART_BATCH) {
+          if (!isCurrent() || controller.signal.aborted) return null
+          await uploadBatch(missing.slice(offset, offset + PART_BATCH))
+          if (failed) break
+          if (!isCurrent() || controller.signal.aborted) return null
+        }
+        if (failed) throw firstError
+        if (!isCurrent()) return null
+
+        // 防御：绝不能用不完整的分片列表调用 complete。
+        if (completed.size !== active.totalParts) {
+          throw new Error('分片未全部完成，已中止合并')
+        }
+
+        const parts = [...completed.entries()]
           .sort((a, b) => a[0] - b[0])
           .map(([partNumber, etag]) => ({ partNumber, etag }))
         const result = await completeMultipart(active.uploadId, parts)
-        clearStored(keyRef.current)
+        if (!isCurrent()) return null
+        clearStored(key)
+
+        if (!result || typeof result.fileId !== 'number') {
+          // request 层对 10006 幂等重复会解包成 undefined；不能直接读 fileId。
+          throw new Error('分片合并成功但未返回文件信息，请刷新后重试')
+        }
+
         setProgress(100)
         setStatus('done')
+        fileRef.current = null
+        abortRef.current = null
         return result.fileId
       } catch (e) {
-        if (pausedRef.current) {
-          setStatus('paused')
-          return null
-        }
+        if (!isCurrent()) return null
         setStatus('error')
         setError(
-          e instanceof ApiError
-            ? e.message
-            : e instanceof Error
-              ? e.message
-              : '上传失败',
+          e instanceof ApiError ? e.message : e instanceof Error ? e.message : '上传失败',
         )
         throw e
       }
     },
-    [meetingId, uploadParts],
+    [meetingId],
   )
 
   const pause = useCallback(() => {
-    pausedRef.current = true
+    if (status !== 'uploading') return
+    // 递增 runId 后旧 run 的所有 isCurrent() 检查都会失败，不会再写状态/存储。
+    runIdRef.current += 1
     abortRef.current?.abort()
     setStatus('paused')
-  }, [])
+  }, [status])
 
   const resume = useCallback(() => {
-    return fileRef.current ? upload(fileRef.current) : Promise.resolve(null)
-  }, [upload])
+    if (status !== 'paused' || !fileRef.current) return Promise.resolve(null)
+    // 新 run 会重新读 localStorage + getUploadSession，按后端 listParts 续传。
+    return upload(fileRef.current)
+  }, [status, upload])
 
   const reset = useCallback(() => {
-    clearStored(keyRef.current)
-    sessionRef.current = null
-    completedRef.current = new Map()
+    runIdRef.current += 1
+    abortRef.current?.abort()
+    abortRef.current = null
+    const key = keyRef.current
+    keyRef.current = ''
+    if (key) clearStored(key)
     fileRef.current = null
     setProgress(0)
     setStatus('idle')
@@ -6282,14 +6543,86 @@ export function useMultipartUpload(meetingId: number) {
 - [ ] **Step 2: 写纯函数测试**
 
 ```ts
-import { describe, expect, it } from 'vitest'
-import { buildResumeKey, missingParts, partRange } from './useMultipartUpload'
+import { describe, expect, it, vi } from 'vitest'
 
-const file = { name: 'meeting.m4a', size: 11, lastModified: 123 } as File
+// 纯函数测试不需要真实请求层；mock 掉避免加载 axios/拦截器等模块副作用。
+vi.mock('@/api/file', () => ({
+  initMultipart: vi.fn(),
+  getPartUrls: vi.fn(),
+  getUploadSession: vi.fn(),
+  completeMultipart: vi.fn(),
+}))
+
+import type { MultipartSession } from '@/api/file'
+import {
+  audioContentType,
+  buildResumeKey,
+  isRetryableStatus,
+  isValidStoredSession,
+  missingParts,
+  partRange,
+  resolveResumeSession,
+  type StoredSession,
+} from './useMultipartUpload'
+
+/** 测试里用不到真实的 Blob 行为，只需 File 元数据字段。 */
+function fileLike(
+  overrides: { name?: string; size?: number; lastModified?: number; type?: string } = {},
+): File {
+  return {
+    name: 'meeting.m4a',
+    size: 11,
+    lastModified: 123,
+    type: '',
+    ...overrides,
+  } as File
+}
+
+function storedSession(overrides: Partial<StoredSession> = {}): StoredSession {
+  return {
+    uploadId: 'upload-1',
+    objectKey: 'minutes/42/2026-10/a.m4a',
+    chunkSize: 5,
+    totalParts: 3,
+    completed: [],
+    ...overrides,
+  }
+}
+
+function remoteSession(overrides: Partial<MultipartSession> = {}): MultipartSession {
+  return {
+    uploadId: 'upload-1',
+    objectKey: 'minutes/42/2026-10/a.m4a',
+    chunkSize: 5,
+    totalParts: 3,
+    status: 0,
+    uploadedParts: [],
+    missingPartNumbers: [1, 2, 3],
+    expiresAt: '2026-10-20T00:00:00Z',
+    ...overrides,
+  }
+}
 
 describe('buildResumeKey', () => {
-  it('包含会议与文件元数据', () => {
-    expect(buildResumeKey(42, file)).toBe('minutes-upload:42:meeting.m4a:11:123')
+  it('包含会议 ID、文件名、大小与最后修改时间', () => {
+    const file = fileLike({
+      name: '周会录音.m4a',
+      size: 2 * 1024 * 1024,
+      lastModified: 1729250000000,
+    })
+
+    expect(buildResumeKey(42, file)).toBe(
+      'minutes-upload:42:周会录音.m4a:2097152:1729250000000',
+    )
+  })
+
+  it('不同会议、不同文件元数据得到不同 key', () => {
+    const base = fileLike()
+
+    expect(buildResumeKey(1, base)).not.toBe(buildResumeKey(2, base))
+    expect(buildResumeKey(1, base)).not.toBe(buildResumeKey(1, fileLike({ size: 12 })))
+    expect(buildResumeKey(1, base)).not.toBe(buildResumeKey(1, fileLike({ lastModified: 124 })))
+    expect(buildResumeKey(1, base)).not.toBe(buildResumeKey(1, fileLike({ name: 'other.m4a' })))
   })
 })
 
@@ -6299,15 +6632,180 @@ describe('partRange', () => {
     expect(partRange(2, 5, 11)).toEqual([5, 10])
     expect(partRange(3, 5, 11)).toEqual([10, 11])
   })
+
+  it('文件大小恰好整除分片大小时，末片结束于文件末尾', () => {
+    expect(partRange(3, 5, 15)).toEqual([10, 15])
+  })
+
+  it('空文件返回零长度区间', () => {
+    expect(partRange(1, 5, 0)).toEqual([0, 0])
+  })
+
+  it('分片大小超过文件大小时按文件大小截断', () => {
+    expect(partRange(1, 100, 11)).toEqual([0, 11])
+  })
 })
 
 describe('missingParts', () => {
-  it('返回缺失分片号', () => {
-    expect(missingParts(4, [1, 3])).toEqual([2, 4])
+  it('返回缺失分片，且按分片号升序', () => {
+    expect(missingParts(5, [4, 1])).toEqual([2, 3, 5])
   })
 
-  it('全部完成时为空', () => {
-    expect(missingParts(2, [1, 2])).toEqual([])
+  it('全部完成时返回空数组', () => {
+    expect(missingParts(3, [1, 2, 3])).toEqual([])
+  })
+
+  it('没有任何已完成分片时返回全部分片', () => {
+    expect(missingParts(3, new Map<number, string>().keys())).toEqual([1, 2, 3])
+  })
+})
+
+describe('audioContentType', () => {
+  it('优先使用浏览器给出的 MIME', () => {
+    expect(audioContentType(fileLike({ name: 'meeting.bin', type: 'audio/x-m4a' }))).toBe(
+      'audio/x-m4a',
+    )
+  })
+
+  const byExtension: [string, string][] = [
+    ['meeting.m4a', 'audio/mp4'],
+    ['meeting.mp3', 'audio/mpeg'],
+    ['meeting.wav', 'audio/wav'],
+    ['meeting.aac', 'audio/aac'],
+    ['meeting.ogg', 'audio/ogg'],
+  ]
+
+  for (const [name, expected] of byExtension) {
+    it(`File.type 缺失时按扩展名兜底：${name}`, () => {
+      expect(audioContentType(fileLike({ name, type: '' }))).toBe(expected)
+    })
+  }
+
+  it('扩展名大小写不敏感', () => {
+    expect(audioContentType(fileLike({ name: 'MEETING.M4A', type: '' }))).toBe('audio/mp4')
+  })
+
+  it('audio/wave 与 audio/x-wav 归一化为 audio/wav', () => {
+    expect(audioContentType(fileLike({ type: 'audio/wave' }))).toBe('audio/wav')
+    expect(audioContentType(fileLike({ type: 'AUDIO/X-WAV' }))).toBe('audio/wav')
+  })
+
+  it('未知扩展名与无扩展名回退为 application/octet-stream', () => {
+    expect(audioContentType(fileLike({ name: 'meeting.flac', type: '' }))).toBe(
+      'application/octet-stream',
+    )
+    expect(audioContentType(fileLike({ name: 'no-extension', type: '' }))).toBe(
+      'application/octet-stream',
+    )
+  })
+})
+
+describe('isRetryableStatus', () => {
+  it('网络抖动/限流/服务端错误可重试', () => {
+    for (const status of [408, 429, 500, 502, 503, 599]) {
+      expect(isRetryableStatus(status)).toBe(true)
+    }
+  })
+
+  it('确定性 4xx 与非法状态不重试', () => {
+    for (const status of [200, 400, 401, 403, 404, 409, 499, 600]) {
+      expect(isRetryableStatus(status)).toBe(false)
+    }
+  })
+})
+
+describe('isValidStoredSession', () => {
+  it('字段完整且数值合理时有效', () => {
+    expect(isValidStoredSession(storedSession({ completed: [[1, '"etag-1"']] }))).toBe(true)
+  })
+
+  it('非对象、空 uploadId、缺 objectKey 都无效', () => {
+    expect(isValidStoredSession(null)).toBe(false)
+    expect(isValidStoredSession('x')).toBe(false)
+    expect(isValidStoredSession({})).toBe(false)
+    expect(isValidStoredSession(storedSession({ uploadId: '' }))).toBe(false)
+    expect(
+      isValidStoredSession({ ...storedSession(), objectKey: undefined }),
+    ).toBe(false)
+  })
+
+  it('chunkSize/totalParts 必须是正整数', () => {
+    for (const chunkSize of [0, -1, 1.5, Number.NaN]) {
+      expect(isValidStoredSession(storedSession({ chunkSize }))).toBe(false)
+    }
+    for (const totalParts of [0, -1, 1.5, Number.NaN]) {
+      expect(isValidStoredSession(storedSession({ totalParts }))).toBe(false)
+    }
+  })
+
+  it('completed 必须是 [正整数, string] 数组', () => {
+    expect(isValidStoredSession({ ...storedSession(), completed: 'x' })).toBe(false)
+    expect(
+      isValidStoredSession(
+        storedSession({ completed: [1, '"etag-1"'] as unknown as [number, string][] }),
+      ),
+    ).toBe(false)
+    expect(
+      isValidStoredSession(
+        storedSession({ completed: [['1', 'etag']] as unknown as [number, string][] }),
+      ),
+    ).toBe(false)
+    expect(
+      isValidStoredSession(
+        storedSession({ completed: [[1]] as unknown as [number, string][] }),
+      ),
+    ).toBe(false)
+    expect(
+      isValidStoredSession(
+        storedSession({ completed: [[1, 2]] as unknown as [number, string][] }),
+      ),
+    ).toBe(false)
+    expect(isValidStoredSession(storedSession({ completed: [[0, 'etag']] }))).toBe(false)
+  })
+})
+
+describe('resolveResumeSession', () => {
+  it('会话进行中且分片布局一致时复用，已完成分片以后端为准', () => {
+    const decision = resolveResumeSession(
+      storedSession({ completed: [[1, '"local-etag"']] }),
+      remoteSession({
+        uploadedParts: [
+          { partNumber: 1, etag: '"remote-1"', size: 5 },
+          { partNumber: 2, etag: '"remote-2"', size: 5 },
+        ],
+      }),
+    )
+
+    expect(decision.action).toBe('resume')
+    if (decision.action !== 'resume') return
+    expect(decision.session).toEqual({
+      uploadId: 'upload-1',
+      objectKey: 'minutes/42/2026-10/a.m4a',
+      chunkSize: 5,
+      totalParts: 3,
+    })
+    expect([...decision.completed.entries()]).toEqual([
+      [1, '"remote-1"'],
+      [2, '"remote-2"'],
+    ])
+  })
+
+  it('后端会话已完成/已中止时重新开始', () => {
+    expect(resolveResumeSession(storedSession(), remoteSession({ status: 20 }))).toEqual({
+      action: 'restart',
+    })
+    expect(resolveResumeSession(storedSession(), remoteSession({ status: 30 }))).toEqual({
+      action: 'restart',
+    })
+  })
+
+  it('分片数或分片大小不一致时重新开始', () => {
+    expect(resolveResumeSession(storedSession(), remoteSession({ totalParts: 4 }))).toEqual({
+      action: 'restart',
+    })
+    expect(resolveResumeSession(storedSession(), remoteSession({ chunkSize: 10 }))).toEqual({
+      action: 'restart',
+    })
   })
 })
 ```
@@ -6320,13 +6818,13 @@ npx vitest run src/hooks/useMultipartUpload.test.ts
 npx tsc --noEmit
 ```
 
-Expected: 测试 `Tests 4 passed`；`tsc` 无输出（退出码 0）。
+Expected: 测试 `Tests 27 passed`；`tsc` 无输出（退出码 0）。
 
 - [ ] **Step 4: 提交**
 
 ```bash
-git add web/src/hooks/useMultipartUpload.ts web/src/hooks/useMultipartUpload.test.ts
-git commit -m "feat(minutes): COS 分片上传与断点续传 hook"
+git add web/src/hooks/useMultipartUpload.ts web/src/hooks/useMultipartUpload.test.ts docs/superpowers/plans/2026-10-18-meeting-minutes.md
+git commit -m "fix(minutes): 分片上传 run 隔离与续传语义"
 ```
 
 ---
@@ -8113,6 +8611,12 @@ git commit -m "test(minutes): 纪要与 COS 分片上传验证脚本"
 2. meeting-service 以 `STORAGE_PROVIDER=local`、`MINUTES_AI_PROVIDER=mock`、
    `MINUTES_LOCAL_DIR=/tmp/smt-minutes-e2e` 启动。
 3. Vite dev server 在 `http://localhost:5173`；`web` 下已装 playwright。
+
+> **补测（2026-10-19 Task 12 评审）**：E2E 需覆盖分片上传的「暂停 → 继续 → 刷新后续传」：
+> 上传中途点暂停，断言状态为 `paused` 且进度不再推进；点继续后按后端 listParts 补齐缺失分片；
+> 刷新页面后重新选择同一文件，应复用 localStorage 中的 uploadId 只补缺失分片
+> （本地 provider 可观察 `.part-*` 数量）。同时断言旧 run 在暂停后不会再触发 complete，
+> 避免暂停→立即继续时出现两份并发上传。
 
 - [ ] **Step 1: 写 E2E 脚本**
 
