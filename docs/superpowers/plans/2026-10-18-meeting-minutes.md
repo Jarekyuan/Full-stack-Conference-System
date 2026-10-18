@@ -1114,7 +1114,7 @@ class TencentAsrParserTest {
 
     private TranscriptParser parser() {
         MinutesProperties properties = new MinutesProperties();
-        properties.getTranscript().setMaxBytes(5 * 1024 * 1024);
+        properties.getTranscript().setMaxBytes(5L * 1024 * 1024);
         properties.getTranscript().setMaxSegments(20_000);
         return new TranscriptParser(properties);
     }
@@ -1159,7 +1159,7 @@ class TencentAsrParserTest {
                 .satisfies(e -> {
                     BusinessException ex = (BusinessException) e;
                     assertThat(ex.getCode()).isEqualTo(ErrorCode.TRANSCRIPT_FORMAT_INVALID.getCode());
-                    assertThat((Map<?, ?>) ex.getData()).containsEntry("line", 2);
+                    assertThat((Map<String, Object>) ex.getData()).containsEntry("line", 2);
                 });
     }
 
@@ -1202,6 +1202,12 @@ class TencentAsrParserTest {
 }
 ```
 
+实现时补充边界用例（与主测试同文件，最终共 21 例）：长录音分钟/小时等价
+（`60:00.000` 与 `1:00:00.000`）、有小时组时分钟 > 59、秒小数超过 3 位、
+32/33 位说话人编号、`maxBytes` 精确边界（等值通过 / 少 1 字节返回 70005）、
+单段字符数边界、`maxSegments` 精确边界、重复开始时间、说话人首次出现顺序、
+`lastEndMs` 取最大结束、时间戳超过 24 小时、Unicode 空白导致空文本。
+
 - [ ] **Step 2: 运行测试，确认失败**
 
 Run:
@@ -1219,6 +1225,7 @@ Expected: 编译失败，提示 `TranscriptParser` / `MinutesProperties` 不存�
 package com.smt.meeting.config;
 
 import lombok.Data;
+import lombok.ToString;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -1251,6 +1258,7 @@ public class MinutesProperties {
         private String provider = "deepseek";
         private String baseUrl = "https://api.deepseek.com";
         private String model = "deepseek-chat";
+        @ToString.Exclude
         private String apiKey = "";
         private Integer timeoutMs = 120_000;
         private Integer maxAttempts = 3;
@@ -1285,10 +1293,16 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class TranscriptParser {
 
-    /** 兼容 m:ss.SSS 与 h:mm:ss.SSS */
+    /** 一天的最大毫秒数，时间戳上限（导入链路同样按 24 小时封顶） */
+    private static final long MAX_TIMESTAMP_MS = 86_400_000L;
+
+    /**
+     * 兼容 m:ss.SSS 与 h:mm:ss.SSS。
+     * 各数字段均限定位数：避免无界解析溢出，同时把说话人编号限制在 VARCHAR(32) 内。
+     */
     private static final Pattern LINE = Pattern.compile(
-            "^\\[(?:(\\d+):)?(\\d+):(\\d+(?:\\.\\d+)?),"
-                    + "(?:(\\d+):)?(\\d+):(\\d+(?:\\.\\d+)?),(\\d+)\\]\\s*(.+)$");
+            "^\\[(?:(\\d{1,6}):)?(\\d{1,6}):(\\d{1,2}(?:\\.\\d{1,3})?),"
+                    + "(?:(\\d{1,6}):)?(\\d{1,6}):(\\d{1,2}(?:\\.\\d{1,3})?),(\\d{1,32})\\]\\s*(.*)$");
 
     private final MinutesProperties properties;
 
@@ -1297,7 +1311,8 @@ public class TranscriptParser {
             throw new BusinessException(ErrorCode.TRANSCRIPT_EMPTY);
         }
         if (text.getBytes(StandardCharsets.UTF_8).length > properties.getTranscript().getMaxBytes()) {
-            throw new BusinessException(ErrorCode.FILE_TOO_LARGE.getCode(), "转写文本超过 5MiB");
+            throw new BusinessException(ErrorCode.FILE_TOO_LARGE.getCode(),
+                    "转写文本超过 " + properties.getTranscript().getMaxBytes() + " 字节");
         }
 
         List<ParsedSegment> segments = new ArrayList<>();
@@ -1305,9 +1320,9 @@ public class TranscriptParser {
         long previousStart = -1;
         long lastEnd = 0;
 
-        String[] lines = text.replace("﻿", "").split("\\R", -1);
+        String[] lines = text.replace("\uFEFF", "").split("\\R", -1);
         for (int i = 0; i < lines.length; i++) {
-            String line = lines[i].trim();
+            String line = lines[i].strip();
             if (line.isEmpty()) {
                 continue;
             }
@@ -1320,8 +1335,11 @@ public class TranscriptParser {
             long startMs = parseTime(matcher.group(1), matcher.group(2), matcher.group(3), lineNo);
             long endMs = parseTime(matcher.group(4), matcher.group(5), matcher.group(6), lineNo);
             String speakerKey = matcher.group(7);
-            String content = matcher.group(8).trim();
+            String content = matcher.group(8).strip();
 
+            if (content.isEmpty()) {
+                throw formatError(lineNo, "文本不能为空");
+            }
             if (startMs >= endMs) {
                 throw formatError(lineNo, "开始时间必须早于结束时间");
             }
@@ -1346,17 +1364,30 @@ public class TranscriptParser {
         if (segments.isEmpty()) {
             throw new BusinessException(ErrorCode.TRANSCRIPT_EMPTY);
         }
-        return new ParseResult(segments, List.copyOf(speakerKeys), lastEnd);
+        return new ParseResult(List.copyOf(segments), List.copyOf(speakerKeys), lastEnd);
     }
 
     private long parseTime(String hours, String minutes, String seconds, int lineNo) {
-        long h = hours == null ? 0 : Long.parseLong(hours);
-        long m = Long.parseLong(minutes);
-        double s = Double.parseDouble(seconds);
-        if (m > 59 || s >= 60) {
+        try {
+            long h = hours == null ? 0 : Long.parseLong(hours);
+            long m = Long.parseLong(minutes);
+            double s = Double.parseDouble(seconds);
+            // 无小时组时，首段是“总分钟数”，允许 >= 60（长录音）；有小时组时分钟必须 0–59
+            if ((hours != null && m > 59) || s >= 60) {
+                throw formatError(lineNo, "时间格式不正确");
+            }
+            long millis = Math.addExact(
+                    Math.addExact(
+                            Math.multiplyExact(h, 3_600_000L),
+                            Math.multiplyExact(m, 60_000L)),
+                    Math.round(s * 1_000));
+            if (millis > MAX_TIMESTAMP_MS) {
+                throw formatError(lineNo, "时间超过 24 小时");
+            }
+            return millis;
+        } catch (NumberFormatException | ArithmeticException e) {
             throw formatError(lineNo, "时间格式不正确");
         }
-        return h * 3_600_000 + m * 60_000 + Math.round(s * 1_000);
     }
 
     private BusinessException formatError(int line, String reason) {
@@ -1381,7 +1412,7 @@ cd /Users/jonas/Desktop/项目实践/new-meeting-systems/server
 mvn -q -pl meeting-service -am test -Dtest=TencentAsrParserTest -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
-Expected: `Tests run: 8, Failures: 0, Errors: 0`。
+Expected: `Tests run: 21, Failures: 0, Errors: 0`。
 
 - [ ] **Step 6: 提交**
 

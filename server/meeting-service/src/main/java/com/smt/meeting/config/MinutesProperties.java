@@ -1,6 +1,7 @@
 package com.smt.meeting.config;
 
 import lombok.Data;
+import lombok.ToString;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -33,6 +34,7 @@ public class MinutesProperties {
         private String provider = "deepseek";
         private String baseUrl = "https://api.deepseek.com";
         private String model = "deepseek-chat";
+        @ToString.Exclude
         private String apiKey = "";
         private Integer timeoutMs = 120_000;
         private Integer maxAttempts = 3;
