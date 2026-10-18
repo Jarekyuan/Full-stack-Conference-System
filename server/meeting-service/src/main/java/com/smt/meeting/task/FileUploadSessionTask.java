@@ -25,6 +25,9 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>每条独立 try/catch：单个会话清理失败（网络/对象存储异常）不阻断同批其他会话，
  * 下一轮扫描还会再次捞到它（状态未变）。</p>
+ *
+ * <p>调度器使用 {@code minutesTaskScheduler}（2 线程）而非默认单线程：
+ * 一轮最多 50 次远端 abort，不能堵住会议状态/提醒任务。</p>
  */
 @Slf4j
 @Component
@@ -42,7 +45,8 @@ public class FileUploadSessionTask {
     private final RedissonClient redisson;
 
     /** 默认 10 分钟一轮；间隔可用 `minutes.task.session-delay-ms` 覆盖（验证脚本/测试会调小它） */
-    @Scheduled(fixedDelayString = "${minutes.task.session-delay-ms:600000}")
+    @Scheduled(scheduler = "minutesTaskScheduler",
+            fixedDelayString = "${minutes.task.session-delay-ms:600000}")
     public void cleanup() {
         RLock lock = redisson.getLock(LOCK_KEY);
         boolean acquired = false;
@@ -53,23 +57,7 @@ public class FileUploadSessionTask {
                 log.debug("[纪要上传清理] 未抢到锁，本轮跳过（另一实例在跑）");
                 return;
             }
-            List<FileUploadSession> expired = sessionMapper.selectExpired(
-                    LocalDateTime.now(), BATCH_SIZE);
-            int cleaned = 0;
-            for (FileUploadSession session : expired) {
-                try {
-                    storage.abortMultipart(session.getObjectKey(), session.getUploadId());
-                    sessionMapper.markStatus(session.getUploadId(), UploadSessionStatus.EXPIRED);
-                    cleaned++;
-                } catch (Exception e) {
-                    // 单条失败不影响整批：状态仍为进行中，下一轮会再次命中
-                    log.warn("[纪要上传清理] 会话 {} 清理失败", session.getUploadId(), e);
-                }
-            }
-            if (!expired.isEmpty()) {
-                log.info("[纪要上传清理] 本轮扫描 {} 个过期会话，成功清理 {} 个",
-                        expired.size(), cleaned);
-            }
+            cleanExpiredSessions();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } catch (Exception e) {
@@ -80,5 +68,33 @@ public class FileUploadSessionTask {
                 lock.unlock();
             }
         }
+    }
+
+    /**
+     * 扫描并清理一批过期会话（不含分布式锁，便于单测直接覆盖批处理语义）。
+     *
+     * @return 实际迁移为已过期(30) 的条数——{@code markStatus} 返回 0 说明已被他方处理，不计入
+     */
+    int cleanExpiredSessions() {
+        List<FileUploadSession> expired = sessionMapper.selectExpired(
+                LocalDateTime.now(), BATCH_SIZE);
+        int cleaned = 0;
+        for (FileUploadSession session : expired) {
+            try {
+                storage.abortMultipart(session.getObjectKey(), session.getUploadId());
+                if (sessionMapper.markStatus(
+                        session.getUploadId(), UploadSessionStatus.EXPIRED) == 1) {
+                    cleaned++;
+                }
+            } catch (Exception e) {
+                // 单条失败不影响整批：状态仍为进行中，下一轮会再次命中
+                log.warn("[纪要上传清理] 会话 {} 清理失败", session.getUploadId(), e);
+            }
+        }
+        if (!expired.isEmpty()) {
+            log.info("[纪要上传清理] 本轮扫描 {} 个过期会话，成功清理 {} 个",
+                    expired.size(), cleaned);
+        }
+        return cleaned;
     }
 }

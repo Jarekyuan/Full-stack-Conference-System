@@ -17,6 +17,13 @@ public interface FileUploadSessionMapper {
     /** 按 uploadId 查询（命中 uk_upload_id） */
     FileUploadSession selectByUploadId(@Param("uploadId") String uploadId);
 
+    /**
+     * 事务内锁住会话行（`SELECT ... FOR UPDATE`，Task 7 完成上传用）。
+     * 用途：把"复查状态 → 落 file_object → CAS 标记完成"串行化，
+     * 避免两个完成请求同时通过状态检查、各自插入一条 file_object。
+     */
+    FileUploadSession selectByUploadIdForUpdate(@Param("uploadId") String uploadId);
+
     /** 完成上传：仅进行中(0)的会话可迁移，并回填 file_object.id */
     int markCompleted(@Param("uploadId") String uploadId, @Param("fileId") Long fileId);
 

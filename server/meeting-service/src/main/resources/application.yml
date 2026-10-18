@@ -101,6 +101,7 @@ minutes:
     max-file-size-bytes: 2147483648
     chunk-size-bytes: 5242880
     session-ttl-hours: 24
+    part-url-ttl-minutes: 60
   transcript:
     max-bytes: 5242880
     max-segments: 20000

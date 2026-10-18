@@ -10,6 +10,7 @@ import com.smt.meeting.entity.FileUploadSession;
 import com.smt.meeting.entity.Meeting;
 import com.smt.meeting.enums.FileBizType;
 import com.smt.meeting.enums.FileObjectStatus;
+import com.smt.meeting.enums.MeetingStatusEnum;
 import com.smt.meeting.enums.UploadSessionStatus;
 import com.smt.meeting.mapper.FileObjectMapper;
 import com.smt.meeting.mapper.FileUploadSessionMapper;
@@ -19,11 +20,13 @@ import com.smt.meeting.vo.MultipartPartVO;
 import com.smt.meeting.vo.MultipartSessionVO;
 import com.smt.meeting.vo.UploadedPartVO;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -42,10 +45,18 @@ import java.util.UUID;
  *       （返回第一次落库的 file_object），但分片 URL 必须拒绝（70006）。</li>
  * </ul>
  *
- * <h3>为什么 session() 要先判 COMPLETED</h3>
- * 存储实现的 {@code listParts} 对已完成会话抛 70006（COS 的 NoSuchUpload），
- * 若先调 storage 会让"上传完成后轮询会话"变成错误——因此完成态在业务层短路。
+ * <h3>complete 的顺序约束（重要）</h3>
+ * <ol>
+ *   <li>先在 {@code completeMultipart} <b>之前</b>用 {@code listParts} 做大小预检——
+ *       两个 provider 的 complete 都会消费 uploadId，合并后才发现大小不符就无法重试了；</li>
+ *   <li>{@code completeMultipart} 在 DB 事务<b>之外</b>执行，远端调用不占数据库连接；</li>
+ *   <li>DB 落库放在短事务里：行锁复查状态 → 插 file_object → CAS 标记完成，
+ *       标记 0 行即回滚（防止并发完成产生两条 file_object）；</li>
+ *   <li>合并成功后若 DB 事务失败，best-effort 删除已合并对象；
+ *       合并后大小仍不符则删除对象并把会话置为已中止，绝不留在进行中。</li>
+ * </ol>
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class MultipartUploadService {
@@ -57,17 +68,20 @@ public class MultipartUploadService {
             "audio/aac", "audio/ogg");
     /** 单次批量取 URL 的上限（与 docs/04 契约一致） */
     private static final int MAX_PART_URLS_PER_BATCH = 50;
-    /** 分片 URL 有效期（与 cos.part-url-ttl-minutes 默认值一致） */
-    private static final Duration PART_URL_TTL = Duration.ofMinutes(60);
+    /** 对象键里的月份目录固定为 6 位 yyyyMM */
+    private static final DateTimeFormatter MONTH_FORMAT = DateTimeFormatter.ofPattern("yyyyMM");
 
     private final ObjectStorage storage;
     private final FileObjectMapper fileObjectMapper;
     private final FileUploadSessionMapper sessionMapper;
     private final MinutesPermissionService permissionService;
     private final MinutesProperties properties;
+    private final TransactionTemplate transactionTemplate;
 
     /**
      * 初始化分片上传：仅会议组织人/ADMIN，且会议已结束（status=40）时可上传纪要音频。
+     *
+     * <p>存储会话已创建但数据库插入失败时，best-effort 中止存储会话，避免留下孤儿 upload。</p>
      */
     public MultipartInitVO init(MultipartInitDTO dto, Long userId) {
         if (!FileBizType.MINUTES_AUDIO.equals(dto.getBizType())) {
@@ -76,7 +90,7 @@ public class MultipartUploadService {
         }
         Meeting meeting = permissionService.requireMeeting(dto.getBizId());
         permissionService.assertCanManage(meeting, userId);
-        if (!Integer.valueOf(40).equals(meeting.getStatus())) {
+        if (!Integer.valueOf(MeetingStatusEnum.FINISHED.getCode()).equals(meeting.getStatus())) {
             throw new BusinessException(ErrorCode.MINUTES_STATUS_NOT_ALLOWED);
         }
         validateFile(dto);
@@ -86,7 +100,7 @@ public class MultipartUploadService {
 
         String extension = extension(dto.getFileName());
         String objectKey = "minutes/" + dto.getBizId() + "/"
-                + LocalDateTime.now().toLocalDate().toString().substring(0, 7).replace("-", "")
+                + MONTH_FORMAT.format(LocalDateTime.now())
                 + "/" + UUID.randomUUID() + "." + extension;
         ObjectStorage.MultipartInit multipart = storage.initMultipart(
                 objectKey, dto.getContentType());
@@ -105,7 +119,13 @@ public class MultipartUploadService {
         session.setCreatedBy(userId);
         session.setExpiresAt(LocalDateTime.now().plusHours(
                 properties.getUpload().getSessionTtlHours()));
-        sessionMapper.insert(session);
+        try {
+            sessionMapper.insert(session);
+        } catch (RuntimeException e) {
+            // 数据库没有会话行 → 存储侧 upload 永远不会被 complete/abort，主动清掉
+            abortQuietly(objectKey, multipart.uploadId());
+            throw e;
+        }
 
         return new MultipartInitVO(session.getUploadId(), session.getObjectKey(),
                 session.getChunkSize(), session.getTotalParts(), session.getExpiresAt());
@@ -127,14 +147,14 @@ public class MultipartUploadService {
         if (unique.isEmpty() || unique.size() > MAX_PART_URLS_PER_BATCH) {
             throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(), "每批分片数需在 1–50 之间");
         }
+        Duration ttl = Duration.ofMinutes(properties.getUpload().getPartUrlTtlMinutes());
         List<MultipartPartVO> result = new ArrayList<>();
         for (Integer partNumber : unique) {
             if (partNumber == null || partNumber < 1 || partNumber > session.getTotalParts()) {
                 throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(), "分片号越界");
             }
-            String url = storage.presignPart(session.getObjectKey(), uploadId, partNumber,
-                    PART_URL_TTL);
-            result.add(new MultipartPartVO(partNumber, url, LocalDateTime.now().plus(PART_URL_TTL)));
+            String url = storage.presignPart(session.getObjectKey(), uploadId, partNumber, ttl);
+            result.add(new MultipartPartVO(partNumber, url, LocalDateTime.now().plus(ttl)));
         }
         return result;
     }
@@ -176,25 +196,133 @@ public class MultipartUploadService {
     }
 
     /**
-     * 完成上传：校验分片数量/编号连续 → 合并 → 落 file_object → 会话 CAS 置已完成。
+     * 完成上传：校验 → 大小预检 → 合并（事务外）→ 短事务落库。
      *
      * <p>对已完成的会话重复调用是幂等的：返回第一次落库的文件信息，不再触碰对象存储。
-     * 分片列表不完整（数量不符或编号不是 1..n）时在调用存储前就按 70007 拒绝。</p>
+     * 空/null 分片列表、数量不符、编号不连续、元素为空都按 70007 处理。</p>
      */
-    @Transactional
     public FileCompleteVO complete(String uploadId, MultipartCompleteDTO dto, Long userId) {
         FileUploadSession session = requireSession(uploadId, userId);
         if (session.getStatus() == UploadSessionStatus.COMPLETED) {
-            FileObject existing = fileObjectMapper.selectById(session.getFileId());
-            if (existing == null) {
-                throw new BusinessException(ErrorCode.UPLOAD_SESSION_NOT_FOUND);
-            }
-            return new FileCompleteVO(existing.getId(), existing.getObjectKey(),
-                    existing.getSizeBytes());
+            return existingFile(session);
         }
-        if (dto == null || dto.getParts() == null
+        List<MultipartCompleteDTO.Part> parts = validatedParts(dto, session);
+
+        // 预检必须在 completeMultipart 之前：complete 会消费 uploadId，事后再发现大小不符无法重试
+        long uploadedSize = storage.listParts(session.getObjectKey(), uploadId).stream()
+                .mapToLong(ObjectStorage.UploadedPart::size)
+                .sum();
+        if (uploadedSize != session.getSizeBytes()) {
+            throw new BusinessException(ErrorCode.UPLOAD_INCOMPLETE.getCode(),
+                    "上传大小与声明不一致");
+        }
+
+        ObjectStorage.StoredObject object;
+        try {
+            object = storage.completeMultipart(session.getObjectKey(), uploadId,
+                    parts.stream()
+                            .map(part -> new ObjectStorage.PartETag(
+                                    part.getPartNumber(), part.getEtag()))
+                            .toList());
+        } catch (BusinessException e) {
+            // 并发完成/已被合并：会话若已变成完成态，按幂等返回第一次的文件
+            if (e.getCode() == ErrorCode.UPLOAD_SESSION_NOT_FOUND.getCode()) {
+                FileUploadSession latest = sessionMapper.selectByUploadId(uploadId);
+                if (latest != null && latest.getCreatedBy().equals(userId)
+                        && latest.getStatus() == UploadSessionStatus.COMPLETED) {
+                    return existingFile(latest);
+                }
+            }
+            throw e;
+        }
+
+        if (object.size() != session.getSizeBytes()) {
+            // 合并已消费 uploadId：删对象 + 中止会话，绝不能留在进行中（否则永远无法重试）
+            deleteQuietly(object.objectKey());
+            markStatusQuietly(uploadId, UploadSessionStatus.ABORTED);
+            throw new BusinessException(ErrorCode.UPLOAD_INCOMPLETE.getCode(),
+                    "上传大小与声明不一致");
+        }
+
+        try {
+            return transactionTemplate.execute(status -> persistCompleted(uploadId, userId));
+        } catch (RuntimeException e) {
+            // 对象已合并但没有 file_object 指向它：best-effort 清掉，避免泄漏
+            deleteQuietly(object.objectKey());
+            throw e;
+        }
+    }
+
+    /**
+     * 中止上传（幂等）：已完成/已中止/已过期都是空操作。
+     *
+     * <p>不复用 {@link #requireSession}：那条路径会把 ABORTED/EXPIRED 当错误拒绝，
+     * 而"重复 DELETE"应当是成功（客户端超时重试的常见场景）。</p>
+     */
+    public void abort(String uploadId, Long userId) {
+        FileUploadSession session = sessionMapper.selectByUploadId(uploadId);
+        if (session == null || !session.getCreatedBy().equals(userId)) {
+            throw new BusinessException(ErrorCode.UPLOAD_SESSION_NOT_FOUND);
+        }
+        if (session.getStatus() == UploadSessionStatus.COMPLETED
+                || session.getStatus() == UploadSessionStatus.ABORTED
+                || session.getStatus() == UploadSessionStatus.EXPIRED) {
+            return;
+        }
+        storage.abortMultipart(session.getObjectKey(), uploadId);
+        sessionMapper.markStatus(uploadId, UploadSessionStatus.ABORTED);
+    }
+
+    // ---------- 内部 ----------
+
+    /**
+     * 短事务：行锁复查 → 插 file_object → CAS 标记完成。
+     * markCompleted 影响 0 行说明会话已被并发改走，抛 70006 让整个事务回滚（file_object 不落库）。
+     */
+    private FileCompleteVO persistCompleted(String uploadId, Long userId) {
+        FileUploadSession locked = sessionMapper.selectByUploadIdForUpdate(uploadId);
+        if (locked == null || !locked.getCreatedBy().equals(userId)) {
+            throw new BusinessException(ErrorCode.UPLOAD_SESSION_NOT_FOUND);
+        }
+        if (locked.getStatus() == UploadSessionStatus.COMPLETED) {
+            return existingFile(locked);
+        }
+        if (locked.getStatus() != UploadSessionStatus.IN_PROGRESS) {
+            throw new BusinessException(ErrorCode.UPLOAD_SESSION_NOT_FOUND);
+        }
+        FileObject file = new FileObject();
+        file.setBizType(locked.getBizType());
+        file.setBizId(locked.getBizId());
+        file.setObjectKey(locked.getObjectKey());
+        file.setOriginalName(locked.getOriginalName());
+        file.setSizeBytes(locked.getSizeBytes());
+        file.setContentType(locked.getContentType());
+        file.setStatus(FileObjectStatus.NORMAL);
+        file.setUploadedBy(userId);
+        fileObjectMapper.insert(file);
+        int rows = sessionMapper.markCompleted(uploadId, file.getId());
+        if (rows == 0) {
+            throw new BusinessException(ErrorCode.UPLOAD_SESSION_NOT_FOUND);
+        }
+        return new FileCompleteVO(file.getId(), file.getObjectKey(), file.getSizeBytes());
+    }
+
+    /**
+     * 校验分片列表：null/空、数量不符、元素为空、编号不连续/重复都按 70007。
+     *
+     * @return 按分片号升序的副本（存储实现要求 1..n 顺序）
+     */
+    private List<MultipartCompleteDTO.Part> validatedParts(MultipartCompleteDTO dto,
+                                                           FileUploadSession session) {
+        if (dto == null || dto.getParts() == null || dto.getParts().isEmpty()
                 || dto.getParts().size() != session.getTotalParts()) {
             throw new BusinessException(ErrorCode.UPLOAD_INCOMPLETE);
+        }
+        for (MultipartCompleteDTO.Part part : dto.getParts()) {
+            if (part == null || part.getPartNumber() == null
+                    || part.getEtag() == null || part.getEtag().isBlank()) {
+                throw new BusinessException(ErrorCode.UPLOAD_INCOMPLETE);
+            }
         }
         List<MultipartCompleteDTO.Part> sorted = dto.getParts().stream()
                 .sorted(Comparator.comparingInt(MultipartCompleteDTO.Part::getPartNumber))
@@ -204,41 +332,17 @@ public class MultipartUploadService {
                 throw new BusinessException(ErrorCode.UPLOAD_INCOMPLETE);
             }
         }
-        ObjectStorage.StoredObject object = storage.completeMultipart(
-                session.getObjectKey(), uploadId,
-                sorted.stream()
-                        .map(part -> new ObjectStorage.PartETag(
-                                part.getPartNumber(), part.getEtag()))
-                        .toList());
-        if (object.size() != session.getSizeBytes()) {
-            throw new BusinessException(ErrorCode.UPLOAD_INCOMPLETE.getCode(),
-                    "上传大小与声明不一致");
-        }
-
-        FileObject file = new FileObject();
-        file.setBizType(session.getBizType());
-        file.setBizId(session.getBizId());
-        file.setObjectKey(session.getObjectKey());
-        file.setOriginalName(session.getOriginalName());
-        file.setSizeBytes(session.getSizeBytes());
-        file.setContentType(session.getContentType());
-        file.setStatus(FileObjectStatus.NORMAL);
-        file.setUploadedBy(userId);
-        fileObjectMapper.insert(file);
-        sessionMapper.markCompleted(uploadId, file.getId());
-        return new FileCompleteVO(file.getId(), file.getObjectKey(), file.getSizeBytes());
+        return sorted;
     }
 
-    /**
-     * 中止上传：已完成是幂等空操作（不能删掉已合并的对象），其余状态清理存储后置已中止。
-     */
-    public void abort(String uploadId, Long userId) {
-        FileUploadSession session = requireSession(uploadId, userId);
-        if (session.getStatus() == UploadSessionStatus.COMPLETED) {
-            return;
+    /** 读取会话已关联的文件；数据不一致（file_id 悬空）按会话不存在处理。 */
+    private FileCompleteVO existingFile(FileUploadSession session) {
+        FileObject existing = fileObjectMapper.selectById(session.getFileId());
+        if (existing == null) {
+            throw new BusinessException(ErrorCode.UPLOAD_SESSION_NOT_FOUND);
         }
-        storage.abortMultipart(session.getObjectKey(), uploadId);
-        sessionMapper.markStatus(uploadId, UploadSessionStatus.ABORTED);
+        return new FileCompleteVO(existing.getId(), existing.getObjectKey(),
+                existing.getSizeBytes());
     }
 
     /**
@@ -265,8 +369,10 @@ public class MultipartUploadService {
     }
 
     private void validateFile(MultipartInitDTO dto) {
-        if (dto.getFileSize() > properties.getUpload().getMaxFileSizeBytes()) {
-            throw new BusinessException(ErrorCode.FILE_TOO_LARGE.getCode(), "音频不能超过 2GiB");
+        Long maxBytes = properties.getUpload().getMaxFileSizeBytes();
+        if (dto.getFileSize() > maxBytes) {
+            throw new BusinessException(ErrorCode.FILE_TOO_LARGE.getCode(),
+                    "音频不能超过 " + maxBytes + " 字节");
         }
         String extension = extension(dto.getFileName());
         if (!AUDIO_EXTENSIONS.contains(extension)
@@ -282,5 +388,29 @@ public class MultipartUploadService {
             throw new BusinessException(ErrorCode.FILE_TYPE_NOT_ALLOWED);
         }
         return fileName.substring(dot + 1).toLowerCase();
+    }
+
+    private void abortQuietly(String objectKey, String uploadId) {
+        try {
+            storage.abortMultipart(objectKey, uploadId);
+        } catch (Exception e) {
+            log.warn("[分片上传] 初始化失败后清理存储会话失败，uploadId={}", uploadId, e);
+        }
+    }
+
+    private void deleteQuietly(String objectKey) {
+        try {
+            storage.delete(objectKey);
+        } catch (Exception e) {
+            log.warn("[分片上传] 清理已合并对象失败，objectKey={}", objectKey, e);
+        }
+    }
+
+    private void markStatusQuietly(String uploadId, int status) {
+        try {
+            sessionMapper.markStatus(uploadId, status);
+        } catch (Exception e) {
+            log.warn("[分片上传] 更新会话状态失败，uploadId={}, status={}", uploadId, status, e);
+        }
     }
 }

@@ -45,6 +45,14 @@
         WHERE upload_id = #{uploadId}
     </select>
 
+    <!-- 完成上传的事务内行锁：串行化"复查 → 落库 → 标记完成"，防两条 file_object -->
+    <select id="selectByUploadIdForUpdate" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM file_upload_session
+        WHERE upload_id = #{uploadId}
+        FOR UPDATE
+    </select>
+
     <!-- 完成上传：CAS 仅允许 进行中(0) → 已完成(10)，并回填 file_object.id -->
     <update id="markCompleted">
         UPDATE file_upload_session
