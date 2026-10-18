@@ -9,7 +9,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.RequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.net.URI;
@@ -79,6 +81,32 @@ class LocalFileControllerTest {
                         .param("sig", query.get("sig"))
                         .contentType(MediaType.APPLICATION_OCTET_STREAM)
                         .content(new byte[9]))
+                .andExpect(status().isPayloadTooLarge());
+        assertThat(tempDir.resolve(init.uploadId()).resolve("part-1")).doesNotExist();
+    }
+
+    @Test
+    void putRejectsStreamOverLimitWhenContentLengthIsUnderstated() throws Exception {
+        ObjectStorage.MultipartInit init = storage.initMultipart(OBJECT_KEY, CONTENT_TYPE);
+        String url = storage.presignPart(OBJECT_KEY, init.uploadId(), 1, TTL);
+        Map<String, String> query = queryParams(url);
+
+        // 模拟 chunked / 长度不可信：Content-Length 声称 4 字节，实际流有 9 字节
+        RequestBuilder request = servletContext -> {
+            MockHttpServletRequest mockRequest = new MockHttpServletRequest(
+                    servletContext, "PUT", pathOf(url)) {
+                @Override
+                public long getContentLengthLong() {
+                    return 4;
+                }
+            };
+            mockRequest.setParameter("expires", query.get("expires"));
+            mockRequest.setParameter("sig", query.get("sig"));
+            mockRequest.setContent(new byte[9]);
+            return mockRequest;
+        };
+
+        mockMvc.perform(request)
                 .andExpect(status().isPayloadTooLarge());
         assertThat(tempDir.resolve(init.uploadId()).resolve("part-1")).doesNotExist();
     }

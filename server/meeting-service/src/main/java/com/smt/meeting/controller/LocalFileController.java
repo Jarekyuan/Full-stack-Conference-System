@@ -15,14 +15,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.InvalidMediaTypeException;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
@@ -61,16 +59,22 @@ public class LocalFileController {
                                         @PathVariable int partNumber,
                                         @RequestParam long expires,
                                         @RequestParam String sig,
-                                        HttpServletRequest request,
-                                        @RequestBody byte[] body) {
+                                        HttpServletRequest request) {
         if (!storage.verifyToken("PUT", uploadId, partNumber, expires, sig)) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
         long maxBytes = minutesProperties.getUpload().getChunkSizeBytes();
-        if (request.getContentLengthLong() > maxBytes || body.length > maxBytes) {
+        // 先看 Content-Length，避免把超大请求读进内存；无长度（chunked）时由流式写入兜底
+        if (request.getContentLengthLong() > maxBytes) {
             return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).build();
         }
-        String etag = storage.writePart(uploadId, partNumber, body);
+        String etag;
+        try {
+            etag = storage.writePart(
+                    uploadId, partNumber, request.getInputStream(), maxBytes);
+        } catch (IOException e) {
+            throw new UncheckedIOException("读取上传分片失败", e);
+        }
         return ResponseEntity.ok().eTag("\"" + etag + "\"").build();
     }
 
@@ -184,6 +188,9 @@ public class LocalFileController {
         if (e.getCode() == ErrorCode.UPLOAD_INCOMPLETE.getCode()) {
             return ResponseEntity.status(HttpStatus.CONFLICT).build();
         }
+        if (e.getCode() == ErrorCode.FILE_TOO_LARGE.getCode()) {
+            return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).build();
+        }
         if (e.getCode() == ErrorCode.PARAM_ERROR.getCode()) {
             return ResponseEntity.badRequest().build();
         }
@@ -197,8 +204,7 @@ public class LocalFileController {
 
     @ExceptionHandler({
             MissingServletRequestParameterException.class,
-            MethodArgumentTypeMismatchException.class,
-            HttpMessageNotReadableException.class
+            MethodArgumentTypeMismatchException.class
     })
     public ResponseEntity<Void> handleBadRequest(Exception e) {
         return ResponseEntity.badRequest().build();

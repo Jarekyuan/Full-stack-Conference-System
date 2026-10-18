@@ -6,17 +6,30 @@ import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.ByteArrayInputStream;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -218,6 +231,116 @@ class LocalObjectStorageTest {
     }
 
     @Test
+    void writePartRejectsStreamOverLimit() throws Exception {
+        LocalObjectStorage storage = storage();
+        ObjectStorage.MultipartInit init = storage.initMultipart(OBJECT_KEY, CONTENT_TYPE);
+
+        assertCode(70005, () -> storage.writePart(
+                init.uploadId(), 1, new ByteArrayInputStream(utf8("12345")), 4));
+
+        Path session = tempDir.resolve(init.uploadId());
+        assertThat(session.resolve("part-1")).doesNotExist();
+        try (Stream<Path> files = Files.list(session)) {
+            assertThat(files.map(path -> path.getFileName().toString()).toList())
+                    .noneMatch(name -> name.endsWith(".tmp"));
+        }
+    }
+
+    @Test
+    void concurrentWritesToSamePartAreNotMixed() throws Exception {
+        LocalObjectStorage storage = storage();
+        ObjectStorage.MultipartInit init = storage.initMultipart(OBJECT_KEY, CONTENT_TYPE);
+        int writers = 8;
+        ExecutorService pool = Executors.newFixedThreadPool(writers);
+        try {
+            for (int round = 0; round < 5; round++) {
+                List<byte[]> bodies = new ArrayList<>();
+                List<Future<String>> futures = new ArrayList<>();
+                for (int i = 0; i < writers; i++) {
+                    byte[] body = utf8(("round-" + round + "-writer-" + i + "-").repeat(200));
+                    bodies.add(body);
+                    futures.add(pool.submit(
+                            () -> storage.writePart(init.uploadId(), 1, body)));
+                }
+                List<String> etags = new ArrayList<>();
+                for (Future<String> future : futures) {
+                    etags.add(future.get(30, TimeUnit.SECONDS));
+                }
+
+                Path session = tempDir.resolve(init.uploadId());
+                byte[] actual = Files.readAllBytes(session.resolve("part-1"));
+                assertThat(bodies.stream().anyMatch(body -> Arrays.equals(body, actual)))
+                        .isTrue();
+                String expectedEtag = md5Hex(actual);
+                assertThat(etags).contains(expectedEtag);
+
+                List<ObjectStorage.UploadedPart> parts =
+                        storage.listParts(OBJECT_KEY, init.uploadId());
+                assertThat(parts).hasSize(1);
+                assertThat(parts.get(0).etag()).isEqualTo(expectedEtag);
+                assertThat(parts.get(0).size()).isEqualTo(actual.length);
+
+                try (Stream<Path> files = Files.list(session)) {
+                    assertThat(files.map(path -> path.getFileName().toString()).toList())
+                            .noneMatch(name -> name.endsWith(".tmp"));
+                }
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void concurrentCompletesExactlyOneSucceeds() throws Exception {
+        LocalObjectStorage storage = storage();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 0; round < 5; round++) {
+                ObjectStorage.MultipartInit init = initWithTwoParts(storage);
+                List<ObjectStorage.PartETag> parts =
+                        partEtags(storage.listParts(OBJECT_KEY, init.uploadId()));
+                CountDownLatch start = new CountDownLatch(1);
+                Future<ObjectStorage.StoredObject> first = pool.submit(() -> {
+                    start.await();
+                    return storage.completeMultipart(OBJECT_KEY, init.uploadId(), parts);
+                });
+                Future<ObjectStorage.StoredObject> second = pool.submit(() -> {
+                    start.await();
+                    return storage.completeMultipart(OBJECT_KEY, init.uploadId(), parts);
+                });
+                start.countDown();
+
+                int success = 0;
+                int notFound = 0;
+                for (Future<ObjectStorage.StoredObject> future : List.of(first, second)) {
+                    try {
+                        assertThat(future.get(30, TimeUnit.SECONDS).size()).isEqualTo(11);
+                        success++;
+                    } catch (ExecutionException e) {
+                        assertThat(e.getCause()).isInstanceOfSatisfying(
+                                BusinessException.class,
+                                exception -> assertThat(exception.getCode()).isEqualTo(70006));
+                        notFound++;
+                    }
+                }
+                assertThat(success).isEqualTo(1);
+                assertThat(notFound).isEqualTo(1);
+                assertThat(storage.readObject(init.uploadId())).isEqualTo(utf8("hello world"));
+                assertThat(storage.head(OBJECT_KEY).size()).isEqualTo(11);
+
+                Path session = tempDir.resolve(init.uploadId());
+                try (Stream<Path> files = Files.list(session)) {
+                    assertThat(files.map(path -> path.getFileName().toString()).toList())
+                            .containsExactlyInAnyOrder(
+                                    "object.bin", "content-type.txt", "object-key.txt");
+                }
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
     void completeRejectsWrongEtag() {
         LocalObjectStorage storage = storage();
         ObjectStorage.MultipartInit init = initWithTwoParts(storage);
@@ -363,6 +486,15 @@ class LocalObjectStorageTest {
 
     private static byte[] utf8(String value) {
         return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static String md5Hex(byte[] value) {
+        try {
+            return HexFormat.of().formatHex(
+                    MessageDigest.getInstance("MD5").digest(value));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("MD5 不可用", e);
+        }
     }
 
     private static void assertCode(int code, ThrowingCallable callable) {

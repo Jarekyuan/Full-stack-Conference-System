@@ -6,6 +6,7 @@ import com.smt.meeting.config.StorageProperties;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -28,6 +29,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -47,7 +50,6 @@ public class LocalObjectStorage implements ObjectStorage {
             "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
     private static final Pattern PART_FILE = Pattern.compile("part-\\d+");
     private static final String OBJECT_FILE = "object.bin";
-    private static final String OBJECT_TMP = "object.bin.tmp";
     private static final String CONTENT_TYPE_FILE = "content-type.txt";
     private static final String OBJECT_KEY_FILE = "object-key.txt";
     private static final String DEFAULT_CONTENT_TYPE = "application/octet-stream";
@@ -55,6 +57,11 @@ public class LocalObjectStorage implements ObjectStorage {
     private final Path root;
     private final String baseUrl;
     private final byte[] secret = UUID.randomUUID().toString().getBytes(StandardCharsets.UTF_8);
+    /**
+     * 按 uploadId 串行化 complete：避免两个 complete 并发时交错清理分片。
+     * 分配后不回收（uploadId 唯一，本地实现生命周期有限）。
+     */
+    private final ConcurrentHashMap<String, ReentrantLock> uploadLocks = new ConcurrentHashMap<>();
 
     public LocalObjectStorage(StorageProperties properties) {
         this.root = Paths.get(properties.getLocal().getDir()).toAbsolutePath().normalize();
@@ -106,6 +113,18 @@ public class LocalObjectStorage implements ObjectStorage {
     @Override
     public StoredObject completeMultipart(String objectKey, String uploadId, List<PartETag> parts) {
         Path dir = dir(uploadId);
+        ReentrantLock lock = uploadLocks.computeIfAbsent(uploadId, key -> new ReentrantLock());
+        lock.lock();
+        try {
+            return completeMultipartLocked(dir, objectKey, uploadId, parts);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private StoredObject completeMultipartLocked(Path dir, String objectKey,
+                                                 String uploadId, List<PartETag> parts) {
+        // 持锁后重新校验：并发的另一个 complete 可能已经完成本次上传
         requireActiveSession(dir);
         requireObjectKey(dir, objectKey);
         Map<Integer, UploadedPart> uploaded = uploadedByNumber(dir);
@@ -131,10 +150,10 @@ public class LocalObjectStorage implements ObjectStorage {
             throw incomplete();
         }
 
-        Path temp = dir.resolve(OBJECT_TMP);
+        // 唯一临时名：并发 complete 即使绕过锁也不会写同一个临时文件
+        Path temp = dir.resolve(OBJECT_FILE + "." + UUID.randomUUID() + ".tmp");
         Path object = dir.resolve(OBJECT_FILE);
         try {
-            Files.deleteIfExists(temp);
             try (OutputStream output = Files.newOutputStream(temp)) {
                 for (int i = 1; i <= uploaded.size(); i++) {
                     try (InputStream input = Files.newInputStream(dir.resolve("part-" + i))) {
@@ -149,11 +168,7 @@ public class LocalObjectStorage implements ObjectStorage {
             }
             return head(objectKey);
         } catch (IOException e) {
-            try {
-                Files.deleteIfExists(temp);
-            } catch (IOException ignored) {
-                // 保留原始异常
-            }
+            deleteQuietly(temp);
             throw new UncheckedIOException("合并本地分片失败", e);
         }
     }
@@ -201,26 +216,55 @@ public class LocalObjectStorage implements ObjectStorage {
 
     /** 仅供 LocalFileController 使用：写入分片并返回 ETag（MD5）。 */
     public String writePart(String uploadId, int partNumber, byte[] body) {
-        if (partNumber < 1 || body == null) {
+        if (body == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR);
+        }
+        return writePart(uploadId, partNumber, new ByteArrayInputStream(body), body.length);
+    }
+
+    /**
+     * 流式写入分片：超过 {@code maxBytes} 立即失败（70005）并清理临时文件。
+     * 临时文件带随机后缀，同一分片的并发写不会互相混入字节；最终原子替换，last-writer-wins。
+     */
+    public String writePart(String uploadId, int partNumber, InputStream input, long maxBytes) {
+        if (partNumber < 1 || input == null || maxBytes < 0) {
             throw new BusinessException(ErrorCode.PARAM_ERROR);
         }
         Path dir = dir(uploadId);
         requireActiveSession(dir);
-        Path part = dir.resolve("part-" + partNumber);
-        Path temp = dir.resolve("part-" + partNumber + ".tmp");
-        try {
-            Files.write(temp, body);
-            Files.move(temp, part,
-                    StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            return md5(part);
-        } catch (IOException e) {
-            try {
-                Files.deleteIfExists(temp);
-            } catch (IOException ignored) {
-                // 保留原始异常
+        Path temp = dir.resolve("part-" + partNumber + "." + UUID.randomUUID() + ".tmp");
+        MessageDigest digest = md5Digest();
+        long total = 0;
+        try (OutputStream output = Files.newOutputStream(temp)) {
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                total += read;
+                if (total > maxBytes) {
+                    throw new BusinessException(ErrorCode.FILE_TOO_LARGE);
+                }
+                digest.update(buffer, 0, read);
+                output.write(buffer, 0, read);
             }
+        } catch (BusinessException e) {
+            deleteQuietly(temp);
+            throw e;
+        } catch (IOException e) {
+            deleteQuietly(temp);
+            throw new UncheckedIOException("写入本地分片失败", e);
+        } catch (RuntimeException e) {
+            deleteQuietly(temp);
+            throw e;
+        }
+        String etag = HexFormat.of().formatHex(digest.digest());
+        try {
+            Files.move(temp, dir.resolve("part-" + partNumber),
+                    StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            deleteQuietly(temp);
             throw new UncheckedIOException("写入本地分片失败", e);
         }
+        return etag;
     }
 
     /** 仅供 LocalFileController 使用：读取完整对象。 */
@@ -385,18 +429,30 @@ public class LocalObjectStorage implements ObjectStorage {
     }
 
     private String md5(Path path) throws IOException {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("MD5");
-            byte[] buffer = new byte[8192];
-            try (InputStream input = Files.newInputStream(path)) {
-                int read;
-                while ((read = input.read(buffer)) != -1) {
-                    digest.update(buffer, 0, read);
-                }
+        MessageDigest digest = md5Digest();
+        byte[] buffer = new byte[8192];
+        try (InputStream input = Files.newInputStream(path)) {
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                digest.update(buffer, 0, read);
             }
-            return HexFormat.of().formatHex(digest.digest());
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private static MessageDigest md5Digest() {
+        try {
+            return MessageDigest.getInstance("MD5");
         } catch (NoSuchAlgorithmException e) {
-            throw new IOException("计算 MD5 失败", e);
+            throw new IllegalStateException("MD5 不可用", e);
+        }
+    }
+
+    private static void deleteQuietly(Path path) {
+        try {
+            Files.deleteIfExists(path);
+        } catch (IOException ignored) {
+            // 清理失败不覆盖原始异常
         }
     }
 

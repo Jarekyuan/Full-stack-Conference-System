@@ -34,6 +34,7 @@ public class CosObjectStorage implements ObjectStorage {
     private static final String NO_SUCH_KEY = "NoSuchKey";
     private static final String INVALID_PART = "InvalidPart";
     private static final String INVALID_PART_ORDER = "InvalidPartOrder";
+    private static final String ENTITY_TOO_SMALL = "EntityTooSmall";
 
     private final COSClient client;
     private final CosProperties properties;
@@ -88,6 +89,9 @@ public class CosObjectStorage implements ObjectStorage {
 
     @Override
     public StoredObject completeMultipart(String objectKey, String uploadId, List<PartETag> parts) {
+        if (parts == null || parts.isEmpty()) {
+            throw new BusinessException(ErrorCode.UPLOAD_INCOMPLETE);
+        }
         List<com.qcloud.cos.model.PartETag> cosParts = parts.stream()
                 .sorted((a, b) -> Integer.compare(a.partNumber(), b.partNumber()))
                 .map(part -> new com.qcloud.cos.model.PartETag(part.partNumber(), part.etag()))
@@ -156,17 +160,26 @@ public class CosObjectStorage implements ObjectStorage {
             return new BusinessException(ErrorCode.UPLOAD_SESSION_NOT_FOUND);
         }
         String errorCode = e.getErrorCode();
-        if (INVALID_PART.equals(errorCode) || INVALID_PART_ORDER.equals(errorCode)) {
+        if (INVALID_PART.equals(errorCode) || INVALID_PART_ORDER.equals(errorCode)
+                || ENTITY_TOO_SMALL.equals(errorCode)) {
             return new BusinessException(ErrorCode.UPLOAD_INCOMPLETE);
         }
         return e;
     }
 
     private static boolean isNoSuchUpload(CosServiceException e) {
-        return e.getStatusCode() == 404 || NO_SUCH_UPLOAD.equals(e.getErrorCode());
+        String errorCode = e.getErrorCode();
+        if (errorCode != null && !errorCode.isBlank()) {
+            return NO_SUCH_UPLOAD.equals(errorCode);
+        }
+        return e.getStatusCode() == 404;
     }
 
     private static boolean isNoSuchKey(CosServiceException e) {
-        return e.getStatusCode() == 404 || NO_SUCH_KEY.equals(e.getErrorCode());
+        String errorCode = e.getErrorCode();
+        if (errorCode != null && !errorCode.isBlank()) {
+            return NO_SUCH_KEY.equals(errorCode);
+        }
+        return e.getStatusCode() == 404;
     }
 }

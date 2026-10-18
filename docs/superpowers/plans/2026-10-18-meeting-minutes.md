@@ -2919,15 +2919,20 @@ git commit -m "feat(minutes): ObjectStorage 抽象 + COS/本地实现"
   `ObjectStorage`），否则 `LocalFileController` 按具体类型注入会失败、local 模式启动即崩。
 - **错误契约**：接口 Javadoc 固化 70006/70007 语义；本地实现补齐会话/完成态校验、对象键校验、
   ETag 归一化（去引号、忽略大小写）、分片编号必须为 1..n、重复/缺失/空分片一律 70007。
-- **本地原子写**：分片先写 `part-N.tmp` 再 `ATOMIC_MOVE`；完成后写 `object.bin.tmp` 再原子替换，
-  成功后删除 `part-*`；已完成后 `write/list/presignPart` 均返回 70006。
+- **本地并发安全**：分片写唯一临时文件 `part-N.{uuid}.tmp`，边写边算 MD5，落盘后 `ATOMIC_MOVE`
+  替换 `part-N`（last-writer-wins，不会混字节）；complete 用唯一 `object.bin.{uuid}.tmp` +
+  按 uploadId 的 `ReentrantLock` 串行化，成功后原子替换并删除 `part-*`，失败清理临时文件；
+  已完成后 `write/list/presignPart` 均返回 70006。
 - **预签名**：uploadId 用严格 UUID 正则 + `UUID.fromString` + `resolved.startsWith(root)` 校验；
   HMAC 密钥为进程内随机值，重启后旧 URL 失效（仅本地实现）。
-- **上传端点**：PUT 校验 `chunkSizeBytes` 上限（413）；GET 改为流式响应，支持单段 `Range`（206/416），
-  完整 GET 返回 `Accept-Ranges`，不再把整个对象读入堆；异常映射 400/403/404/409/500。
+- **上传端点**：去掉 `@RequestBody byte[]`，先查 `Content-Length`（超限直接 413，不缓冲），
+  再流式写入；流式过程中超 `chunkSizeBytes` 抛 70005 → 413（覆盖 chunked/长度不可信）；
+  GET 改为流式响应，支持单段 `Range`（206/416），完整 GET 返回 `Accept-Ranges`，不再进堆；
+  异常映射 400/403/404/409/413/500。COS 的 `EntityTooSmall` 也翻译为 70007。
 - **依赖**：`cos_api` 升至 5.6.283、`poi-ooxml` 升至 5.5.1（均可解析）；POI 的 `log4j-api`
   被 Spring Boot BOM 管理为 2.21.1（POI 5.5.1 自身 BOM 为 2.24.3），编译无冲突，运行期待 Task 8 验证。
-- **测试**：`LocalObjectStorageTest` 20 例、`LocalFileControllerTest` 8 例（含 206 Range），
+- **测试**：`LocalObjectStorageTest` 24 例（含 8 线程并发写同一分片、并发 complete 恰好一成功、
+  流式超限 70005）、`LocalFileControllerTest` 9 例（含 206 Range、Content-Length 撒谎时流式兜底 413），
   `RoomMapperTest` 4/4；local provider 上下文烟雾测试 4/4。
 
 ---
