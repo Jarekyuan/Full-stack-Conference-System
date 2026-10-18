@@ -120,6 +120,30 @@ class MinutesRequestSizeFilterTest {
     }
 
     @Test
+    void rejectsInternalWhitespaceId() throws Exception {
+        // 解码后为 "1 2"：Spring 的数字转换会忽略空白，过滤器不再依赖数字形式
+        assertRejected("/meetings/1%202/minutes/import");
+    }
+
+    @Test
+    void rejectsIdeographicSpaceId() throws Exception {
+        // U+3000 全角空格包裹的 "1"
+        assertRejected("/meetings/%E3%80%801%E3%80%80/minutes/import");
+    }
+
+    @Test
+    void rejectsArabicIndicDigitId() throws Exception {
+        // U+0661 阿拉伯-印度数字 1
+        assertRejected("/meetings/%D9%A1/minutes/import");
+    }
+
+    @Test
+    void rejectsFullwidthDigitId() throws Exception {
+        // U+FF11 全角数字 1
+        assertRejected("/meetings/%EF%BC%91/minutes/import");
+    }
+
+    @Test
     void passesNonImportPathUnchanged() throws Exception {
         MockHttpServletResponse response = new MockHttpServletResponse();
         MockFilterChain chain = new MockFilterChain();

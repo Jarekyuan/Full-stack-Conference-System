@@ -30,12 +30,13 @@ public class MinutesRequestSizeFilter extends OncePerRequestFilter {
     private static final long MAX_BYTES = 8L * 1024 * 1024;
 
     /**
-     * 与 Spring 的 {@code @PathVariable Long} 转换口径对齐：允许前后空白与正负号，
-     * 否则 {@code /meetings/+1/...}、{@code /meetings/%201%20/...}、{@code /meetings/-1/...}
-     * 都会进入控制器与 {@code @RequestBody}，却绕过这里的大小限制。
+     * 按端点形状匹配，id 段不限定字符集：大小上限不依赖 id 的取值，若试图镜像
+     * Spring {@code @PathVariable Long} 的转换规则（任意 Unicode 数字、任意位置空白、
+     * 正负号等）反而会漏掉 {@code 1 2}、全角/阿拉伯-印度数字等能进入控制器的形式。
+     * 这里只要 id 是"单个非斜杠段"即可；不存在/无权限的 id 由 Service 层处理。
      */
     private static final Pattern IMPORT_PATH =
-            Pattern.compile(".*/meetings/\\s*[+-]?\\d+\\s*/minutes/import/?");
+            Pattern.compile(".*/meetings/[^/]+/minutes/import/?");
 
     private final ObjectMapper objectMapper;
 
