@@ -7110,7 +7110,7 @@ export default function MeetingMinutesPanel({ meeting }: Props) {
 }
 ```
 
-- [ ] **Step 4: 创建 `AudioTranscriptWorkspace` 的可编译骨架（Task 14 补齐交互）**
+- [ ] **Step 4: 创建 `AudioTranscriptWorkspace` 的可编译骨架（Task 15 替换为最终工作台）**
 
 ```tsx
 import { Card } from 'antd'
@@ -7130,7 +7130,8 @@ export default function AudioTranscriptWorkspace(_props: Props) {
 ```
 
 > 这不是空实现：它给面板一个真实的加载壳，保证 Task 13 可独立编译与提交；
-> Task 14 会把内容替换为播放器 + 转写 + AI/洞察。
+> Task 15 会把内容替换为播放器 + 转写 + AI/洞察（Task 14 只创建播放器/转写列表/重命名弹窗，
+> 不改动本文件）。
 
 - [ ] **Step 5: 类型检查**
 
@@ -7153,13 +7154,16 @@ git commit -m "feat(minutes): 纪要上传器、空态与面板编排"
 
 ---
 
-## Task 14: 播放器、转写列表、发言人重命名与工作台
+## Task 14: 播放器、转写列表与发言人重命名
+
+> **Task 14/15 边界**：本 Task 只创建 `AudioPlayer` / `TranscriptList` / `SpeakerRenameModal`，
+> **不修改** `AudioTranscriptWorkspace.tsx`；工作台组装（含 AI/洞察）属于 Task 15。
+> 下方 Step 4 的工作台代码保留作 Task 15 的实现参考，Step 4 在 Task 15 执行。
 
 **Files:**
 - Create: `web/src/components/minutes/AudioPlayer.tsx`
 - Create: `web/src/components/minutes/TranscriptList.tsx`
 - Create: `web/src/components/minutes/SpeakerRenameModal.tsx`
-- Replace: `web/src/components/minutes/AudioTranscriptWorkspace.tsx`
 
 - [ ] **Step 1: 创建 `AudioPlayer.tsx`**
 
@@ -7468,7 +7472,7 @@ export default function SpeakerRenameModal({ open, speaker, onClose, onSubmit }:
 }
 ```
 
-- [ ] **Step 4: 替换 `AudioTranscriptWorkspace.tsx`**
+- [ ] **Step 4: 替换 `AudioTranscriptWorkspace.tsx`（执行归属：Task 15）**
 
 ```tsx
 /**
@@ -7725,30 +7729,39 @@ export default function AudioTranscriptWorkspace({
 }
 ```
 
-- [ ] **Step 5: 说明：本 Task 的完整类型检查放到 Task 15**
+- [ ] **Step 5: 类型检查（Task 14 范围）**
 
-`AudioTranscriptWorkspace` 引用了 Task 15 才创建的 `MinutesAiBar` / `MinutesSummary` /
-`MinutesInsights`，因此本 Task 先提交播放器、转写列表、重命名弹窗与工作台主体；
-Task 15 创建完三个展示组件后统一跑 `npm run check`。
+```bash
+cd /Users/jonas/Desktop/项目实践/new-meeting-systems/web
+npx tsc --noEmit
+npx eslint src/components/minutes --max-warnings 0
+```
 
-- [ ] **Step 6: 提交（可与 Task 15 合并为一个 commit）**
+Expected: 退出码 0。Task 14 **不修改** `AudioTranscriptWorkspace.tsx`，因此不依赖 Task 15 的
+`MinutesAiBar` / `MinutesSummary` / `MinutesInsights`；工作台组装后的完整 `npm run check` 放到 Task 15。
+
+- [ ] **Step 6: 提交（Task 14 三个组件单独提交）**
 
 ```bash
 git add web/src/components/minutes/AudioPlayer.tsx \
   web/src/components/minutes/TranscriptList.tsx \
-  web/src/components/minutes/SpeakerRenameModal.tsx \
-  web/src/components/minutes/AudioTranscriptWorkspace.tsx
-git commit -m "feat(minutes): 语音文本联动工作台"
+  web/src/components/minutes/SpeakerRenameModal.tsx
+git commit -m "feat(minutes): 播放器、转写列表与发言人重命名"
 ```
 
 ---
 
 ## Task 15: AI 纪要、会议洞察与导出 UI
 
+> **Task 14/15 边界**：Task 14 只创建 `AudioPlayer` / `TranscriptList` / `SpeakerRenameModal`，
+> **不修改** `AudioTranscriptWorkspace.tsx`；本 Task 负责把这三个组件与下面三个 AI/洞察展示组件
+> 组装进工作台，并替换 Task 13 的临时加载壳（实现参考 Task 14 Step 4）。
+
 **Files:**
 - Create: `web/src/components/minutes/MinutesAiBar.tsx`
 - Create: `web/src/components/minutes/MinutesSummary.tsx`
 - Create: `web/src/components/minutes/MinutesInsights.tsx`
+- Replace: `web/src/components/minutes/AudioTranscriptWorkspace.tsx`
 
 - [ ] **Step 1: 创建 `MinutesAiBar.tsx`**
 
@@ -8070,7 +8083,7 @@ export default function MinutesInsights({ insights }: { insights: Insights }) {
 }
 ```
 
-- [ ] **Step 4: 类型检查与 lint（此时 Task 14 的工作台依赖已齐全）**
+- [ ] **Step 4: 类型检查与 lint（工作台组装完成后）**
 
 ```bash
 cd /Users/jonas/Desktop/项目实践/new-meeting-systems/web
@@ -8079,13 +8092,14 @@ npm run check
 
 Expected: tsc / eslint / vitest 全部通过（新增测试在 Task 11/12）。
 
-- [ ] **Step 5: 提交（若 Task 14 未单独提交，则一并提交）**
+- [ ] **Step 5: 提交（Task 14 已单独提交，这里包含工作台组装）**
 
 ```bash
 git add web/src/components/minutes/MinutesAiBar.tsx \
   web/src/components/minutes/MinutesSummary.tsx \
-  web/src/components/minutes/MinutesInsights.tsx
-git commit -m "feat(minutes): AI 纪要、会议洞察图表与导出入口"
+  web/src/components/minutes/MinutesInsights.tsx \
+  web/src/components/minutes/AudioTranscriptWorkspace.tsx
+git commit -m "feat(minutes): AI 纪要、会议洞察与工作台组装"
 ```
 
 ---
@@ -8625,6 +8639,14 @@ git commit -m "test(minutes): 纪要与 COS 分片上传验证脚本"
 > 断言续传完成后直接进入工作台，且 localStorage 中该文件的上传会话已清理；
 > ③ **空态矩阵**：status=50/60 显示「已取消/已拒绝，无法上传会议纪要」；非组织人/非管理员看
 > status=40 显示「暂无会议纪要」；以上三种都不得出现上传入口（选择音频按钮）。
+
+> **补测（2026-10-19 Task 14 评审）**：还需覆盖播放器换源与转写键盘交互：
+> ① **换源后仍可播放**：播放中触发音频 URL 重新签发（过期重取 / 切会议），断言播放按钮不残留
+> 「暂停」状态、进度与时长归零后能重新加载并继续播放；
+> ② **键盘路径**：Tab 聚焦发言人 chip 后按 Space/Enter 打开重命名弹窗且不触发 seek；聚焦转写文本后
+> 按 Enter/Space 跳转音频，并断言 focus ring 可见；
+> ③ **未就绪保护**：音频元数据未加载时进度条 disabled，点快进不改变 `currentTime`。
+> ④ **重命名失败**：mock 接口返回错误时不出现未处理的 Promise rejection，弹窗保持打开可重试。
 
 - [ ] **Step 1: 写 E2E 脚本**
 

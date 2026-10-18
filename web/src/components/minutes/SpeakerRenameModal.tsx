@@ -36,6 +36,8 @@ export default function SpeakerRenameModal({ open, speaker, onClose, onSubmit }:
     setSaving(true)
     try {
       await onSubmit(name.trim(), color)
+    } catch {
+      // 失败提示由父组件负责；这里吞掉 rejection，避免 Modal 暴露未处理的 Promise
     } finally {
       setSaving(false)
     }
@@ -53,12 +55,14 @@ export default function SpeakerRenameModal({ open, speaker, onClose, onSubmit }:
     >
       <Space direction="vertical" className="w-full">
         <Input
+          aria-label="发言人姓名"
           value={name}
           onChange={(e) => setName(e.target.value)}
           maxLength={50}
           placeholder="发言人姓名"
         />
         <Select
+          aria-label="发言人颜色"
           value={color}
           onChange={setColor}
           options={COLORS.map((value) => ({

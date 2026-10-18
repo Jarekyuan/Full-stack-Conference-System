@@ -1,10 +1,11 @@
 /**
  * 转写分段列表：时间戳 + 发言人 + 文本。
- * - 点击/回车选中分段（父组件据此跳转播放位置）；
+ * - 点击分段任意位置或键盘聚焦文本后 Enter/Space 选中（父组件据此跳转播放位置）；
  * - 当前播放分段高亮，并在滚出可视区时平滑滚回（自动滚动）；
- * - 有管理权限时点击发言人标签打开重命名弹窗。
+ * - 有管理权限时点击发言人标签打开重命名弹窗；
+ * - 行级 memo：播放推进只重渲染高亮变化的两行。
  */
-import { useEffect, useRef } from 'react'
+import { memo, useEffect, useMemo, useRef } from 'react'
 import { Empty, Tag } from 'antd'
 import type { MinutesSpeaker, TranscriptSegment } from '@/api/minutes'
 import { formatOffset } from '@/utils/transcriptSync'
@@ -18,6 +19,73 @@ interface Props {
   onRename: (speaker: MinutesSpeaker) => void
 }
 
+interface RowProps {
+  segment: TranscriptSegment
+  speaker: MinutesSpeaker | undefined
+  active: boolean
+  canManage: boolean
+  onSelect: (segment: TranscriptSegment) => void
+  onRename: (speaker: MinutesSpeaker) => void
+}
+
+const TranscriptRow = memo(function TranscriptRow({
+  segment,
+  speaker,
+  active,
+  canManage,
+  onSelect,
+  onRename,
+}: RowProps) {
+  const color = speaker?.color ?? '#7D8CFF'
+  return (
+    <div
+      data-segment-id={segment.id}
+      onClick={() => onSelect(segment)}
+      className={`mb-1 cursor-pointer rounded px-2 py-1.5 transition-colors ${
+        active
+          ? 'border-l-4 bg-blue-50 dark:bg-blue-950/40'
+          : 'border-l-4 border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/60'
+      }`}
+      style={active ? { borderLeftColor: color } : undefined}
+    >
+      <div className="mb-1 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            if (canManage && speaker) onRename(speaker)
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+          disabled={!canManage || !speaker}
+          aria-label={speaker ? `重命名发言人 ${speaker.displayName}` : undefined}
+          className="rounded px-1.5 py-0.5 text-xs font-medium focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-default"
+          style={{ color, backgroundColor: `${color}1A` }}
+        >
+          {speaker?.displayName ?? `说话人 ${segment.speakerKey}`}
+        </button>
+        <Tag className="m-0 text-[11px]">{formatOffset(segment.startMs)}</Tag>
+      </div>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
+          onSelect(segment)
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            e.stopPropagation()
+            onSelect(segment)
+          }
+        }}
+        className="w-full rounded text-left text-sm leading-6 text-slate-800 focus-visible:ring-2 focus-visible:ring-blue-400 dark:text-slate-200"
+      >
+        {segment.text}
+      </button>
+    </div>
+  )
+})
+
 export default function TranscriptList({
   segments,
   speakers,
@@ -27,7 +95,10 @@ export default function TranscriptList({
   onRename,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const speakerMap = new Map(speakers.map((speaker) => [speaker.speakerKey, speaker]))
+  const speakerMap = useMemo(
+    () => new Map(speakers.map((speaker) => [speaker.speakerKey, speaker])),
+    [speakers],
+  )
 
   useEffect(() => {
     if (activeId == null || !containerRef.current) return
@@ -48,51 +119,17 @@ export default function TranscriptList({
 
   return (
     <div ref={containerRef} className="max-h-[560px] overflow-y-auto pr-2">
-      {segments.map((segment) => {
-        const speaker = speakerMap.get(segment.speakerKey)
-        const color = speaker?.color ?? '#7D8CFF'
-        const active = segment.id === activeId
-        return (
-          <div
-            key={segment.id}
-            data-segment-id={segment.id}
-            role="button"
-            tabIndex={0}
-            onClick={() => onSelect(segment)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                onSelect(segment)
-              }
-            }}
-            className={`mb-1 cursor-pointer rounded px-2 py-1.5 outline-none transition-colors ${
-              active
-                ? 'border-l-4 bg-blue-50 dark:bg-blue-950/40'
-                : 'border-l-4 border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/60'
-            }`}
-            style={active ? { borderLeftColor: color } : undefined}
-          >
-            <div className="mb-1 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  if (canManage && speaker) onRename(speaker)
-                }}
-                disabled={!canManage || !speaker}
-                className="rounded px-1.5 py-0.5 text-xs font-medium disabled:cursor-default"
-                style={{ color, backgroundColor: `${color}1A` }}
-              >
-                {speaker?.displayName ?? `说话人 ${segment.speakerKey}`}
-              </button>
-              <Tag className="m-0 text-[11px]">{formatOffset(segment.startMs)}</Tag>
-            </div>
-            <div className="text-sm leading-6 text-slate-800 dark:text-slate-200">
-              {segment.text}
-            </div>
-          </div>
-        )
-      })}
+      {segments.map((segment) => (
+        <TranscriptRow
+          key={segment.id}
+          segment={segment}
+          speaker={speakerMap.get(segment.speakerKey)}
+          active={segment.id === activeId}
+          canManage={canManage}
+          onSelect={onSelect}
+          onRename={onRename}
+        />
+      ))}
     </div>
   )
 }
