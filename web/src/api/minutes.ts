@@ -1,4 +1,8 @@
-/** 会议纪要接口（docs/04 10.2；字段名与后端 VO 严格一致） */
+/**
+ * 会议纪要接口（设计文档 §10.2；字段名与后端 VO 严格一致。
+ * 真相源：docs/superpowers/specs/2026-10-18-meeting-minutes-design.md。
+ * docs/04 的接口章节待 Task 19 补登）
+ */
 import { downloadFile, http } from './request'
 
 export interface MinutesSpeaker {
@@ -42,6 +46,10 @@ export interface MinutesSummary {
     task: string
     owner: string | null
     dueDate: string | null
+    /**
+     * 后端 MinutesSummaryParser 只放行 HIGH/MEDIUM/LOW；历史脏数据可能越界，
+     * Task 15 的渲染代码仍需对未知值兜底（显示原文或默认级别）。
+     */
     priority: 'HIGH' | 'MEDIUM' | 'LOW' | null
   }[]
   risks: string[]
@@ -111,6 +119,7 @@ export function generateMinutes(meetingId: number): Promise<{ aiStatus: number }
   return http.post<{ aiStatus: number }>(`/meetings/${meetingId}/minutes/generate`)
 }
 
-export function exportMinutes(meetingId: number, filename: string): Promise<void> {
+/** 导出 Word；优先使用服务端 Content-Disposition 文件名，filename 仅作兜底 */
+export function exportMinutes(meetingId: number, filename?: string): Promise<void> {
   return downloadFile(`/meetings/${meetingId}/minutes/export?format=docx`, filename)
 }

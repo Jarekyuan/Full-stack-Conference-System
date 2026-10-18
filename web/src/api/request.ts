@@ -177,7 +177,7 @@ export default instance
 /**
  * 文件下载：独立实例，不经过 Result 解包拦截器。
  * 导出接口返回二进制，若走主实例会把 Blob 当成 Result 解析并误报业务错误。
- * 401 不在这里自动刷新——下载失败由调用方 toast，保持传输层简单。
+ * 业务错误仍可能以 HTTP 200 + JSON 返回，因此放宽 validateStatus 后在这里自行判别。
  */
 const downloadClient = axios.create({ baseURL: '/api', timeout: 120_000 })
 
@@ -189,15 +189,131 @@ downloadClient.interceptors.request.use((config) => {
   return config
 })
 
+/** 兜底文件名最大长度（含 .docx 后缀） */
+const MAX_DOWNLOAD_FILENAME_LENGTH = 120
+/** 文件系统非法字符（Windows/Unix 常见集合）与控制字符（Unicode Cc） */
+const INVALID_FILENAME_CHARS = /[\\/:*?"<>|\p{Cc}]/gu
+
+/**
+ * 从 Content-Disposition 解析 RFC 5987 文件名（filename*=UTF-8''...）。
+ * 解析失败/缺省返回 null，由调用方回退到显式传入的文件名。
+ */
+export function parseContentDispositionFilename(
+  header: string | null | undefined,
+): string | null {
+  if (!header) return null
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header)?.[1]
+  if (encoded) {
+    try {
+      const decoded = decodeURIComponent(encoded).trim()
+      if (decoded) return decoded
+    } catch {
+      // 非法百分号编码：继续尝试普通 filename
+    }
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(header)?.[1]
+  return plain?.trim() || null
+}
+
+/**
+ * 兜底文件名清洗：替换路径分隔符/控制字符、限制长度，并保证 .docx 后缀。
+ * 服务端返回的文件名同样走这里，避免上游数据带出非法字符。
+ */
+export function sanitizeDownloadFilename(name?: string | null): string {
+  const cleaned = (name ?? '').replace(INVALID_FILENAME_CHARS, '_').trim()
+  const withExtension = /\.docx$/i.test(cleaned)
+    ? cleaned
+    : `${cleaned || '会议纪要'}.docx`
+  if (withExtension.length <= MAX_DOWNLOAD_FILENAME_LENGTH) return withExtension
+  return `${withExtension
+    .slice(0, MAX_DOWNLOAD_FILENAME_LENGTH - '.docx'.length)
+    .trimEnd()}.docx`
+}
+
+/** 读取响应头；兼容 AxiosHeaders（有 get 方法）与普通对象 */
+function headerValue(headers: unknown, name: string): string | undefined {
+  if (!headers || typeof headers !== 'object') return undefined
+  const getter = (headers as { get?: (key: string) => unknown }).get
+  const raw =
+    typeof getter === 'function'
+      ? getter.call(headers, name)
+      : (headers as Record<string, unknown>)[name]
+  return raw === undefined || raw === null ? undefined : String(raw)
+}
+
+/** 把错误响应体 Blob 解析成统一 Result；不是 JSON 时返回 null */
+async function parseJsonResult(data: unknown): Promise<Result | null> {
+  const blob = data as Blob | undefined
+  if (!blob || typeof blob.text !== 'function') return null
+  try {
+    return JSON.parse(await blob.text()) as Result
+  } catch {
+    return null
+  }
+}
+
 /** 触发浏览器下载；url 不含 /api 前缀（由 baseURL 提供） */
-export async function downloadFile(url: string, filename: string): Promise<void> {
-  const response = await downloadClient.get(url, { responseType: 'blob' })
-  const objectUrl = URL.createObjectURL(response.data as Blob)
+export async function downloadFile(url: string, filename?: string): Promise<void> {
+  const request = () =>
+    downloadClient.get<Blob>(url, {
+      responseType: 'blob',
+      // 业务错误是 HTTP 200 + JSON，401 也要自己处理，不让 axios 按状态码提前 reject
+      validateStatus: () => true,
+    })
+
+  let response = await request()
+
+  if (response.status === 401) {
+    try {
+      // 复用主实例的 single-flight 刷新，多处同时 401 时只发一次刷新
+      await refreshAccessToken()
+    } catch {
+      redirectToLogin()
+      throw new ApiError(CODE_REFRESH_EXPIRED, '登录已过期')
+    }
+    response = await request()
+    if (response.status === 401) {
+      redirectToLogin()
+      throw new ApiError(CODE_REFRESH_EXPIRED, '登录已过期')
+    }
+  }
+
+  const contentType = (
+    headerValue(response.headers, 'content-type') ??
+    (response.data as Blob | undefined)?.type ??
+    ''
+  ).toLowerCase()
+  const success = response.status >= 200 && response.status < 300
+
+  // 非 2xx 或 2xx + JSON：都是后端 Result 错误，绝不能落成 .docx
+  if (!success || contentType.includes('json')) {
+    const body = await parseJsonResult(response.data)
+    if (body && typeof body === 'object') {
+      throw new ApiError(
+        typeof body.code === 'number' ? body.code : -1,
+        body.msg || (success ? '下载失败' : '导出失败'),
+        body.data,
+      )
+    }
+    throw new ApiError(response.status, success ? '下载失败' : '导出失败')
+  }
+
+  const blob = response.data as Blob
+  const serverFilename = parseContentDispositionFilename(
+    headerValue(response.headers, 'content-disposition'),
+  )
+  const downloadName = sanitizeDownloadFilename(serverFilename ?? filename)
+
+  const objectUrl = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
-  anchor.href = objectUrl
-  anchor.download = filename
-  document.body.appendChild(anchor)
-  anchor.click()
-  anchor.remove()
-  URL.revokeObjectURL(objectUrl)
+  try {
+    anchor.href = objectUrl
+    anchor.download = downloadName
+    document.body.appendChild(anchor)
+    anchor.click()
+  } finally {
+    anchor.remove()
+    // 延迟释放：Firefox/Safari 在 click 后立即 revoke 可能取消尚未开始的下载
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+  }
 }

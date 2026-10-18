@@ -19,6 +19,8 @@ export interface TimedSegment {
  *
  * 正常转写分段按时间顺序且互不重叠，候选段一次命中；回退只发生在
  * 上游产生了重叠分段的异常数据时。
+ *
+ * 调用方必须保证 segments 按 startMs 升序传入；无序输入的行为未定义。
  */
 export function findActiveSegment(
   segments: TimedSegment[],
@@ -45,8 +47,9 @@ export function findActiveSegment(
   return null
 }
 
-/** 毫秒 → HH:mm:ss（用于转写时间戳与导出预览） */
+/** 毫秒 → HH:mm:ss（用于转写时间戳与导出预览）；非法数值按 0 处理 */
 export function formatOffset(ms: number): string {
+  if (!Number.isFinite(ms)) return '00:00:00'
   const total = Math.max(0, Math.floor(ms / 1000))
   const hours = Math.floor(total / 3600)
   const minutes = Math.floor((total % 3600) / 60)
