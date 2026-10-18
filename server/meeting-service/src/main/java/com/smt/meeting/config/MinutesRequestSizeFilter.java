@@ -13,6 +13,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.util.UrlPathHelper;
 
 import java.io.IOException;
+import java.util.regex.Pattern;
 
 /**
  * 转写导入的请求体上限：5MiB 文本 + JSON 转义余量，超过 8MiB 直接 70005。
@@ -28,6 +29,14 @@ public class MinutesRequestSizeFilter extends OncePerRequestFilter {
 
     private static final long MAX_BYTES = 8L * 1024 * 1024;
 
+    /**
+     * 与 Spring 的 {@code @PathVariable Long} 转换口径对齐：允许前后空白与正负号，
+     * 否则 {@code /meetings/+1/...}、{@code /meetings/%201%20/...}、{@code /meetings/-1/...}
+     * 都会进入控制器与 {@code @RequestBody}，却绕过这里的大小限制。
+     */
+    private static final Pattern IMPORT_PATH =
+            Pattern.compile(".*/meetings/\\s*[+-]?\\d+\\s*/minutes/import/?");
+
     private final ObjectMapper objectMapper;
 
     @Override
@@ -37,7 +46,7 @@ public class MinutesRequestSizeFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
         String path = UrlPathHelper.defaultInstance.getLookupPathForRequest(request);
         long contentLength = request.getContentLengthLong();
-        if (path.matches(".*/meetings/\\d+/minutes/import")
+        if (IMPORT_PATH.matcher(path).matches()
                 && (contentLength < 0 || contentLength > MAX_BYTES)) {
             response.setStatus(HttpServletResponse.SC_OK);
             response.setContentType("application/json;charset=UTF-8");

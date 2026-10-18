@@ -38,6 +38,16 @@ class MinutesRequestSizeFilterTest {
         return body.get("code").asInt();
     }
 
+    private void assertRejected(String uri) throws Exception {
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request(uri, NINE_MIB), response, chain);
+
+        assertThat(codeOf(response)).isEqualTo(ErrorCode.FILE_TOO_LARGE.getCode());
+        assertThat(chain.getRequest()).isNull();
+    }
+
     @Test
     void rejectsOversizedImportBody() throws Exception {
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -92,6 +102,21 @@ class MinutesRequestSizeFilterTest {
 
         assertThat(codeOf(response)).isEqualTo(ErrorCode.FILE_TOO_LARGE.getCode());
         assertThat(chain.getRequest()).isNull();
+    }
+
+    @Test
+    void rejectsPlusSignedId() throws Exception {
+        assertRejected("/meetings/+1/minutes/import");
+    }
+
+    @Test
+    void rejectsWhitespacePaddedId() throws Exception {
+        assertRejected("/meetings/%201%20/minutes/import");
+    }
+
+    @Test
+    void rejectsNegativeId() throws Exception {
+        assertRejected("/meetings/-1/minutes/import");
     }
 
     @Test
