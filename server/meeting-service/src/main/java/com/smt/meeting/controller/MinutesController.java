@@ -4,7 +4,9 @@ import com.smt.common.context.UserContext;
 import com.smt.common.result.Result;
 import com.smt.meeting.dto.MinutesImportDTO;
 import com.smt.meeting.dto.SpeakerUpdateDTO;
+import com.smt.meeting.service.MinutesAiService;
 import com.smt.meeting.service.MinutesService;
+import com.smt.meeting.vo.AiGenerateVO;
 import com.smt.meeting.vo.AudioUrlVO;
 import com.smt.meeting.vo.MinutesDetailVO;
 import com.smt.meeting.vo.MinutesSpeakerVO;
@@ -29,6 +31,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class MinutesController {
 
     private final MinutesService minutesService;
+    private final MinutesAiService minutesAiService;
 
     @GetMapping("/{id}/minutes")
     public Result<MinutesDetailVO> detail(@PathVariable Long id) {
@@ -59,5 +62,11 @@ public class MinutesController {
                                                   @Valid @RequestBody SpeakerUpdateDTO dto) {
         return Result.success(minutesService.renameSpeaker(
                 id, speakerKey, dto, UserContext.getUserId()));
+    }
+
+    /** 请求异步生成结构化纪要：返回当前 AI 状态（10 待生成 / 20 生成中）。 */
+    @PostMapping("/{id}/minutes/generate")
+    public Result<AiGenerateVO> generate(@PathVariable Long id) {
+        return Result.success(minutesAiService.request(id, UserContext.getUserId()));
     }
 }
