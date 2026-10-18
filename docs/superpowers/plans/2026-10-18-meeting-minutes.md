@@ -2911,6 +2911,25 @@ git add server/meeting-service/pom.xml \
 git commit -m "feat(minutes): ObjectStorage 抽象 + COS/本地实现"
 ```
 
+- [ ] **Step 11: 实现备注（Task 6 落地偏差）**
+
+- **COS API**：`PartListing` 没有 `getPartList()`，实际方法为 `getParts()`；`NoSuchUpload`/`NoSuchKey`/404
+  统一翻译为 70006，`InvalidPart`/`InvalidPartOrder` 翻译为 70007，`abort`/`delete` 对“已不存在”幂等。
+- **Bean 类型**：`localObjectStorage` 的 `@Bean` 必须返回具体类型 `LocalObjectStorage`（不能只写
+  `ObjectStorage`），否则 `LocalFileController` 按具体类型注入会失败、local 模式启动即崩。
+- **错误契约**：接口 Javadoc 固化 70006/70007 语义；本地实现补齐会话/完成态校验、对象键校验、
+  ETag 归一化（去引号、忽略大小写）、分片编号必须为 1..n、重复/缺失/空分片一律 70007。
+- **本地原子写**：分片先写 `part-N.tmp` 再 `ATOMIC_MOVE`；完成后写 `object.bin.tmp` 再原子替换，
+  成功后删除 `part-*`；已完成后 `write/list/presignPart` 均返回 70006。
+- **预签名**：uploadId 用严格 UUID 正则 + `UUID.fromString` + `resolved.startsWith(root)` 校验；
+  HMAC 密钥为进程内随机值，重启后旧 URL 失效（仅本地实现）。
+- **上传端点**：PUT 校验 `chunkSizeBytes` 上限（413）；GET 改为流式响应，支持单段 `Range`（206/416），
+  完整 GET 返回 `Accept-Ranges`，不再把整个对象读入堆；异常映射 400/403/404/409/500。
+- **依赖**：`cos_api` 升至 5.6.283、`poi-ooxml` 升至 5.5.1（均可解析）；POI 的 `log4j-api`
+  被 Spring Boot BOM 管理为 2.21.1（POI 5.5.1 自身 BOM 为 2.24.3），编译无冲突，运行期待 Task 8 验证。
+- **测试**：`LocalObjectStorageTest` 20 例、`LocalFileControllerTest` 8 例（含 206 Range），
+  `RoomMapperTest` 4/4；local provider 上下文烟雾测试 4/4。
+
 ---
 
 ## Task 7: 分片上传服务、接口与会话清理任务
