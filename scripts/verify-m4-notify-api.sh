@@ -21,9 +21,6 @@ set -u
 # 限流本身由 `verify-m4-ratelimit.sh` 专门验证；这里只借用同一个开关（含读回确认与退出恢复）。
 # 注：会与本脚本自己的 EXIT trap 链式共存（lib 里做了链式安装，不覆盖调用方的清理）。
 # ---------------------------------------------------------------------------
-source "$(dirname "$0")/lib/ratelimit.sh"
-ratelimit_disable_for_script
-
 BASE="${BASE_URL:-http://localhost:8080}"
 MYSQL='docker exec smt-mysql mysql --default-character-set=utf8mb4 -uroot -proot123 -N -e'
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -46,10 +43,20 @@ cleanup() {
          DELETE FROM smt_meeting.meeting_participant WHERE meeting_id=$m;
          DELETE FROM smt_meeting.meeting WHERE id=$m;" > /dev/null
   done
+  # R14.7：删除测试用的一次性用户（不再拿共享的 user1 执行 delete-all）
+  if [ -n "${TMP_USER_ID:-}" ]; then
+    sql "DELETE FROM smt_meeting.sys_user_role WHERE user_id=$TMP_USER_ID;
+         DELETE FROM smt_meeting.sys_user WHERE id=$TMP_USER_ID;" > /dev/null
+  fi
   local pid; pid=$(lsof -nP -iTCP:$PORT -sTCP:LISTEN -t 2>/dev/null | head -1)
   [ -n "$pid" ] && { kill "$pid" 2>/dev/null; sleep 2; }
 }
 trap cleanup EXIT
+
+# 限流开关：必须在 cleanup trap 之后调用（lib 会链式安装；反过来会覆盖恢复钩子，见评审 C2）
+source "$(dirname "$0")/lib/ratelimit.sh"
+ratelimit_disable_for_script
+
 redis_del() { docker exec -e REDISCLI_AUTH="${REDIS_PASSWORD:-redis123}" smt-redis redis-cli DEL "$@" > /dev/null 2>&1; }
 
 login() {
@@ -120,10 +127,11 @@ done
 check "health UP" "${UP:-未响应}" "UP"
 [ "$UP" = "UP" ] || { tail -20 "$LOG"; exit 1; }
 
-U1=$(login user1 user123); U2=$(login user2 user123)
-{ [ -n "$U1" ] && [ -n "$U2" ]; } || { echo "登录失败，终止"; exit 1; }
+U1=$(login user1 user123); U2=$(login user2 user123); ADMIN=$(login admin admin123)
+{ [ -n "$U1" ] && [ -n "$U2" ] && [ -n "$ADMIN" ]; } || { echo "登录失败，终止"; exit 1; }
 U1_ID=$(sql "SELECT id FROM smt_meeting.sys_user WHERE username='user1';")
 U2_ID=$(sql "SELECT id FROM smt_meeting.sys_user WHERE username='user2';")
+TMP_USER_ID=""
 IDS=""
 
 echo
@@ -244,20 +252,39 @@ if [ "$U1_COUNT" -ge 3 ]; then
   check "删除别人的通知 → 60001" \
     "$(api "$U1" DELETE "/api/notifications/$U2_NOTIF" | j "d['code']")" "60001"
 
-  BATCH_BODY="{\"ids\":[$SECOND_ID,$THIRD_ID]}"
-  check "批量删除返回实际条数" \
+  # R13：批量里混入别人的 id，只能删自己的，且别人的行必须还在
+  BATCH_BODY="{\"ids\":[$SECOND_ID,$THIRD_ID,$U2_NOTIF]}"
+  check "批量删除只算自己的（混入别人的 id）" \
     "$(api "$U1" POST "/api/notifications/delete" "$BATCH_BODY" | j "d['data']['deleted']")" "2"
-  check "批量删除后两条都没了" \
+  check "批量删除后自己的两条没了" \
     "$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE id IN ($SECOND_ID,$THIRD_ID);")" "0"
+  check "批量删除不会删别人的" \
+    "$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE id=$U2_NOTIF;")" "1"
 
-  U1_REMAIN=$((U1_COUNT - 3))
-  U2_TOTAL=$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE user_id=$U2_ID;")
-  check "删除全部返回实际条数" \
-    "$(api "$U1" DELETE "/api/notifications" | j "d['data']['deleted']")" "$U1_REMAIN"
-  check "U1 通知已清空" \
-    "$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE user_id=$U1_ID;")" "0"
-  check "U2 的通知不受影响" \
-    "$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE user_id=$U2_ID;")" "$U2_TOTAL"
+  U1_AFTER_BATCH=$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE user_id=$U1_ID;")
+
+  # R14.7：delete-all 用一次性用户，不再清空共享账号 user1 的收件箱
+  TMP_USER="t44_del_$(date +%s)"
+  TMP_RESP=$(api "$ADMIN" POST "/api/users" \
+    "{\"username\":\"$TMP_USER\",\"password\":\"t44_pass123\",\"realName\":\"T44删除测试\",\"roleIds\":[1],\"deptId\":2}")
+  TMP_USER_ID=$(echo "$TMP_RESP" | j "d['data']")
+  check "删除测试用户创建成功" \
+    "$([ -n "$TMP_USER_ID" ] && [ "$TMP_USER_ID" != "None" ] && echo yes || echo no)" "yes"
+  if [ -n "$TMP_USER_ID" ] && [ "$TMP_USER_ID" != "None" ]; then
+    TMP_TOKEN=$(login "$TMP_USER" t44_pass123)
+    TMP_SLOT=$(free_slot "$ROOM_OPEN" 24) || exit 1
+    TMP_MID=$(book "$TMP_TOKEN" "T44删除测试-$(date +%s)" "$ROOM_OPEN" \
+      "${TMP_SLOT%%|*}" "${TMP_SLOT##*|}") || exit 1
+    IDS="$IDS $TMP_MID"
+    TMP_COUNT=$(wait_count 1 "SELECT COUNT(*) FROM smt_meeting.notification WHERE user_id=$TMP_USER_ID;" 30)
+    check "一次性用户收到通知（前置）" "$TMP_COUNT" "1"
+    check "删除全部返回实际条数（只影响该用户）" \
+      "$(api "$TMP_TOKEN" DELETE "/api/notifications" | j "d['data']['deleted']")" "1"
+    check "一次性用户通知已清空" \
+      "$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE user_id=$TMP_USER_ID;")" "0"
+  fi
+  check "共享账号 user1 的收件箱未被 delete-all 波及" \
+    "$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE user_id=$U1_ID;")" "$U1_AFTER_BATCH"
 fi
 
 echo

@@ -17,14 +17,16 @@
 # ============================================================================
 set -u
 
-BASE="${BASE:-http://127.0.0.1:8080}"
+BASE="${BASE_URL:-${BASE:-http://127.0.0.1:8080}}"
 STAMP=$(date +%s)
 ROOM_NAME="T62临时厅-$STAMP"
 USERNAME="t62_user_$STAMP"
 ROOM_ID=""
 USER_ID=""
+ADMIN2_ID=""
 MEETING_A=""
 MEETING_B=""
+MEETING_C=""
 WEEK_A=""
 WEEK_B=""
 PASS=0
@@ -62,6 +64,7 @@ cleanup() {
   local ids=""
   [ -n "$MEETING_A" ] && ids="$MEETING_A"
   [ -n "$MEETING_B" ] && ids="${ids:+$ids,}$MEETING_B"
+  [ -n "$MEETING_C" ] && ids="${ids:+$ids,}$MEETING_C"
   if [ -n "$ids" ]; then
     sql "DELETE FROM smt_meeting.notification WHERE meeting_id IN ($ids);
          DELETE FROM smt_meeting.meeting_status_log WHERE meeting_id IN ($ids);
@@ -80,6 +83,10 @@ cleanup() {
   if [ -n "$USER_ID" ]; then
     sql "DELETE FROM smt_meeting.sys_user_role WHERE user_id=$USER_ID;
          DELETE FROM smt_meeting.sys_user WHERE id=$USER_ID;" > /dev/null
+  fi
+  if [ -n "$ADMIN2_ID" ]; then
+    sql "DELETE FROM smt_meeting.sys_user_role WHERE user_id=$ADMIN2_ID;
+         DELETE FROM smt_meeting.sys_user WHERE id=$ADMIN2_ID;" > /dev/null
   fi
   [ -n "$WEEK_A" ] && redis_cli DEL "cache:calendar:1:$WEEK_A" > /dev/null
   [ -n "$WEEK_B" ] && [ -n "$ROOM_ID" ] && redis_cli DEL "cache:calendar:$ROOM_ID:$WEEK_B" > /dev/null
@@ -120,6 +127,7 @@ ADMIN_LOGIN=$(login admin admin123)
 ADMIN_TOKEN=$(token_of "$ADMIN_LOGIN")
 U1_LOGIN=$(login user1 user123)
 U1_TOKEN=$(token_of "$U1_LOGIN")
+U2_ID=$(sql "SELECT id FROM smt_meeting.sys_user WHERE username='user2';")
 APPROVER_LOGIN=$(login approver1 user123)
 APPROVER_TOKEN=$(token_of "$APPROVER_LOGIN")
 [ -n "$ADMIN_TOKEN" ] && [ -n "$U1_TOKEN" ] && [ -n "$APPROVER_TOKEN" ] \
@@ -176,7 +184,7 @@ check "找到 room1 空闲整点" "$([ -n "$SLOT_HOUR" ] && echo 1 || echo 0)" "
 [ -n "$SLOT_HOUR" ] || exit 1
 
 CREATE_A=$(post_api "/api/meetings" "$U1_TOKEN" \
-  "{\"title\":\"T62会议A-$STAMP\",\"roomId\":1,\"startTime\":\"$D1 $(printf '%02d' "$SLOT_HOUR"):00:00\",\"endTime\":\"$D1 $(printf '%02d' $((SLOT_HOUR + 1))):00:00\",\"participants\":{\"userIds\":[$USER_ID]}}")
+  "{\"title\":\"T62会议A-$STAMP\",\"roomId\":1,\"startTime\":\"$D1 $(printf '%02d' "$SLOT_HOUR"):00:00\",\"endTime\":\"$D1 $(printf '%02d' $((SLOT_HOUR + 1))):00:00\",\"participants\":{\"userIds\":[$USER_ID,$U2_ID]}}")
 MEETING_A=$(echo "$CREATE_A" | python3 -c 'import sys,json;d=json.load(sys.stdin);print((d.get("data") or {}).get("meetingId") or "")')
 check "会议 A 创建成功（含临时参会人）" "$([ -n "$MEETING_A" ] && echo 1 || echo 0)" "meetingId=${MEETING_A:-?} code=$(code_of "$CREATE_A")"
 [ -n "$MEETING_A" ] || exit 1
@@ -206,6 +214,10 @@ B_AFTER=$(sql "SELECT status FROM smt_meeting.meeting WHERE id=$MEETING_B;")
 check "审批失败后会议仍是待审批(10)" "$([ "$B_AFTER" = "10" ] && echo 1 || echo 0)" "status=$B_AFTER"
 
 # ---------- ⑤ 停用用户 → 登录/me/refresh 全部失效 ----------
+# R14.12：用唯一 username 搜，避免 deptId=2 + LIMIT 50 下“停用用户不在前 50 条”造成的假通过
+SEARCH_BEFORE=$(get_api "/api/users/search?keyword=$USERNAME" "$U1_TOKEN" | \
+  python3 -c "import sys,json;items=json.load(sys.stdin).get('data') or [];print(int(any(u['id']==$USER_ID for u in items)))")
+check "停用前选人搜索能搜到该用户（前置）" "$([ "$SEARCH_BEFORE" = "1" ] && echo 1 || echo 0)"
 DISABLE_RESP=$(curl -s -X PUT "$BASE/api/users/$USER_ID/status?status=0" -H "Authorization: Bearer $ADMIN_TOKEN")
 check "停用用户成功" "$([ "$(code_of "$DISABLE_RESP")" = "0" ] && echo 1 || echo 0)" "code=$(code_of "$DISABLE_RESP")"
 LOGIN_AFTER=$(login "$USERNAME" t62_pass123)
@@ -216,11 +228,91 @@ check "停用后 /auth/me 被拒（20004）" "$([ "$(code_of "$ME_AFTER")" = "20
 REFRESH_AFTER=$(curl -s -X POST "$BASE/api/auth/refresh" -H 'Content-Type: application/json' \
   -d "{\"refreshToken\":\"$TEMP_REFRESH\"}")
 check "停用后 refresh 被拒（20003）" "$([ "$(code_of "$REFRESH_AFTER")" = "20003" ] && echo 1 || echo 0)" "code=$(code_of "$REFRESH_AFTER")"
+# N15：refresh 接口本身也会因状态检查返回 20003；直接看 Redis 用户索引是否已被删，才证明“主动撤销”
+REFRESH_LEFT=$(redis_cli EXISTS "auth:refresh:$USER_ID" | tr -d '\r')
+check "停用后 refreshToken 用户索引已撤销" \
+  "$([ "$REFRESH_LEFT" = "0" ] && echo 1 || echo 0)" "exists=$REFRESH_LEFT"
+
+# 停用参会人保留历史，但**不再收通知**（RecipientMapper.selectParticipantIds 只取启用账号）。
+# 会议 A 另有一个启用参会人 user2：更新后 user2 应收到 MEETING_UPDATED，停用用户不应收到。
+DETAIL_AFTER_DISABLE=$(get_api "/api/meetings/$MEETING_A" "$U1_TOKEN")
+VERSION_AFTER=$(echo "$DETAIL_AFTER_DISABLE" | python3 -c 'import sys,json;print((json.load(sys.stdin).get("data") or {}).get("version"))')
+UPD_RESP=$(put_api "/api/meetings/$MEETING_A" "$U1_TOKEN" \
+  "{\"title\":\"T62会议A-$STAMP-更新\",\"roomId\":1,\"startTime\":\"$D1 $(printf '%02d' "$SLOT_HOUR"):00:00\",\"endTime\":\"$D1 $(printf '%02d' $((SLOT_HOUR + 1))):00:00\",\"version\":$VERSION_AFTER}")
+check "停用后更新会议成功（历史参会人保留）" "$([ "$(code_of "$UPD_RESP")" = "0" ] && echo 1 || echo 0)" "code=$(code_of "$UPD_RESP")"
+UPD_U2=0
+for _ in $(seq 1 15); do
+  UPD_U2=$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE meeting_id=$MEETING_A AND user_id=$U2_ID AND type='MEETING_UPDATED';")
+  [ "$UPD_U2" = "1" ] && break
+  sleep 1
+done
+check "启用的参会人收到 MEETING_UPDATED" "$([ "$UPD_U2" = "1" ] && echo 1 || echo 0)" "count=$UPD_U2"
+UPD_DISABLED=$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE meeting_id=$MEETING_A AND user_id=$USER_ID AND type='MEETING_UPDATED';")
+check "停用参会人不再收 MEETING_UPDATED" "$([ "$UPD_DISABLED" = "0" ] && echo 1 || echo 0)" "count=$UPD_DISABLED"
+
+# ---------- ⑤.5 停用/不存在的用户不能作为参会人（评审 R6） ----------
+DISABLED_HOUR=""
+for h in 14 15 16 11 9; do
+  AVAIL=$(post_api "/api/rooms/availability" "$U1_TOKEN" \
+    "{\"roomIds\":[1],\"startTime\":\"$D2 $(printf '%02d' "$h"):00:00\",\"endTime\":\"$D2 $(printf '%02d' $((h + 1))):00:00\"}" | \
+    python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["items"][0]["available"])')
+  if [ "$AVAIL" = "True" ]; then DISABLED_HOUR=$h; break; fi
+done
+check "找到用于参会人校验的空闲整点" "$([ -n "$DISABLED_HOUR" ] && echo 1 || echo 0)" "$D2 ${DISABLED_HOUR:-?}:00"
+if [ -n "$DISABLED_HOUR" ]; then
+  DISABLED_TITLE="T62禁用参会人-$STAMP"
+  DISABLED_RESP=$(post_api "/api/meetings" "$U1_TOKEN" \
+    "{\"title\":\"$DISABLED_TITLE\",\"roomId\":1,\"startTime\":\"$D2 $(printf '%02d' "$DISABLED_HOUR"):00:00\",\"endTime\":\"$D2 $(printf '%02d' $((DISABLED_HOUR + 1))):00:00\",\"participants\":{\"userIds\":[$USER_ID]}}")
+  check "停用用户作为参会人被拒（10001）" "$([ "$(code_of "$DISABLED_RESP")" = "10001" ] && echo 1 || echo 0)" "code=$(code_of "$DISABLED_RESP")"
+  DISABLED_LEFT=$(sql "SELECT COUNT(*) FROM smt_meeting.meeting WHERE title='$DISABLED_TITLE';")
+  check "被拒后没有落库（停用参会人）" "$([ "$DISABLED_LEFT" = "0" ] && echo 1 || echo 0)" "count=$DISABLED_LEFT"
+  # 防御性清理：若旧实现真的落库了，把 id 交给 cleanup，避免留下测试数据
+  MEETING_C=$(sql "SELECT id FROM smt_meeting.meeting WHERE title='$DISABLED_TITLE' LIMIT 1;")
+
+  GHOST_TITLE="T62幽灵参会人-$STAMP"
+  GHOST_RESP=$(post_api "/api/meetings" "$U1_TOKEN" \
+    "{\"title\":\"$GHOST_TITLE\",\"roomId\":1,\"startTime\":\"$D2 $(printf '%02d' "$DISABLED_HOUR"):00:00\",\"endTime\":\"$D2 $(printf '%02d' $((DISABLED_HOUR + 1))):00:00\",\"participants\":{\"userIds\":[999999]}}")
+  check "不存在的用户作为参会人被拒（10001）" "$([ "$(code_of "$GHOST_RESP")" = "10001" ] && echo 1 || echo 0)" "code=$(code_of "$GHOST_RESP")"
+  GHOST_LEFT=$(sql "SELECT COUNT(*) FROM smt_meeting.meeting WHERE title='$GHOST_TITLE';")
+  check "被拒后没有落库（幽灵参会人）" "$([ "$GHOST_LEFT" = "0" ] && echo 1 || echo 0)" "count=$GHOST_LEFT"
+
+  # DTO 容器约束：null / 负数 / 超过 100 个，均应在 Service 之前被 10001 拦截
+  NULL_RESP=$(post_api "/api/meetings" "$U1_TOKEN" \
+    "{\"title\":\"T62空参会人-$STAMP\",\"roomId\":1,\"startTime\":\"$D2 $(printf '%02d' "$DISABLED_HOUR"):00:00\",\"endTime\":\"$D2 $(printf '%02d' $((DISABLED_HOUR + 1))):00:00\",\"participants\":{\"userIds\":[null]}}")
+  check "null 参会人 → 10001" "$([ "$(code_of "$NULL_RESP")" = "10001" ] && echo 1 || echo 0)" "code=$(code_of "$NULL_RESP")"
+  NEG_RESP=$(post_api "/api/meetings" "$U1_TOKEN" \
+    "{\"title\":\"T62负参会人-$STAMP\",\"roomId\":1,\"startTime\":\"$D2 $(printf '%02d' "$DISABLED_HOUR"):00:00\",\"endTime\":\"$D2 $(printf '%02d' $((DISABLED_HOUR + 1))):00:00\",\"participants\":{\"userIds\":[-1]}}")
+  check "负数参会人 → 10001" "$([ "$(code_of "$NEG_RESP")" = "10001" ] && echo 1 || echo 0)" "code=$(code_of "$NEG_RESP")"
+  MANY_IDS=$(python3 -c "print(','.join(['4']*101))")
+  MANY_RESP=$(post_api "/api/meetings" "$U1_TOKEN" \
+    "{\"title\":\"T62超量参会人-$STAMP\",\"roomId\":1,\"startTime\":\"$D2 $(printf '%02d' "$DISABLED_HOUR"):00:00\",\"endTime\":\"$D2 $(printf '%02d' $((DISABLED_HOUR + 1))):00:00\",\"participants\":{\"userIds\":[$MANY_IDS]}}")
+  check "参会人超过 100 → 10001" "$([ "$(code_of "$MANY_RESP")" = "10001" ] && echo 1 || echo 0)" "code=$(code_of "$MANY_RESP")"
+fi
+
+# ---------- ⑤.6 最后一名启用 ADMIN 保护（评审 R7） ----------
+ADMIN2_USERNAME="t62_admin_$STAMP"
+ADMIN2_RESP=$(post_api "/api/users" "$ADMIN_TOKEN" \
+  "{\"username\":\"$ADMIN2_USERNAME\",\"password\":\"t62_pass123\",\"realName\":\"T62临时管理员\",\"roleIds\":[1,3],\"deptId\":2}")
+ADMIN2_ID=$(echo "$ADMIN2_RESP" | python3 -c 'import sys,json;print((json.load(sys.stdin).get("data") or ""))')
+check "临时 ADMIN 创建成功" "$([ -n "$ADMIN2_ID" ] && echo 1 || echo 0)" "userId=${ADMIN2_ID:-?} code=$(code_of "$ADMIN2_RESP")"
+if [ -n "$ADMIN2_ID" ]; then
+  ADMIN2_LOGIN=$(login "$ADMIN2_USERNAME" t62_pass123)
+  ADMIN2_TOKEN=$(token_of "$ADMIN2_LOGIN")
+  check "临时 ADMIN 登录成功" "$([ -n "$ADMIN2_TOKEN" ] && echo 1 || echo 0)"
+  # 先把临时管理员降权（A 仍是启用 ADMIN，所以允许），再用它的旧 token 去停用 A
+  DEMOTE2=$(put_api "/api/users/$ADMIN2_ID" "$ADMIN_TOKEN" \
+    "{\"realName\":\"T62临时管理员\",\"roleIds\":[1],\"deptId\":2}")
+  check "管理员 A 把临时 ADMIN 降权成功" "$([ "$(code_of "$DEMOTE2")" = "0" ] && echo 1 || echo 0)" "code=$(code_of "$DEMOTE2")"
+  LAST_ADMIN_RESP=$(put_api "/api/users/1/status?status=0" "$ADMIN2_TOKEN" '{}')
+  check "降权后的旧 token 不能停用最后一名 ADMIN（20007）" \
+    "$([ "$(code_of "$LAST_ADMIN_RESP")" = "20007" ] && echo 1 || echo 0)" "code=$(code_of "$LAST_ADMIN_RESP")"
+  check "管理员 A 仍是启用状态" "$(sql "SELECT status FROM smt_meeting.sys_user WHERE id=1;")" "1"
+fi
 
 # ---------- ⑥ 选人排除停用用户；管理端仍可见 ----------
-SEARCH_HAS=$(get_api "/api/users/search?deptId=2" "$U1_TOKEN" | \
+SEARCH_HAS=$(get_api "/api/users/search?keyword=$USERNAME" "$U1_TOKEN" | \
   python3 -c "import sys,json;items=json.load(sys.stdin).get('data') or [];print(int(any(u['id']==$USER_ID for u in items)))")
-check "选人搜索排除停用用户" "$([ "$SEARCH_HAS" = "0" ] && echo 1 || echo 0)"
+check "选人搜索排除停用用户（唯一关键字，不受 LIMIT 50 影响）" "$([ "$SEARCH_HAS" = "0" ] && echo 1 || echo 0)"
 ADMIN_LIST_HAS=$(get_api "/api/users?deptId=2&page=1&size=50" "$ADMIN_TOKEN" | \
   python3 -c "import sys,json;items=json.load(sys.stdin).get('data',{}).get('list') or [];print(int(any(u['id']==$USER_ID for u in items)))")
 check "管理端用户列表仍显示停用用户" "$([ "$ADMIN_LIST_HAS" = "1" ] && echo 1 || echo 0)"

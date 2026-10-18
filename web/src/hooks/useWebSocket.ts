@@ -51,6 +51,7 @@ function buildUrl(): string {
 export function useNotificationSocket(): void {
   const setUnreadCount = useNotificationStore((s) => s.setUnreadCount)
   const bumpUnread = useNotificationStore((s) => s.bumpUnread)
+  const bumpTick = useNotificationStore((s) => s.bumpTick)
 
   useEffect(() => {
     let socket: WebSocket | null = null
@@ -65,6 +66,8 @@ export function useNotificationSocket(): void {
       try {
         const { unreadCount } = await fetchUnreadCount()
         setUnreadCount(unreadCount, versionBefore)
+        // 断线期间可能漏过 NOTIFICATION；重连后也让通知中心列表补拉一次
+        bumpTick()
       } catch {
         // 拉不到就保持原值：角标不是关键路径，别为它弹错误提示
       }
@@ -121,6 +124,7 @@ export function useNotificationSocket(): void {
           if (typeof data?.unreadCount === 'number') setUnreadCount(data.unreadCount)
         } else if (message.type === 'NOTIFICATION') {
           bumpUnread() // 乐观 +1：紧跟其后的 UNREAD_COUNT 会用权威值校正
+          bumpTick()   // 通知中心若正开着，列表也拉一次，避免角标变了列表没变（O12）
         }
       }
 
@@ -146,5 +150,5 @@ export function useNotificationSocket(): void {
       socket?.close()
       socket = null
     }
-  }, [setUnreadCount, bumpUnread])
+  }, [setUnreadCount, bumpUnread, bumpTick])
 }

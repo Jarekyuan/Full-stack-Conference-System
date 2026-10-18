@@ -146,8 +146,10 @@ async function waitBadge(page, predicate, timeoutMs = 15000, label = '') {
     const before = initial;
     const m1 = await book(token, 'E2E-F1-推送验证');
     created.push(m1);
-    const afterPush = await waitBadge(page, (n) => n === before + 1, 15000);
-    check('另一端创建预约后角标 +1（WS 推送，未刷新页面）', afterPush === before + 1,
+    // 未读 ≥99 时 antd Badge 显示“99+”，解析为 99；期望值要截断，否则 100 永远等不到（N13）
+    const expectedAfterPush = Math.min(before + 1, 99);
+    const afterPush = await waitBadge(page, (n) => n === expectedAfterPush, 15000);
+    check('另一端创建预约后角标 +1（WS 推送，未刷新页面）', afterPush === expectedAfterPush,
       `${before} → ${afterPush}`);
 
     // ---------- ③ 通知中心：能看到那条 → 点击已读 → 角标 -1 ----------
@@ -193,11 +195,18 @@ async function waitBadge(page, predicate, timeoutMs = 15000, label = '') {
       !!firstTitle && (await page.locator('.ant-list-item', { hasText: firstTitle }).count()) === 0,
       firstTitle || '（未提取到唯一标题）');
 
+    // R14.5：先造一条**未读**，否则“删除后角标 0”是恒真（上一步全部已读已经把角标清零）
+    const m3 = await book(token, 'E2E-F1-删除前未读');
+    created.push(m3);
+    const unreadBeforeDelete = await waitBadge(page, (n) => n >= 1, 15000);
+    check('全部删除前先有一条未读（前置）', unreadBeforeDelete >= 1, String(unreadBeforeDelete));
+
     await page.getByRole('button', { name: /全部删除/ }).click();
     await page.locator('.ant-modal-confirm').getByRole('button', { name: /全部删除/ }).click();
     await page.waitForTimeout(1500);
     check('全部删除后显示空状态', (await page.getByText('还没有通知').count()) > 0);
-    check('全部删除后角标为 0', (await badgeCount(page)) === 0);
+    const afterDeleteAll = await waitBadge(page, (n) => n === 0, 15000);
+    check('全部删除后角标归零（REST 校准）', afterDeleteAll === 0, String(afterDeleteAll));
 
     // ---------- ⑤ 断线自动重连：停掉 notification-service 再拉起 ----------
     console.log('  … 停掉 notification-service，验证前端自动重连（最多等 60s）');

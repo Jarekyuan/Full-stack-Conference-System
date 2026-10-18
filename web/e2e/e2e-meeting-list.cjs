@@ -106,9 +106,13 @@ const sql = (q) =>
     const titleA = `${marker}-已预约`;
     const titleA2 = `${marker}-已编辑`;
     const titleB = `${marker}-待审批`;
+    const titleC = `${marker}-第二场`;
     const idA = await book(1, D1, h1, titleA);
     const idB = await book(3, D2, h2, titleB);
-    check('前置数据创建成功（20 + 10）', !!idA && !!idB, `A=${idA} B=${idB}`);
+    const h3 = await freeSlot(1, D1);
+    if (h3 === undefined) throw new Error('没有第二个空闲时段给 R10 用例');
+    const idC = await book(1, D1, h3, titleC);
+    check('前置数据创建成功（20 + 10 + 20）', !!idA && !!idB && !!idC, `A=${idA} B=${idB} C=${idC}`);
 
     // 列表按开始时间倒序，测试会议在下一周，可能不在第 1 页——用唯一关键字把它们筛出来
     const openList = async () => {
@@ -122,7 +126,11 @@ const sql = (q) =>
     const rowByTitle = (title) => page.locator('.ant-table-tbody tr.ant-table-row', { hasText: title });
     const rowA = rowByTitle(titleA);
     const rowB = rowByTitle(titleB);
-    check('列表能看到两场测试会议', (await rowA.count()) === 1 && (await rowB.count()) === 1);
+    const rowC = rowByTitle(titleC);
+    check(
+      '列表能看到三场测试会议',
+      (await rowA.count()) === 1 && (await rowB.count()) === 1 && (await rowC.count()) === 1,
+    );
 
     // ---------- ① 主题列定宽 ----------
     const firstColStyle = await page.locator('.ant-table colgroup col').first().getAttribute('style');
@@ -182,6 +190,14 @@ const sql = (q) =>
     await page.waitForTimeout(1800);
     check('列表显示编辑后的标题', (await rowByTitle(titleA2).count()) === 1 && (await rowByTitle(titleA).count()) === 0);
 
+    // R10：编辑过 A 后改开 C，抽屉必须加载 C 的详情，不能拿 A 的 detail 提交
+    await rowByTitle(titleC).getByRole('button', { name: /编\s*辑/ }).click();
+    await page.waitForTimeout(1200);
+    const editTitleValue = await page.getByPlaceholder('如：产品评审会').inputValue();
+    check('切换编辑对象后表单是 C（不是上一场 A）', editTitleValue === titleC, editTitleValue);
+    await page.locator('.ant-drawer-close').click();
+    await page.waitForTimeout(500);
+
     // ---------- ⑥ 列表取消 ----------
     const rowA2 = rowByTitle(titleA2);
     await rowA2.getByRole('button', { name: /取\s*消/ }).click();
@@ -209,10 +225,12 @@ const sql = (q) =>
     await p2.getByPlaceholder('请输入密码').fill('user123');
     await p2.locator('button[type="submit"]').click();
     await p2.waitForURL('**/calendar', { timeout: 10000 });
-    await p2.goto(`${BASE}/meetings/${idB}`, { waitUntil: 'networkidle' });
+    // R14.10：用一场 **status=20** 的会议验证——status=10 本来就没有编辑入口，
+    // 旧断言即使删掉 organiserId 判断也会绿。
+    await p2.goto(`${BASE}/meetings/${idC}`, { waitUntil: 'networkidle' });
     await p2.waitForTimeout(1200);
-    check('非组织人看不到编辑按钮', (await p2.getByRole('button', { name: '编辑会议' }).count()) === 0);
-    check('非组织人看不到取消按钮', (await p2.getByRole('button', { name: '取消会议' }).count()) === 0);
+    check('非组织人看不到编辑按钮（20 已预约）', (await p2.getByRole('button', { name: '编辑会议' }).count()) === 0);
+    check('非组织人看不到取消按钮（20 已预约）', (await p2.getByRole('button', { name: '取消会议' }).count()) === 0);
     await p2.close();
     await page.close();
   } catch (e) {

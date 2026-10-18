@@ -47,4 +47,10 @@ public interface SysUserMapper {
 
     /** 编辑用户资料（T1.20：姓名/邮箱/部门；用户名与密码不在此接口） */
     int updateProfile(SysUser user);
+
+    /**
+     * 最后管理员不变式（T1.20 评审 R7）：排除目标用户后还剩几个启用的 ADMIN。
+     * 调用方必须先 {@link SysRoleMapper#lockAdminRoleForUpdate()} 再调用本方法。
+     */
+    long countActiveAdminsExcluding(@Param("excludeId") Long excludeId);
 }

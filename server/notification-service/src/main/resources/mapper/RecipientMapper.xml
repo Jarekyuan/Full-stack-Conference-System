@@ -3,12 +3,16 @@
 <!-- 收件人解析（只读跨域表，理由见 RecipientMapper 接口注释；本文件不含任何写操作） -->
 <mapper namespace="com.smt.notification.mapper.RecipientMapper">
 
-    <!-- 会议参会人：命中 uk_meeting_user(meeting_id, user_id) 的最左前缀，走索引不回表 -->
+    <!-- 会议参会人：命中 uk_meeting_user(meeting_id, user_id) 的最左前缀。
+         T6.2/R6 补：只给**启用**账号发通知——参会记录保留，但停用账号不能再收变更/取消/提醒，
+         与 selectApproverIds 的口径一致（给已停用的人发消息是纯噪音）。 -->
     <select id="selectParticipantIds" resultType="java.lang.Long">
-        SELECT user_id
-        FROM meeting_participant
-        WHERE meeting_id = #{meetingId}
-        ORDER BY user_id
+        SELECT mp.user_id
+        FROM meeting_participant mp
+        JOIN sys_user u ON u.id = mp.user_id
+        WHERE mp.meeting_id = #{meetingId}
+          AND u.status = 1
+        ORDER BY mp.user_id
     </select>
 
     <!-- 审批人：sys_role 按 code 唯一索引定位，再经 sys_user_role.idx_role 关联；

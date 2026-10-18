@@ -12,428 +12,33 @@
  *    分页场景下必然算错；后端在内存里展开部门树后传 `IN`，才是完整结果。
  */
 import { useEffect, useMemo, useState } from 'react'
-import { Controller, useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import { z } from 'zod'
 import {
+  Alert,
   App,
   Button,
   Checkbox,
   Dropdown,
   Empty,
-  Input,
-  InputNumber,
-  Modal,
-  Select,
-  Space,
   Spin,
   Switch,
   Table,
   Tag,
   Tree,
-  TreeSelect,
   Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { DataNode } from 'antd/es/tree'
 import { MoreHorizontal, Plus } from 'lucide-react'
-import { createDept, deleteDept, fetchDeptTree, updateDept, type DeptNode } from '@/api/dept'
-import {
-  createUser,
-  listRoles,
-  listUsers,
-  updateUser,
-  updateUserStatus,
-  type RoleItem,
-  type UserItem,
-} from '@/api/user'
+import { deleteDept, fetchDeptTree, type DeptNode } from '@/api/dept'
+import { listRoles, listUsers, updateUserStatus, type UserItem } from '@/api/user'
 import { useAppRequest } from '@/hooks/useAppRequest'
 import { useUserStore } from '@/stores/userStore'
+import DeptFormModal from './DeptFormModal'
+import UserFormModal from './UserFormModal'
 
 const { Text } = Typography
 
 const ROLE_COLOR: Record<string, string> = { ADMIN: 'red', APPROVER: 'blue', USER: 'default' }
-
-// ———————————————————— 部门表单 ————————————————————
-
-const deptSchema = z.object({
-  name: z.string().trim().min(1, '请输入部门名称').max(50, '最长 50 字符'),
-  sortOrder: z.number({ invalid_type_error: '请输入排序' }).int('请输入整数').min(0, '不能小于 0').max(9999),
-  status: z.number().int().min(0).max(1),
-})
-type DeptForm = z.infer<typeof deptSchema>
-
-function DeptFormModal({
-  open,
-  dept,
-  parent,
-  onClose,
-  onSuccess,
-}: {
-  open: boolean
-  /** 非空 = 编辑 */
-  dept: DeptNode | null
-  /** 新增时的上级；null = 根部门 */
-  parent: DeptNode | null
-  onClose: () => void
-  onSuccess: (createdId?: number) => void
-}) {
-  const { message } = App.useApp()
-  const { runAsync: doCreate, loading: creating } = useAppRequest(createDept)
-  const { runAsync: doUpdate, loading: updating } = useAppRequest(updateDept)
-
-  const {
-    control,
-    handleSubmit,
-    reset,
-    formState: { errors },
-  } = useForm<DeptForm>({
-    resolver: zodResolver(deptSchema),
-    defaultValues: { name: '', sortOrder: 0, status: 1 },
-  })
-
-  useEffect(() => {
-    if (!open) return
-    reset({
-      name: dept?.name ?? '',
-      sortOrder: dept?.sortOrder ?? 0,
-      status: dept?.status ?? 1,
-    })
-  }, [open, dept, reset])
-
-  const onSubmit = async (values: DeptForm) => {
-    try {
-      if (dept) {
-        await doUpdate(dept.id, {
-          name: values.name,
-          sortOrder: values.sortOrder,
-          status: values.status,
-        })
-        message.success('部门已更新')
-        onSuccess()
-      } else {
-        const id = await doCreate({
-          name: values.name,
-          parentId: parent?.id ?? 0,
-          sortOrder: values.sortOrder,
-        })
-        message.success('部门已创建')
-        onSuccess(id)
-      }
-      onClose()
-    } catch {
-      // 失败已由 useAppRequest 统一 toast；保留弹窗让用户改
-    }
-  }
-
-  return (
-    <Modal
-      open={open}
-      title={dept ? `编辑部门 - ${dept.name}` : parent ? `新增子部门 - ${parent.name}` : '新增根部门'}
-      onCancel={onClose}
-      onOk={handleSubmit(onSubmit)}
-      confirmLoading={creating || updating}
-      okText="保存"
-      cancelText="取消"
-      destroyOnClose
-    >
-      <div className="space-y-4 pt-2">
-        <div>
-          <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">上级部门</div>
-          <Text type="secondary">{dept ? '父级不可变（本次不改上级）' : parent?.name ?? '根节点'}</Text>
-        </div>
-        <div>
-          <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">部门名称</div>
-          <Controller
-            name="name"
-            control={control}
-            render={({ field }) => <Input {...field} placeholder="如：研发部" maxLength={50} />}
-          />
-          {errors.name && <div className="mt-1 text-xs text-red-500 dark:text-red-400">{errors.name.message}</div>}
-        </div>
-        <div>
-          <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">同级排序（小的在前）</div>
-          <Controller
-            name="sortOrder"
-            control={control}
-            render={({ field }) => (
-              <InputNumber
-                value={field.value}
-                onChange={(v) => field.onChange(v ?? 0)}
-                onBlur={field.onBlur}
-                min={0}
-                max={9999}
-                className="w-full"
-              />
-            )}
-          />
-          {errors.sortOrder && (
-            <div className="mt-1 text-xs text-red-500 dark:text-red-400">{errors.sortOrder.message}</div>
-          )}
-        </div>
-        {dept && (
-          <div>
-            <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">状态</div>
-            <Controller
-              name="status"
-              control={control}
-              render={({ field }) => (
-                <Space>
-                  <Switch
-                    checked={field.value === 1}
-                    onChange={(checked) => field.onChange(checked ? 1 : 0)}
-                  />
-                  <Text type="secondary">{field.value === 1 ? '启用' : '停用'}</Text>
-                </Space>
-              )}
-            />
-          </div>
-        )}
-      </div>
-    </Modal>
-  )
-}
-
-// ———————————————————— 用户表单 ————————————————————
-
-const userSchema = z.object({
-  username: z.string().trim().min(1, '请输入用户名').max(50, '最长 50 字符'),
-  password: z.string().max(32, '最长 32 位').optional(),
-  realName: z.string().trim().min(1, '请输入姓名').max(50, '最长 50 字符'),
-  email: z
-    .string()
-    .trim()
-    .max(100, '最长 100 字符')
-    .refine((v) => v === '' || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), '邮箱格式不正确')
-    .optional(),
-  roleIds: z.array(z.number()).min(1, '至少分配一个角色'),
-  deptId: z.number().int().positive().nullable().optional(),
-})
-type UserForm = z.infer<typeof userSchema>
-
-interface DeptTreeOption {
-  title: string
-  value: number
-  children?: DeptTreeOption[]
-}
-
-function toDeptTreeOptions(nodes: DeptNode[]): DeptTreeOption[] {
-  return nodes.map((n) => ({
-    title: n.name,
-    value: n.id,
-    children: n.children.length > 0 ? toDeptTreeOptions(n.children) : undefined,
-  }))
-}
-
-function UserFormModal({
-  open,
-  user,
-  defaultDeptId,
-  roles,
-  deptTree,
-  currentUserId,
-  onClose,
-  onSuccess,
-}: {
-  open: boolean
-  /** 非空 = 编辑 */
-  user: UserItem | null
-  defaultDeptId?: number
-  roles: RoleItem[]
-  deptTree: DeptNode[]
-  currentUserId?: number
-  onClose: () => void
-  onSuccess: () => void
-}) {
-  const { message } = App.useApp()
-  const { runAsync: doCreate, loading: creating } = useAppRequest(createUser)
-  const { runAsync: doUpdate, loading: updating } = useAppRequest(updateUser)
-
-  const {
-    control,
-    handleSubmit,
-    reset,
-    setError,
-    formState: { errors },
-  } = useForm<UserForm>({
-    resolver: zodResolver(userSchema),
-    defaultValues: {
-      username: '',
-      password: '',
-      realName: '',
-      email: '',
-      roleIds: [],
-      deptId: defaultDeptId ?? null,
-    },
-  })
-
-  // 角色 code → id：编辑回显用的 UserVO 只有 code，下拉需要 id
-  const roleIdsOf = (u: UserItem | null): number[] =>
-    (u?.roles ?? [])
-      .map((code) => roles.find((r) => r.code === code)?.id)
-      .filter((id): id is number => id !== undefined)
-
-  useEffect(() => {
-    if (!open) return
-    reset({
-      username: user?.username ?? '',
-      password: '',
-      realName: user?.realName ?? '',
-      email: user?.email ?? '',
-      roleIds: roleIdsOf(user),
-      deptId: user ? user.deptId : defaultDeptId ?? null,
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, user, defaultDeptId, roles, reset])
-
-  const onSubmit = async (values: UserForm) => {
-    // 密码只在创建时校验：编辑不碰密码（docs/04 3.1）
-    if (!user && (!values.password || values.password.length < 6)) {
-      setError('password', { message: '密码长度至少 6 位' })
-      return
-    }
-    try {
-      const email = values.email?.trim() || undefined
-      const deptId = values.deptId ?? undefined
-      if (user) {
-        await doUpdate(user.id, {
-          realName: values.realName,
-          email,
-          roleIds: values.roleIds,
-          deptId,
-        })
-        message.success('用户已更新')
-      } else {
-        await doCreate({
-          username: values.username,
-          password: values.password!,
-          realName: values.realName,
-          email,
-          roleIds: values.roleIds,
-          deptId,
-        })
-        message.success('用户已创建')
-      }
-      onSuccess()
-      onClose()
-    } catch {
-      // 已 toast（如 20005 用户名已存在 / 20006 不能移除自己的 ADMIN 角色）
-    }
-  }
-
-  const isSelf = !!user && user.id === currentUserId
-
-  return (
-    <Modal
-      open={open}
-      title={user ? `编辑用户 - ${user.username}` : '新增用户'}
-      onCancel={onClose}
-      onOk={handleSubmit(onSubmit)}
-      confirmLoading={creating || updating}
-      okText="保存"
-      cancelText="取消"
-      destroyOnClose
-    >
-      <div className="space-y-4 pt-2">
-        <div>
-          <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">用户名（登录名）</div>
-          <Controller
-            name="username"
-            control={control}
-            render={({ field }) =>
-              user ? (
-                <Input value={field.value} disabled />
-              ) : (
-                <Input {...field} placeholder="登录名，创建后不可修改" maxLength={50} />
-              )
-            }
-          />
-          {errors.username && (
-            <div className="mt-1 text-xs text-red-500 dark:text-red-400">{errors.username.message}</div>
-          )}
-        </div>
-        {!user && (
-          <div>
-            <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">初始密码</div>
-            <Controller
-              name="password"
-              control={control}
-              render={({ field }) => (
-                <Input.Password {...field} placeholder="6-32 位" maxLength={32} />
-              )}
-            />
-            {errors.password && (
-              <div className="mt-1 text-xs text-red-500 dark:text-red-400">{errors.password.message}</div>
-            )}
-          </div>
-        )}
-        <div>
-          <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">姓名</div>
-          <Controller
-            name="realName"
-            control={control}
-            render={({ field }) => <Input {...field} placeholder="真实姓名" maxLength={50} />}
-          />
-          {errors.realName && (
-            <div className="mt-1 text-xs text-red-500 dark:text-red-400">{errors.realName.message}</div>
-          )}
-        </div>
-        <div>
-          <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">邮箱（通知用，可空）</div>
-          <Controller
-            name="email"
-            control={control}
-            render={({ field }) => <Input {...field} placeholder="name@example.com" maxLength={100} />}
-          />
-          {errors.email && <div className="mt-1 text-xs text-red-500 dark:text-red-400">{errors.email.message}</div>}
-        </div>
-        <div>
-          <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">所属部门</div>
-          <Controller
-            name="deptId"
-            control={control}
-            render={({ field }) => (
-              <TreeSelect
-                value={field.value ?? undefined}
-                onChange={(v) => field.onChange(v ?? null)}
-                treeData={toDeptTreeOptions(deptTree)}
-                treeDefaultExpandAll
-                allowClear
-                placeholder="未分配部门"
-                className="w-full"
-              />
-            )}
-          />
-        </div>
-        <div>
-          <div className="mb-1 text-sm text-slate-600 dark:text-slate-300">角色（至少一个）</div>
-          <Controller
-            name="roleIds"
-            control={control}
-            render={({ field }) => (
-              <Select
-                mode="multiple"
-                value={field.value}
-                onChange={field.onChange}
-                options={roles.map((r) => ({ label: `${r.name}（${r.code}）`, value: r.id }))}
-                placeholder="请选择角色"
-                className="w-full"
-              />
-            )}
-          />
-          {errors.roleIds && (
-            <div className="mt-1 text-xs text-red-500 dark:text-red-400">{errors.roleIds.message}</div>
-          )}
-          {isSelf && (
-            <div className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-              不能移除自己的 ADMIN 角色（否则会把自己锁在管理端之外）
-            </div>
-          )}
-        </div>
-      </div>
-    </Modal>
-  )
-}
 
 // ———————————————————— 页面 ————————————————————
 
@@ -467,11 +72,13 @@ export default function OrgUsers() {
   )
   const [statusLoadingId, setStatusLoadingId] = useState<number | null>(null)
 
-  const { data: deptTree, loading: treeLoading, run: loadTree } = useAppRequest(fetchDeptTree, {
-    manual: false,
-  })
+  const { data: deptTree, loading: treeLoading, run: loadTree, error: treeError } = useAppRequest(
+    fetchDeptTree,
+    { manual: false },
+  )
   const { data: roles } = useAppRequest(listRoles, { manual: false })
-  const { data: userPage, loading: usersLoading, run: loadUsers } = useAppRequest(listUsers)
+  const { data: userPage, loading: usersLoading, run: loadUsers, error: usersError } =
+    useAppRequest(listUsers)
   const { runAsync: doUpdateStatus } = useAppRequest(updateUserStatus)
   const { runAsync: doDeleteDept } = useAppRequest(deleteDept)
 
@@ -672,6 +279,15 @@ export default function OrgUsers() {
             根部门
           </Button>
         </div>
+        {treeError && (
+          <Alert
+            type="error"
+            showIcon
+            className="mb-2"
+            message="部门树加载失败"
+            action={<Button size="small" onClick={() => loadTree()}>重试</Button>}
+          />
+        )}
         <Spin spinning={treeLoading}>
           {deptTree && deptTree.length > 0 ? (
             <Tree
@@ -763,6 +379,15 @@ export default function OrgUsers() {
           </Text>
         </div>
 
+        {usersError && (
+          <Alert
+            type="error"
+            showIcon
+            className="mb-3"
+            message="成员列表加载失败"
+            action={<Button size="small" onClick={() => loadUsers(query())}>重试</Button>}
+          />
+        )}
         <Table<UserItem>
           rowKey="id"
           size="middle"
@@ -841,7 +466,7 @@ function DropdownActions({
         },
       }}
     >
-      <Button type="text" size="small" icon={<MoreHorizontal size={14} />} />
+      <Button type="text" size="small" aria-label="部门操作" icon={<MoreHorizontal size={14} />} />
     </Dropdown>
   )
 }

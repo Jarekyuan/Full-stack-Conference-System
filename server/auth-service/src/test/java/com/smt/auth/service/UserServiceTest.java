@@ -180,6 +180,7 @@ class UserServiceTest {
 
     @Test
     void disableShouldRevokeRefreshToken() {
+        when(sysUserMapper.selectById(TARGET_ID)).thenReturn(user());
         when(sysUserMapper.updateStatus(TARGET_ID, 0)).thenReturn(1);
 
         service.updateStatus(TARGET_ID, 0);
@@ -190,11 +191,75 @@ class UserServiceTest {
 
     @Test
     void enableShouldNotRevokeRefreshToken() {
+        when(sysUserMapper.selectById(TARGET_ID)).thenReturn(user());
         when(sysUserMapper.updateStatus(TARGET_ID, 1)).thenReturn(1);
 
         service.updateStatus(TARGET_ID, 1);
 
         verify(refreshTokenStore, never()).removeByUser(any());
+    }
+
+    @Test
+    void disableLastAdminShouldFailWith20007() {
+        SysUser target = user();
+        target.setStatus(1);
+        when(sysUserMapper.selectById(TARGET_ID)).thenReturn(target);
+        when(sysRoleMapper.selectCodesByUserId(TARGET_ID)).thenReturn(List.of("ADMIN"));
+        when(sysUserMapper.countActiveAdminsExcluding(TARGET_ID)).thenReturn(0L);
+
+        assertThatThrownBy(() -> service.updateStatus(TARGET_ID, 0))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getCode())
+                .isEqualTo(ErrorCode.LAST_ADMIN_PROTECTED.getCode());
+        verify(sysRoleMapper).lockAdminRoleForUpdate();
+        verify(sysUserMapper, never()).updateStatus(any(), any());
+    }
+
+    @Test
+    void disableAdminWithAnotherActiveAdminShouldPass() {
+        SysUser target = user();
+        target.setStatus(1);
+        when(sysUserMapper.selectById(TARGET_ID)).thenReturn(target);
+        when(sysRoleMapper.selectCodesByUserId(TARGET_ID)).thenReturn(List.of("ADMIN"));
+        when(sysUserMapper.countActiveAdminsExcluding(TARGET_ID)).thenReturn(1L);
+        when(sysUserMapper.updateStatus(TARGET_ID, 0)).thenReturn(1);
+
+        service.updateStatus(TARGET_ID, 0);
+
+        verify(sysRoleMapper).lockAdminRoleForUpdate();
+        verify(sysUserMapper).updateStatus(TARGET_ID, 0);
+    }
+
+    @Test
+    void demoteLastAdminShouldFailWith20007() {
+        SysUser target = user();
+        target.setStatus(1);
+        when(sysUserMapper.selectById(TARGET_ID)).thenReturn(target);
+        when(sysRoleMapper.selectByIds(List.of(1L))).thenReturn(List.of(role(1L, "USER")));
+        when(sysRoleMapper.selectCodesByUserId(TARGET_ID)).thenReturn(List.of("ADMIN"));
+        when(sysUserMapper.countActiveAdminsExcluding(TARGET_ID)).thenReturn(0L);
+
+        assertThatThrownBy(() -> service.update(TARGET_ID, updateDTO(List.of(1L), null)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getCode())
+                .isEqualTo(ErrorCode.LAST_ADMIN_PROTECTED.getCode());
+        verify(sysRoleMapper).lockAdminRoleForUpdate();
+        verify(sysRoleMapper, never()).deleteUserRoles(any());
+    }
+
+    @Test
+    void demoteAdminWithAnotherActiveAdminShouldPass() {
+        SysUser target = user();
+        target.setStatus(1);
+        when(sysUserMapper.selectById(TARGET_ID)).thenReturn(target);
+        when(sysRoleMapper.selectByIds(List.of(1L))).thenReturn(List.of(role(1L, "USER")));
+        when(sysRoleMapper.selectCodesByUserId(TARGET_ID)).thenReturn(List.of("ADMIN"));
+        when(sysUserMapper.countActiveAdminsExcluding(TARGET_ID)).thenReturn(1L);
+
+        service.update(TARGET_ID, updateDTO(List.of(1L), null));
+
+        verify(sysRoleMapper).lockAdminRoleForUpdate();
+        verify(sysRoleMapper).batchInsertUserRoles(TARGET_ID, List.of(1L));
     }
 
     @Test

@@ -53,4 +53,16 @@
         </foreach>
     </select>
 
+    <!-- 参会人校验（评审 R6）：同库只读 sys_user（与通知服务 RecipientMapper 同一约定）。
+         停用(0)与不存在都不返回；调用方用“请求集合 − 返回集合”得到非法 id。 -->
+    <select id="selectEnabledUserIds" resultType="java.lang.Long">
+        SELECT id
+        FROM sys_user
+        WHERE status = 1
+          AND id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </select>
+
 </mapper>

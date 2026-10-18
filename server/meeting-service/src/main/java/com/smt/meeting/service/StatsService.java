@@ -2,6 +2,8 @@ package com.smt.meeting.service;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 import org.springframework.stereotype.Service;
@@ -52,17 +54,26 @@ public class StatsService {
             throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(), "起始日期不能晚于结束日期");
         }
         long days = to.toEpochDay() - from.toEpochDay() + 1;
+        // O17：防止 ADMIN 传 0001~9999 让聚合无意义地扫全表
+        if (days > 366) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(), "统计区间最多 366 天");
+        }
         long availableMinutes = days * MINUTES_PER_DAY;
 
         // 半开区间 [from 00:00, to+1 00:00)：区间端点用"日期"解释，含 end 全天
         LocalDateTime rangeStart = from.atStartOfDay();
         LocalDateTime rangeEnd = to.plusDays(1).atStartOfDay();
 
-        List<RoomUsageVO.Item> items = statsMapper.selectRoomUsage(rangeStart, rangeEnd).stream()
+        // 当前会议室 + 已删除会议室的历史（R8）；已删除房间用 `已删除会议室#id` 兜底名称，
+        // 否则管理员删掉旧房间后，它上个月的使用率会静默消失。
+        List<RoomUsageRow> rows = new ArrayList<>(statsMapper.selectRoomUsage(rangeStart, rangeEnd));
+        rows.addAll(statsMapper.selectDeletedRoomUsage(rangeStart, rangeEnd));
+        List<RoomUsageVO.Item> items = rows.stream()
                 .map(row -> new RoomUsageVO.Item(row.getRoomId(), row.getRoomName(), row.getMeetingCount(),
                         row.getTotalMinutes(),
                         // 占用率给 0~1 的小数（量纲写在文档里；四舍五入到 4 位，避免 0.00805555… 这种噪声）
                         Math.round(row.getTotalMinutes() * 10000.0 / availableMinutes) / 10000.0))
+                .sorted(Comparator.comparing(RoomUsageVO.Item::roomName))
                 .toList();
         long totalMinutes = items.stream().mapToLong(RoomUsageVO.Item::totalMinutes).sum();
         return new RoomUsageVO(from, to, availableMinutes, totalMinutes, items);

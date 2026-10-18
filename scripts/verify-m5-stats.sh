@@ -20,9 +20,6 @@ MYSQL='docker exec smt-mysql mysql --default-character-set=utf8mb4 -uroot -proot
 ROOM=2
 PASS=0; FAIL=0
 
-source "$(dirname "$0")/lib/ratelimit.sh"
-ratelimit_disable_for_script
-
 j() { python3 -c "import sys,json;d=json.load(sys.stdin);print($1)" 2>/dev/null; }
 sql() { eval "$MYSQL \"$1\"" 2>/dev/null | grep -v "Using a password"; }
 check() {
@@ -37,8 +34,17 @@ cleanup() {
          DELETE FROM smt_meeting.meeting_approval WHERE meeting_id=$m;
          DELETE FROM smt_meeting.meeting WHERE id=$m;" > /dev/null
   done
+  # 已删除会议室（R8 测试）的兜底清理：正常情况下 API 已删，失败时直接 SQL 删
+  if [ -n "${DEL_ROOM_ID:-}" ]; then
+    sql "DELETE FROM smt_meeting.room_strategy WHERE room_id=$DEL_ROOM_ID;
+         DELETE FROM smt_meeting.meeting_room WHERE id=$DEL_ROOM_ID;" > /dev/null
+  fi
 }
 trap cleanup EXIT
+
+# 限流开关：必须在 cleanup trap 之后调用（lib 会链式安装；反过来会覆盖恢复钩子，见评审 C2）
+source "$(dirname "$0")/lib/ratelimit.sh"
+ratelimit_disable_for_script
 
 login() { local body; body=$(printf '{"username":"%s","password":"%s"}' "$1" "$2"); \
   curl -s --noproxy '*' -X POST "$BASE/api/auth/login" -H 'Content-Type: application/json' -d "$body" | j "d['data']['accessToken']"; }
@@ -59,6 +65,7 @@ U1=$(login user1 user123); U2=$(login user2 user123); ADMIN=$(login admin admin1
 U1_ID=$(sql "SELECT id FROM smt_meeting.sys_user WHERE username='user1';")
 U2_ID=$(sql "SELECT id FROM smt_meeting.sys_user WHERE username='user2';")
 IDS=""
+DEL_ROOM_ID=""
 
 # 窗口：day+1 ~ day+6（未来，避开"今天"里已有的其它安排）
 D1=$(python3 -c "import datetime;print(datetime.date.today()+datetime.timedelta(days=1))")
@@ -92,8 +99,37 @@ check "占用率是 0~1 的小数（不是百分数）" \
   "$(usage "$D1" "$D6" | j "all(0 <= i['usageRate'] <= 1 for i in d['data']['items'])")" "True"
 check "零会议的会议室也在列表里（LEFT JOIN）" \
   "$(usage "$D1" "$D6" | j "any(i['meetingCount'] == 0 for i in d['data']['items'])")" "True"
-check "会议室数量 = 全部启用会议室数" \
+check "会议室数量 = 全部会议室数（含维护中）" \
   "$(usage "$D1" "$D6" | j "len(d['data']['items'])")" "$(sql "SELECT COUNT(*) FROM smt_meeting.meeting_room;")"
+
+echo
+echo "=== 2.5 已删除会议室的历史仍计入（评审 R8）==="
+DEL_ROOM_NAME="T53-已删房-$(date +%s)"
+ROOM_RESP=$(curl -s --noproxy '*' -X POST "$BASE/api/rooms" -H "Authorization: Bearer $ADMIN" \
+  -H 'Content-Type: application/json' \
+  -d "{\"name\":\"$DEL_ROOM_NAME\",\"groupId\":1,\"capacity\":4,\"location\":\"T53\",\"status\":0}")
+DEL_ROOM_ID=$(echo "$ROOM_RESP" | j "d['data']")
+check "临时会议室创建成功" "$([ -n "$DEL_ROOM_ID" ] && [ "$DEL_ROOM_ID" != "None" ] && echo yes || echo no)" "yes"
+if [ -n "$DEL_ROOM_ID" ] && [ "$DEL_ROOM_ID" != "None" ]; then
+  DEL_MEETING=$(sql "INSERT INTO smt_meeting.meeting (title, room_id, organiser_id, start_time, end_time, status)
+    VALUES ('T53-已删房会议', $DEL_ROOM_ID, $U1_ID, '$D1 16:00:00', '$D1 17:00:00', 40);
+    SELECT LAST_INSERT_ID();")
+  [ -n "$DEL_MEETING" ] && IDS="$IDS $DEL_MEETING"
+  DEL_RESP=$(curl -s --noproxy '*' -X DELETE "$BASE/api/rooms/$DEL_ROOM_ID" -H "Authorization: Bearer $ADMIN")
+  check "删除会议室成功（历史 40 不阻止删除）" "$(echo "$DEL_RESP" | j "d['code']")" "0"
+  DEL_ITEM=$(usage "$D1" "$D1" | python3 -c "
+import sys, json
+items = json.load(sys.stdin)['data']['items']
+x = [i for i in items if i['roomId'] == $DEL_ROOM_ID]
+print(x[0]['roomName'] if x else 'missing')
+print(x[0]['meetingCount'] if x else '-')
+print(x[0]['totalMinutes'] if x else '-')")
+  DEL_NAME=$(echo "$DEL_ITEM" | sed -n '1p')
+  DEL_COUNT=$(echo "$DEL_ITEM" | sed -n '2p')
+  DEL_MIN=$(echo "$DEL_ITEM" | sed -n '3p')
+  check "已删除会议室以兜底名称出现" "$DEL_NAME" "已删除会议室#$DEL_ROOM_ID"
+  check "已删除会议室的历史会议仍计入" "$DEL_COUNT|$DEL_MIN" "1|60"
+fi
 
 echo
 echo "=== 3. 状态口径：取消的会议不再计入 ==="
@@ -138,6 +174,8 @@ echo "=== 5. 权限与参数 ==="
 check "非 ADMIN → 403" "$(curl -s --noproxy '*' -o /dev/null -w '%{http_code}' "$BASE/api/stats/room-usage" -H "Authorization: Bearer $U1")" "403"
 check "start 晚于 end → 10001" "$(curl -s --noproxy '*' "$BASE/api/stats/room-usage?start=$D6&end=$D1" -H "Authorization: Bearer $ADMIN" | j "d['code']")" "10001"
 check "日期格式非法 → 10001" "$(curl -s --noproxy '*' "$BASE/api/stats/room-usage?start=2026-13-99" -H "Authorization: Bearer $ADMIN" | j "d['code']")" "10001"
+check "统计区间超过 366 天 → 10001" \
+  "$(curl -s --noproxy '*' "$BASE/api/stats/room-usage?start=2020-01-01&end=2026-01-01" -H "Authorization: Bearer $ADMIN" | j "d['code']")" "10001"
 
 echo
 echo "=== 6. H-2 个人统计：我组织的 ∪ 我参与的（近 30 天）==="
@@ -147,6 +185,11 @@ echo "=== 6. H-2 个人统计：我组织的 ∪ 我参与的（近 30 天）===
 P1=$(python3 -c "import datetime;print(datetime.date.today()-datetime.timedelta(days=5))")
 P2=$(python3 -c "import datetime;print(datetime.date.today()-datetime.timedelta(days=3))")
 P3=$(python3 -c "import datetime;print(datetime.date.today()-datetime.timedelta(days=2))")
+# R14.1：先取基线，再断言“增量”——绝对阈值会被库里既有历史数据凑数（旧断言 >=195 在功能坏掉时仍可能绿）
+U1_BEFORE=$(curl -s --noproxy '*' "$BASE/api/stats/my-meetings" -H "Authorization: Bearer $U1")
+U1_MEET_BEFORE=$(echo "$U1_BEFORE" | j "d['data']['totalMeetings']")
+U1_MIN_BEFORE=$(echo "$U1_BEFORE" | j "d['data']['totalMinutes']")
+U2_MIN_BEFORE=$(curl -s --noproxy '*' "$BASE/api/stats/my-meetings" -H "Authorization: Bearer $U2" | j "d['data']['totalMinutes']")
 H1=$(sql "INSERT INTO smt_meeting.meeting (title, room_id, organiser_id, start_time, end_time, status)
   VALUES ('T53-历史A', $ROOM, $U1_ID, '$P1 09:00:00', '$P1 10:00:00', 40); SELECT LAST_INSERT_ID();")
 H2=$(sql "INSERT INTO smt_meeting.meeting (title, room_id, organiser_id, start_time, end_time, status)
@@ -156,21 +199,22 @@ H3=$(sql "INSERT INTO smt_meeting.meeting (title, room_id, organiser_id, start_t
 sql "INSERT INTO smt_meeting.meeting_participant (meeting_id, user_id) VALUES ($H3, $U1_ID);" > /dev/null
 IDS="$IDS $H1 $H2 $H3"
 MY=$(curl -s --noproxy '*' "$BASE/api/stats/my-meetings" -H "Authorization: Bearer $U1")
-# 注意：user1 库里可能还有别的历史会议（早前的测试残留），所以断言"至少包含我造的三场"，
-# 并用"增量"核对——写死 3 场的话一有残留就红（错的是断言）
-check "user1 的近 30 天里**包含我造的三场**（>= 3）" "$(echo "$MY" | j "d['data']['totalMeetings'] >= 3")" "True"
-check "user1 的时长 **>= 195**（60+90+45）" "$(echo "$MY" | j "d['data']['totalMinutes'] >= 195")" "True"
-check "user2 的时长也包含他组织的那 45 分钟（>= 45）" \
-  "$(curl -s --noproxy '*' "$BASE/api/stats/my-meetings" -H "Authorization: Bearer $U2" | j "d['data']['totalMinutes'] >= 45")" "True"
+check "user1 的会议数增量 = 3" "$(( $(echo "$MY" | j "d['data']['totalMeetings']") - U1_MEET_BEFORE ))" "3"
+check "user1 的时长增量 = 195（60+90+45）" "$(( $(echo "$MY" | j "d['data']['totalMinutes']") - U1_MIN_BEFORE ))" "195"
+check "user2 的时长增量 = 45（含参与关系外的那场）" \
+  "$(( $(curl -s --noproxy '*' "$BASE/api/stats/my-meetings" -H "Authorization: Bearer $U2" | j "d['data']['totalMinutes']") - U2_MIN_BEFORE ))" "45"
 check "daily 含 P1 这一天" \
   "$(echo "$MY" | j "any(x['date'] == '$P1' for x in d['data']['daily'])")" "True"
 check "daily 只含**有会议的**日期（不是补齐 30 天）" "$(echo "$MY" | j "len(d['data']['daily']) < 30")" "True"
-check "**参与别人组织的会也算我的**（H-2 口径：组织 ∪ 参与）" \
-  "$(echo "$MY" | j "d['data']['totalMinutes'] >= 240")" "True"
+# 195 分钟里 45 分钟只可能来自 H3（user2 组织、user1 参会）：
+#   如果“参与别人的会”失效，增量会是 150 而不是 195，上面那条已能失败；这里再显式写清口径
+check "**参与别人组织的会也算我的**（增量包含 H3 的 45 分钟）" \
+  "$(( $(echo "$MY" | j "d['data']['totalMinutes']") - U1_MIN_BEFORE ))" "195"
 
 echo
 echo "=== 7. 清理与残留 ==="
 cleanup
+ratelimit_restore   # 手工 cleanup 后显式恢复；trap - EXIT 会连链式恢复钩子一起移除
 trap - EXIT
 ID_LIST=$(echo $IDS | tr ' ' ',')
 check "库里已无本次数据" "$(sql "SELECT COUNT(*) FROM smt_meeting.meeting WHERE id IN ($ID_LIST);")" "0"

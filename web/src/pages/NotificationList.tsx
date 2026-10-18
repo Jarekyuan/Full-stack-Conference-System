@@ -12,7 +12,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { App, Button, Checkbox, Empty, List, Space, Tag, Typography } from 'antd'
+import { Alert, App, Button, Checkbox, Empty, List, Space, Tag, Typography } from 'antd'
 import { CheckCheck, Trash2 } from 'lucide-react'
 import { getMeeting } from '@/api/meeting'
 import { notificationTarget } from '@/components/notificationRouting'
@@ -45,6 +45,7 @@ export default function NotificationList() {
   const navigate = useNavigate()
   const { message, modal } = App.useApp()
   const setUnreadCount = useNotificationStore((s) => s.setUnreadCount)
+  const tick = useNotificationStore((s) => s.tick)
   const [page, setPage] = useState(1)
   const [size, setSize] = useState(10)
   /** 改数据后靠它触发重查（与 ApprovalCenter 同一套约定：manual:false + refreshDeps） */
@@ -52,9 +53,9 @@ export default function NotificationList() {
   /** 当前页选中的通知 id（跨页不保留：删除是页面内的动作，翻页后选中旧页的 id 容易误删） */
   const [selected, setSelected] = useState<Set<number>>(new Set())
 
-  const { data, loading } = useAppRequest(() => fetchNotifications(page, size), {
+  const { data, loading, error } = useAppRequest(() => fetchNotifications(page, size), {
     manual: false,
-    refreshDeps: [page, size, refreshKey],
+    refreshDeps: [page, size, refreshKey, tick],
   })
 
   const list = data?.list ?? []
@@ -230,6 +231,19 @@ export default function NotificationList() {
         </Space>
       </div>
 
+      {error && (
+        <Alert
+          type="error"
+          showIcon
+          className="mb-3"
+          message="通知加载失败，请检查通知服务后重试"
+          action={
+            <Button size="small" onClick={() => void reload()}>
+              重试
+            </Button>
+          }
+        />
+      )}
       <List
         loading={loading}
         dataSource={list}
@@ -250,8 +264,17 @@ export default function NotificationList() {
           const unread = item.readFlag === 0
           return (
             <List.Item
+              tabIndex={0}
               className={`cursor-pointer rounded px-3 hover:bg-slate-50 dark:hover:bg-slate-800 ${unread ? 'bg-blue-50/40 dark:bg-blue-950/30' : ''}`}
               onClick={() => void handleClick(item)}
+              onKeyDown={(e) => {
+                // 只有条目本身获得焦点时才处理；内部勾选框/按钮保留自己的键盘行为
+                if (e.target !== e.currentTarget) return
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  void handleClick(item)
+                }
+              }}
               actions={[
                 unread ? (
                   <Text type="secondary" className="text-xs">

@@ -78,6 +78,9 @@ const findByDeptName = (nodes, name) => {
     check('菜单有「组织与用户」且路由进入成功', page.url().endsWith('/admin/users'));
     const tree = page.locator('.ant-tree');
     check('部门树可见（总公司/研发部）', (await tree.getByText('总公司').count()) > 0 && (await tree.getByText('研发部').count()) > 0);
+    // R14.11：自己的状态开关必须禁用（后端 20006 兜底，但 UI 不该给入口）
+    const selfRow = page.locator('.ant-table-tbody tr.ant-table-row', { hasText: '系统管理员' }).first();
+    check('自己的状态 Switch 禁用', (await selfRow.count()) === 1 && (await selfRow.getByRole('switch').isDisabled()));
 
     // ---------- ② 建子部门 ----------
     const rootNode = page.locator('.ant-tree-treenode', { hasText: '总公司' }).first();
@@ -163,6 +166,16 @@ const findByDeptName = (nodes, name) => {
     await page.locator('.ant-modal-confirm').getByRole('button', { name: /删\s*除/ }).click();
     await page.waitForTimeout(1000);
     check('有用户的部门删除被拒', (await page.getByText(/部门下存在用户/).count()) > 0);
+    await page.locator('.ant-modal-confirm').getByRole('button', { name: /取\s*消/ }).click();
+    await page.waitForTimeout(400);
+
+    // R14.11：有子部门的部门 → 拒绝（总公司下有本次 E2E 子部门）
+    await tree.locator('.ant-tree-node-content-wrapper', { hasText: '总公司' }).first().click();
+    await page.waitForTimeout(600);
+    await page.getByRole('button', { name: '删除部门' }).click();
+    await page.locator('.ant-modal-confirm').getByRole('button', { name: /删\s*除/ }).click();
+    await page.waitForTimeout(1000);
+    check('有子部门的部门删除被拒', (await page.getByText(/存在子部门/).count()) > 0);
     await page.locator('.ant-modal-confirm').getByRole('button', { name: /取\s*消/ }).click();
     await page.waitForTimeout(400);
 

@@ -72,4 +72,13 @@
         DELETE FROM sys_user_role WHERE user_id = #{userId}
     </delete>
 
+    <!-- 最后管理员不变式的串行化点（评审 R7）：先锁 ADMIN 角色行，再做 count/写入。
+         ADMIN 角色不存在或已停用时返回 null，调用方按“没有启用管理员”处理。 -->
+    <select id="lockAdminRoleForUpdate" resultType="java.lang.Long">
+        SELECT id
+        FROM sys_role
+        WHERE code = 'ADMIN' AND status = 1
+        FOR UPDATE
+    </select>
+
 </mapper>

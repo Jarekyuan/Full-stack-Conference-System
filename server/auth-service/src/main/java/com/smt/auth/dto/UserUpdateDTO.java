@@ -31,6 +31,7 @@ public class UserUpdateDTO {
 
     /** 角色 ID 列表（sys_role.id，至少一个） */
     @NotEmpty(message = "至少分配一个角色")
+    @Size(max = 20, message = "一个用户最多分配 20 个角色")
     private List<Long> roleIds;
 
     /** 所属部门（sys_dept.id，可空 = 未分配） */

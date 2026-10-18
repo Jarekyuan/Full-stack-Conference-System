@@ -130,6 +130,7 @@ export default function MainLayout() {
             <Badge count={unreadCount} size="small" offset={[2, -2]}>
               <Bell
                 size={18}
+                aria-label="通知中心"
                 className="cursor-pointer text-slate-500 dark:text-slate-400"
                 onClick={() => navigate('/notifications')}
               />

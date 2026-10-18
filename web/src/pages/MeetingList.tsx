@@ -10,7 +10,7 @@
  *   · 编辑：组织人 + 20 已预约（R-12；改到需审批会议室会回退到 10）
  *   · 取消：组织人 + 10/20（30 进行中禁止；R-6 取消截止由服务端判）
  */
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button, Card, DatePicker, Input, Select, Space, Table, type TableColumnsType } from 'antd'
 import { useDebounceFn } from 'ahooks'
 import { useNavigate } from 'react-router-dom'
@@ -72,6 +72,13 @@ export default function MeetingList() {
     },
     { manual: false, refreshDeps: [queryKey] },
   )
+
+  // 取消/编辑把当前页最后一条移走时，total 可能缩到当前页之外——自动回退，避免停在空页
+  useEffect(() => {
+    if (!data) return
+    const maxPage = Math.max(1, Math.ceil(data.total / PAGE_SIZE))
+    if (page > maxPage) setPage(maxPage)
+  }, [data, page])
 
   // 会议室下拉：**包含维护中的房间**——历史会议仍要能按房间筛出来
   const { data: rooms } = useAppRequest(() => listRooms(), { manual: false })
@@ -201,7 +208,19 @@ export default function MeetingList() {
         dataSource={data?.list ?? []}
         loading={loading}
         scroll={{ x: 1100 }}
-        onRow={(record) => ({ onClick: () => navigate(`/meetings/${record.id}`) })}
+        onRow={(record) => ({
+          onClick: () => navigate(`/meetings/${record.id}`),
+          // O21：键盘用户也能进详情（行内按钮仍走自己的键盘事件）
+          tabIndex: 0,
+          onKeyDown: (e) => {
+            // 行内按钮/链接自己的 Enter/Space 不触发整行跳转
+            if (e.target !== e.currentTarget) return
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              navigate(`/meetings/${record.id}`)
+            }
+          },
+        })}
         rowClassName="cursor-pointer"
         pagination={{
           current: page,

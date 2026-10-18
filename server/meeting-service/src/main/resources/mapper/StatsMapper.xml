@@ -35,6 +35,28 @@
     </select>
 
     <!--
+      已删除会议室的历史（T5.3 评审 R8）：从 meeting 出发 LEFT JOIN，r.id IS NULL 即房间已被硬删。
+      房间名用 `已删除会议室#id` 兜底——否则管理员删掉一间旧会议室后，它上个月的使用率会静默消失，
+      与 H-2（仍按 meeting 统计）对不上。
+    -->
+    <select id="selectDeletedRoomUsage" resultMap="RoomUsageMap">
+        SELECT m.room_id AS room_id,
+               CONCAT('已删除会议室#', m.room_id) AS room_name,
+               COUNT(m.id) AS meeting_count,
+               COALESCE(SUM(TIMESTAMPDIFF(MINUTE,
+                   GREATEST(m.start_time, #{rangeStart}),
+                   LEAST(m.end_time, #{rangeEnd}))), 0) AS total_minutes
+        FROM meeting m
+        LEFT JOIN meeting_room r ON r.id = m.room_id
+        WHERE r.id IS NULL
+          AND m.status IN (20, 30, 40)
+          AND m.start_time &lt; #{rangeEnd}
+          AND m.end_time &gt; #{rangeStart}
+        GROUP BY m.room_id
+        ORDER BY m.room_id
+    </select>
+
+    <!--
       个人趋势（H-2）：口径"我组织的 ∪ 我参与的"（与列表 scope=mine 一致）。
       ⚠️ "我参与的"用 EXISTS 子查询而不是 JOIN：JOIN 会让"组织人同时也是参会人"的会议出两行，
       于是 COUNT 虚高；用 EXISTS 则每场会只出现一行，COUNT/SUM 天然不用 DISTINCT。

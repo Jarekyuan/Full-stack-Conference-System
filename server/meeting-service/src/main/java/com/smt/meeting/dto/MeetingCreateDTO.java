@@ -3,6 +3,7 @@ package com.smt.meeting.dto;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
@@ -38,7 +39,13 @@ public class MeetingCreateDTO {
 
     @Data
     public static class Participants {
-        /** 内部参会人（sys_user.id；重复 id 由联合唯一键与去重逻辑兜底） */
-        private List<Long> userIds;
+        /**
+         * 内部参会人（sys_user.id；重复 id 由去重逻辑兜底）。
+         * T6.2 评审 R6：上限 100，元素必须为正数；**存在性与启用状态在 Service 里查库校验**
+         * （停用/不存在 → 10001），不能只靠前端选人列表隐藏。
+         */
+        @Size(max = 100, message = "参会人最多 100 人")
+        private List<@NotNull(message = "参会人 id 不能为空")
+                     @Positive(message = "参会人 id 必须为正数") Long> userIds;
     }
 }

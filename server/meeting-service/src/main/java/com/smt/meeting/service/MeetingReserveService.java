@@ -29,8 +29,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 预约服务（T2.4 基础版 → T2.5 幂等 → T2.6 分布式锁）
@@ -348,7 +350,7 @@ public class MeetingReserveService {
                 transactionTemplate.execute(tx -> {
                     meetingRoomMapper.selectIdForUpdate(meeting.getRoomId());
                     stateMachine.transition(meetingId, MeetingEventEnum.END, operatorId, "组织人提前结束");
-                    // 提前结束 = 该时段被释放，会议（40）也不再出现在日历上（日历只展示 10/20/30）
+                    // 提前结束 = 该时段被释放；日历查询包含 40，但前端按“已过期”置灰（T6.1/R9）
                     // → 同样发事件让缓存失效，否则日历最多 5 分钟仍显示"还在开"
                     eventPublisher.publishEvent(MeetingDomainEvent.updated(
                             meetingId, meeting.getTitle(), meeting.getRoomId(), meeting.getOrganiserId(),
@@ -430,7 +432,11 @@ public class MeetingReserveService {
      */
     private void ensureRoomNotMaintenanceAfterLock(Long roomId) {
         MeetingRoom current = meetingRoomMapper.selectById(roomId);
-        if (current != null && current.getStatus() != null && current.getStatus() == 1) {
+        // 快检与抢到行锁之间房间可能被管理员删除；静默放行会插入悬空 room_id（O20）
+        if (current == null) {
+            throw new BusinessException(ErrorCode.ROOM_NOT_FOUND);
+        }
+        if (current.getStatus() != null && current.getStatus() == 1) {
             throw new BusinessException(ErrorCode.ROOM_MAINTENANCE);
         }
     }
@@ -490,13 +496,25 @@ public class MeetingReserveService {
         return meeting;
     }
 
-    /** 参会人落库（v1.3：仅系统用户；distinct 去重，联合唯一键兜底防重） */
+    /**
+     * 参会人落库（v1.3：仅系统用户；distinct 去重，联合唯一键兜底防重）。
+     *
+     * <p>T6.2 评审 R6：写接口必须自己校验，不能只靠前端选人列表隐藏——
+     * 直接调 API 传停用/不存在/null 的 id 时，旧实现会原样落库，停用账号还会继续收通知。
+     * 这里在同库只读 `sys_user`（与通知服务读收件人同一约定），拒绝非启用用户。
+     */
     private void saveParticipants(Long meetingId, MeetingCreateDTO.Participants participants) {
         if (participants == null || participants.getUserIds() == null || participants.getUserIds().isEmpty()) {
             return;
         }
-        List<MeetingParticipant> list = participants.getUserIds().stream()
-                .distinct()
+        List<Long> userIds = participants.getUserIds().stream().distinct().toList();
+        Set<Long> enabled = new HashSet<>(participantMapper.selectEnabledUserIds(userIds));
+        List<Long> invalid = userIds.stream().filter(id -> !enabled.contains(id)).toList();
+        if (!invalid.isEmpty()) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(),
+                    "参会人不存在或已停用: " + invalid.stream().limit(10).toList());
+        }
+        List<MeetingParticipant> list = userIds.stream()
                 .map(userId -> {
                     MeetingParticipant p = new MeetingParticipant();
                     p.setMeetingId(meetingId);

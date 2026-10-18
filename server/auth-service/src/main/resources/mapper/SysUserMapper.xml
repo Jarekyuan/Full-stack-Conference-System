@@ -136,4 +136,17 @@
         WHERE id = #{id}
     </update>
 
+    <!-- 最后管理员不变式（评审 R7）：排除目标用户后，还剩几个“启用用户 + 启用 ADMIN 角色”。
+         调用方必须先 lockAdminRoleForUpdate() 把这条不变式串行化，再 count，再改。 -->
+    <select id="countActiveAdminsExcluding" resultType="long">
+        SELECT COUNT(DISTINCT u.id)
+        FROM sys_user u
+        JOIN sys_user_role ur ON ur.user_id = u.id
+        JOIN sys_role r ON r.id = ur.role_id
+        WHERE u.status = 1
+          AND r.status = 1
+          AND r.code = 'ADMIN'
+          AND u.id &lt;&gt; #{excludeId}
+    </select>
+
 </mapper>

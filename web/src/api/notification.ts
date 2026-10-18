@@ -33,10 +33,7 @@ export const markRead = (id: number) => http.post<void>(`/notifications/${id}/re
 /** 全部已读；返回实际更新条数 */
 export const markAllRead = () => http.post<{ updated: number }>('/notifications/read-all')
 
-/** 删除单条（不是我的/不存在 → 60001，前端按列表刷新处理） */
-export const deleteNotification = (id: number) => http.delete<void>(`/notifications/${id}`)
-
-/** 批量删除选中的通知（只删自己的；返回实际删除条数） */
+/** 批量删除选中的通知（只删自己的；返回实际删除条数；单条删除由批量接口覆盖） */
 export const deleteNotifications = (ids: number[]) =>
   http.post<{ deleted: number }>('/notifications/delete', { ids })
 

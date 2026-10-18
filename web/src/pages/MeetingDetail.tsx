@@ -119,7 +119,9 @@ export default function MeetingDetail() {
     }
   }, [doFinish, meetingId, message, refresh])
 
-  if (loading && !detail) {
+  // 路由 A→B 的首帧：data 还是 A、loading 尚未被 effect 置 true，但 detail 已被 id 守卫置空。
+  // 此时应转圈，而不是闪一下“会议不存在”（O9）。
+  if (!detail && (loading || (data && data.id !== meetingId))) {
     return (
       <Card>
         <Spin />

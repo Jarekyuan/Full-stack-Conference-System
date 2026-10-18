@@ -26,4 +26,11 @@ public interface MeetingParticipantMapper {
      */
     List<Long> selectInvitedMeetingIds(@Param("userId") Long userId,
                                        @Param("meetingIds") List<Long> meetingIds);
+
+    /**
+     * 这批 id 里**存在且启用**的用户（T6.2 评审 R6）。
+     * 会议写接口用它拒绝停用/不存在/悬空的参会人；与通知服务读 sys_user 同一套
+     * “同库只读跨域表”约定（无外键，应用层校验）。
+     */
+    List<Long> selectEnabledUserIds(@Param("ids") List<Long> ids);
 }

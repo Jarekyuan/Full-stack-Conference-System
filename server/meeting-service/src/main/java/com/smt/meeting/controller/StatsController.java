@@ -20,7 +20,8 @@ import com.smt.meeting.vo.RoomUsageVO;
 /**
  * 统计接口（T5.3，契约 docs/04 4.10）。
  *
- * <p>权限按 docs/04 3.4 收口：**room-usage 仅 ADMIN**（全公司各会议室的使用率属于管理视角），
+ * <p>权限按 docs/04 3.2 接口清单与 4.10 统计契约收口：**room-usage 仅 ADMIN**（全公司各会议室的
+ * 使用率属于管理视角），
  * my-meetings 登录即可（只涉及自己的数据，且 SQL 里就带了 user_id 过滤——数据权限落在 SQL，不靠前端）。
  */
 @RestController

@@ -10,7 +10,7 @@
  * ③ **用完就 dispose**：ECharts 实例挂在 DOM 上，组件卸载不销毁会在切页后泄漏（实例 + canvas）。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Card, DatePicker, Empty, Spin, Typography } from 'antd'
+import { Alert, Button, Card, DatePicker, Empty, Spin, Typography } from 'antd'
 import dayjs, { type Dayjs } from 'dayjs'
 import * as echarts from 'echarts/core'
 import { BarChart, LineChart } from 'echarts/charts'
@@ -192,7 +192,14 @@ export default function Dashboard() {
 
       <Card title={`会议室使用率（${usage.data?.start ?? ''} ~ ${usage.data?.end ?? ''}）`}>
         <Spin spinning={usage.loading}>
-          {usage.data && usage.data.items.length > 0 ? (
+          {usage.error ? (
+            <Alert
+              type="error"
+              showIcon
+              message="会议室使用率加载失败"
+              action={<Button size="small" onClick={() => usage.refresh()}>重试</Button>}
+            />
+          ) : usage.data && usage.data.items.length > 0 ? (
             <Chart option={usageOption} />
           ) : (
             <Empty description="暂无数据" />
@@ -202,7 +209,14 @@ export default function Dashboard() {
 
       <Card title={`我的会议（近 ${mine.data?.days ?? 30} 天）`}>
         <Spin spinning={mine.loading}>
-          {mine.data && mine.data.daily.length > 0 ? (
+          {mine.error ? (
+            <Alert
+              type="error"
+              showIcon
+              message="个人统计加载失败"
+              action={<Button size="small" onClick={() => mine.refresh()}>重试</Button>}
+            />
+          ) : mine.data && mine.data.daily.length > 0 ? (
             <Chart option={mineOption} />
           ) : (
             <Empty description="近 30 天还没有会议" />

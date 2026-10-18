@@ -31,4 +31,11 @@ public interface SysRoleMapper {
 
     /** 清空用户角色关联 */
     int deleteUserRoles(@Param("userId") Long userId);
+
+    /**
+     * 锁住 ADMIN 角色行（最后管理员不变式的串行化点，T1.20 评审 R7）。
+     * 所有可能减少“启用 ADMIN”的操作都先拿这把行锁，再 count，再改；
+     * 否则两个管理员并发互降权会各自通过 count 检查、双双提交后系统无管理员。
+     */
+    Long lockAdminRoleForUpdate();
 }

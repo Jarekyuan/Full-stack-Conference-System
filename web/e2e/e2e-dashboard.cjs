@@ -42,7 +42,7 @@ const sql = (q) =>
 /** 清掉某会议室某周的日历缓存：脚本用 SQL 删会议**绕过了 API**，而缓存只在领域事件上失效（见 docs/05 T4.7 的第三类缺口） */
 const evictCalendarCache = (roomId, weekStart) =>
   execSync(
-    `docker exec -e REDISCLI_AUTH=redis123 smt-redis redis-cli DEL cache:calendar:${roomId}:${weekStart}`,
+    `docker exec -e REDISCLI_AUTH=${process.env.REDIS_PASSWORD || 'redis123'} smt-redis redis-cli DEL cache:calendar:${roomId}:${weekStart}`,
     { stdio: 'ignore' },
   );
 
@@ -60,6 +60,8 @@ const md = (d) => `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDa
 
 (async () => {
   const created = [];
+  /** finally 也要能清日历缓存（monday 在 try 里声明，作用域出不来） */
+  let weekForCleanup = null;
   let browser;
   let restoreRateLimit = async () => {};
   try {
@@ -104,19 +106,33 @@ const md = (d) => `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDa
     check('两个图表容器都渲染出来了（canvas 数量 ≥ 2）', (await page.locator('canvas').count()) >= 2,
       `canvas=${await page.locator('canvas').count()}`);
 
-    // ---------- ② 切换区间 → 重查 ----------
-    // 选一个"只有今天"的窄区间：数字应当与"近 30 天"不同（除非恰好相等，那就再换）
-    await page.locator('.ant-picker-input input').first().click();
-    await page.keyboard.press('Escape');
-    const narrow = await (
-      await fetch(`${API}/stats/room-usage?start=${fmt(new Date())}&end=${fmt(new Date())}`, {
-        headers: { Authorization: `Bearer ${adminToken}` },
-      })
-    ).json();
+    // ---------- ② 切换区间 → 页面真的重查（R14.3） ----------
+    // 旧断言只点开日期框按 Escape，然后 Node 直接 fetch——页面完全不响应 refreshDeps 也会绿。
+    const today = fmt(new Date());
+    const pickerInputs = page.locator('.ant-picker-input input');
+    // 先挂监听再操作，避免请求在 fill 阶段就发出而错过
+    const narrowRespPromise = page.waitForResponse(
+      (r) => r.url().includes(`/stats/room-usage?start=${today}&end=${today}`),
+      { timeout: 15000 },
+    );
+    await pickerInputs.nth(0).click();
+    await pickerInputs.nth(0).fill(today);
+    await pickerInputs.nth(1).fill(today);
+    await page.keyboard.press('Enter');
+    const narrowResp = await narrowRespPromise;
+    const narrowBody = await narrowResp.json();
+    await page.waitForTimeout(800);
+    const narrowSummary = (await page.getByTestId('usage-summary').textContent()) ?? '';
+    const narrowMeetings = (narrowBody.data?.items ?? []).reduce((s, i) => s + i.meetingCount, 0);
     check(
-      '区间参数被传给接口（今天区间与 30 天区间的可用分钟不同）',
-      narrow.data.availableMinutes === 720 && usage.data.availableMinutes === 21600,
-      `${narrow.data.availableMinutes} vs ${usage.data.availableMinutes}`,
+      '切换区间后页面真的发起了“今天~今天”的请求',
+      narrowResp.ok() && narrowBody.data?.availableMinutes === 720,
+      `availableMinutes=${narrowBody.data?.availableMinutes}`,
+    );
+    check(
+      '汇总行随区间更新（与窄区间接口一致）',
+      narrowSummary.includes(`共 ${narrowMeetings} 场会议`),
+      narrowSummary,
     );
     await page.close();
 
@@ -134,6 +150,7 @@ const md = (d) => `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDa
     const monday = new Date();
     monday.setDate(monday.getDate() - (monday.getDay() === 0 ? 6 : monday.getDay() - 1));
     monday.setDate(monday.getDate() + 7);
+    weekForCleanup = fmt(monday);
     const SAT = new Date(monday.getTime() + 5 * 86400000);
     await p2.getByRole('button', { name: '下一周' }).click();
     await p2.waitForTimeout(1200);
@@ -221,8 +238,17 @@ const md = (d) => `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDa
       }
     }
     if (created.length > 0) {
-      sql(`DELETE FROM smt_meeting.meeting_recurring WHERE id NOT IN (SELECT DISTINCT recurring_id FROM smt_meeting.meeting WHERE recurring_id IS NOT NULL);`);
+      // 只删本次的系列规则——旧写法 NOT IN 会把全库孤儿规则一起删掉（R14.6）
+      sql(`DELETE FROM smt_meeting.meeting_recurring WHERE title LIKE 'E2E周系列-%';`);
       check('库里已无本次数据', sql(`SELECT COUNT(*) FROM smt_meeting.meeting WHERE title LIKE 'E2E周系列-%';`) === '0');
+    }
+    // 最后一步 GET 日历会把周缓存烘热；不删会留下幽灵会议块（R14.6）
+    if (weekForCleanup) {
+      try {
+        evictCalendarCache(1, weekForCleanup);
+      } catch (cleanupErr) {
+        console.error('清理日历缓存失败:', cleanupErr.message);
+      }
     }
     if (browser) await browser.close();
   }

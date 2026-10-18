@@ -21,10 +21,14 @@ interface NotificationState {
   unreadCount: number
   /** 每次写入自增：给"迟到的 REST 响应"当判据用 */
   version: number
+  /** 只在收到 WS NOTIFICATION 时自增：通知中心页面用它触发列表刷新（O12） */
+  tick: number
   /** 用权威值覆盖；传 `ifUnchangedSince` 时，期间已被别人写过就丢弃这次结果 */
   setUnreadCount: (count: number, ifUnchangedSince?: number) => void
   /** 收到一条通知先乐观 +1（随后到达的 UNREAD_COUNT 会用权威值校正） */
   bumpUnread: () => void
+  /** 通知列表的刷新信号：与 version 分开，避免 reload→setUnreadCount 自触发循环 */
+  bumpTick: () => void
   /** 登出时清空：不清的话下一个用户登录会先看到上一个人的角标（评审 O6） */
   reset: () => void
 }
@@ -33,6 +37,7 @@ export const useNotificationStore = create<NotificationState>()(
   immer((set) => ({
     unreadCount: 0,
     version: 0,
+    tick: 0,
     setUnreadCount: (count, ifUnchangedSince) => {
       set((state) => {
         if (ifUnchangedSince !== undefined && state.version !== ifUnchangedSince) {
@@ -46,6 +51,11 @@ export const useNotificationStore = create<NotificationState>()(
       set((state) => {
         state.unreadCount += 1
         state.version += 1
+      })
+    },
+    bumpTick: () => {
+      set((state) => {
+        state.tick += 1
       })
     },
     reset: () => {

@@ -29,6 +29,8 @@ public enum ErrorCode {
     USERNAME_EXISTS(20005, "用户名已存在"),
     /** 防止唯一管理员自锁：停用自己 / 移除自己的 ADMIN 角色 */
     SELF_OPERATION_FORBIDDEN(20006, "不能对自己的账号执行该操作"),
+    /** 最后一名启用管理员保护：降权/停用别人也不行 */
+    LAST_ADMIN_PROTECTED(20007, "系统至少需要保留一个启用管理员"),
 
     // ---- 3xxxx 会议室 ----
     ROOM_NOT_FOUND(30001, "会议室不存在"),

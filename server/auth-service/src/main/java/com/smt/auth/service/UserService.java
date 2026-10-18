@@ -61,6 +61,10 @@ public class UserService {
         if (!hasKeyword && deptId == null) {
             return List.of();
         }
+        // O17：与 username/real_name 列宽对齐，避免超长关键字做无意义的左模糊扫描
+        if (hasKeyword && keyword.trim().length() > 50) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(), "搜索关键字最长 50 字符");
+        }
         return sysUserMapper.searchBrief(hasKeyword ? keyword.trim() : null, deptId);
     }
 
@@ -95,7 +99,7 @@ public class UserService {
             throw new BusinessException(ErrorCode.USERNAME_EXISTS);
         }
         ensureDeptExists(dto.getDeptId());
-        List<Long> roleIds = ensureRolesExist(dto.getRoleIds());
+        List<SysRole> roles = ensureRolesExist(dto.getRoleIds());
 
         SysUser user = new SysUser();
         user.setUsername(dto.getUsername());
@@ -106,7 +110,7 @@ public class UserService {
         user.setStatus(1);
         sysUserMapper.insert(user);
 
-        sysRoleMapper.batchInsertUserRoles(user.getId(), roleIds);
+        sysRoleMapper.batchInsertUserRoles(user.getId(), roles.stream().map(SysRole::getId).toList());
         return user.getId();
     }
 
@@ -116,12 +120,22 @@ public class UserService {
      */
     @Transactional
     public void update(Long id, UserUpdateDTO dto) {
-        if (sysUserMapper.selectById(id) == null) {
+        SysUser existing = sysUserMapper.selectById(id);
+        if (existing == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND.getCode(), "用户不存在");
         }
         ensureDeptExists(dto.getDeptId());
-        List<Long> roleIds = ensureRolesExist(dto.getRoleIds());
-        ensureSelfKeepsAdmin(id, roleIds);
+        List<SysRole> roles = ensureRolesExist(dto.getRoleIds());
+        boolean keepsAdmin = roles.stream().anyMatch(r -> "ADMIN".equals(r.getCode()));
+        ensureSelfKeepsAdmin(id, keepsAdmin);
+
+        // R7：目标当前是“启用 ADMIN”，本次又要把 ADMIN 拿掉 → 先锁 ADMIN 角色行再数，
+        // 保证两个管理员并发互降权时至少留一个（只查 count 不足以防并发）。
+        if (existing.getStatus() != null && existing.getStatus() == 1 && !keepsAdmin
+                && sysRoleMapper.selectCodesByUserId(id).contains("ADMIN")) {
+            sysRoleMapper.lockAdminRoleForUpdate();
+            ensureAnotherActiveAdmin(id);
+        }
 
         SysUser user = new SysUser();
         user.setId(id);
@@ -132,9 +146,10 @@ public class UserService {
 
         // 角色是"全量替换"语义：先清空再批量重建（同一事务，失败一起回滚）
         sysRoleMapper.deleteUserRoles(id);
-        sysRoleMapper.batchInsertUserRoles(id, roleIds);
+        sysRoleMapper.batchInsertUserRoles(id, roles.stream().map(SysRole::getId).toList());
     }
 
+    @Transactional
     public void updateStatus(Long id, Integer status) {
         if (status == null || (status != 0 && status != 1)) {
             throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(), "status 只能为 0（停用）或 1（启用）");
@@ -142,6 +157,17 @@ public class UserService {
         // 防止唯一管理员把自己停用后锁死（与"移除自己的 ADMIN 角色"同一类保护）
         if (status == 0 && id.equals(UserContext.getUserId())) {
             throw new BusinessException(ErrorCode.SELF_OPERATION_FORBIDDEN);
+        }
+        SysUser target = sysUserMapper.selectById(id);
+        if (target == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND.getCode(), "用户不存在");
+        }
+        // R7：停用的是“启用 ADMIN”时，同样先锁 ADMIN 角色行再数；包括持有旧 token 的
+        // 已降权用户来停用最后一名管理员的情况（DB 角色已变，计数会拒绝）。
+        if (status == 0 && target.getStatus() != null && target.getStatus() == 1
+                && sysRoleMapper.selectCodesByUserId(id).contains("ADMIN")) {
+            sysRoleMapper.lockAdminRoleForUpdate();
+            ensureAnotherActiveAdmin(id);
         }
         if (sysUserMapper.updateStatus(id, status) == 0) {
             throw new BusinessException(ErrorCode.NOT_FOUND.getCode(), "用户不存在");
@@ -205,14 +231,19 @@ public class UserService {
      * 不能移除自己的 ADMIN 角色：唯一管理员把自己降权后，管理端（含本页面）再也进不去，
      * 而且没有任何界面入口能恢复——这类自锁只能在数据库里手工救。
      */
-    private void ensureSelfKeepsAdmin(Long id, List<Long> roleIds) {
-        if (!id.equals(UserContext.getUserId())) {
-            return;
-        }
-        boolean keepsAdmin = sysRoleMapper.selectByIds(roleIds).stream()
-                .anyMatch(role -> "ADMIN".equals(role.getCode()));
-        if (!keepsAdmin) {
+    private void ensureSelfKeepsAdmin(Long id, boolean keepsAdmin) {
+        if (id.equals(UserContext.getUserId()) && !keepsAdmin) {
             throw new BusinessException(ErrorCode.SELF_OPERATION_FORBIDDEN);
+        }
+    }
+
+    /**
+     * R7：目标操作完成后，系统是否还剩至少一个启用 ADMIN。
+     * 调用前必须已经 {@code lockAdminRoleForUpdate()}；否则两个并发请求会各自通过。
+     */
+    private void ensureAnotherActiveAdmin(Long excludedUserId) {
+        if (sysUserMapper.countActiveAdminsExcluding(excludedUserId) == 0) {
+            throw new BusinessException(ErrorCode.LAST_ADMIN_PROTECTED);
         }
     }
 
@@ -228,18 +259,18 @@ public class UserService {
     /**
      * 角色存在性校验（评审 R4）：悬空 roleId 最坏的情况是**用户能建出来但永远登不进任何功能**——
      * roles 为空 → 所有 @PreAuthorize 都过不去，而管理员在界面上看不出根因。
-     * 返回去重后的 id 列表（同一角色重复提交会撞 uk_user_role 唯一键）。
+     * 返回去重后的角色实体（同一角色重复提交会撞 uk_user_role 唯一键），
+     * 调用方据此判断新旧角色里是否还有 ADMIN（R7）。
      */
-    private List<Long> ensureRolesExist(List<Long> roleIds) {
+    private List<SysRole> ensureRolesExist(List<Long> roleIds) {
         List<Long> distinctIds = roleIds.stream().distinct().toList();
-        List<Long> foundIds = sysRoleMapper.selectByIds(distinctIds).stream()
-                .map(SysRole::getId)
-                .toList();
+        List<SysRole> found = sysRoleMapper.selectByIds(distinctIds);
+        Set<Long> foundIds = found.stream().map(SysRole::getId).collect(Collectors.toSet());
         List<Long> missing = distinctIds.stream().filter(id -> !foundIds.contains(id)).toList();
         if (!missing.isEmpty()) {
             throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(), "角色不存在: " + missing);
         }
-        return distinctIds;
+        return found;
     }
 
 }
