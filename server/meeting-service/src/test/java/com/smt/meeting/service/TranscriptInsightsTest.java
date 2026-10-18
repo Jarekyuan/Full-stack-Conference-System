@@ -92,4 +92,33 @@ class TranscriptInsightsTest {
         assertThat(result.getSpeakers().get(0).getDisplayName()).isEqualTo("说话人 9");
         assertThat(result.getSpeakers().get(0).getColor()).isEqualTo("#7D8CFF");
     }
+
+    @Test
+    void declaredSpeakerWithoutSegmentsKeepsZeroStats() {
+        MinutesInsightsVO r = service.compute(List.of(speaker("0", "张三")), List.of(), 0);
+        assertThat(r.getSpeakers()).hasSize(1);
+        assertThat(r.getSpeakers().get(0).getSpeakingMs()).isZero();
+        assertThat(r.getSpeakers().get(0).getTalkRatio()).isZero();
+        assertThat(r.getSpeakers().get(0).getTalkRatio()).isNotNaN();
+        assertThat(r.getSpeakers().get(0).getSegmentCount()).isZero();
+        assertThat(r.getSpeakers().get(0).getLongestSegmentMs()).isZero();
+    }
+
+    @Test
+    void invertedSegmentIsClampedToZero() {
+        MinutesInsightsVO r = service.compute(List.of(speaker("0", "张三")),
+                List.of(segment("0", 10_000, 5_000)), 0);
+        assertThat(r.getSpeakingMs()).isZero();
+        assertThat(r.getSpeakers().get(0).getLongestSegmentMs()).isZero();
+        assertThat(r.getSpeakers().get(0).getSegmentCount()).isEqualTo(1);
+        assertThat(r.getSpeechCoverage()).isZero();
+    }
+
+    @Test
+    void providedDurationShorterThanLastEndIsExpanded() {
+        MinutesInsightsVO r = service.compute(List.of(speaker("0", "张三")),
+                List.of(segment("0", 0, 12_000)), 5_000);
+        assertThat(r.getDurationMs()).isEqualTo(12_000);
+        assertThat(r.getSpeechCoverage()).isEqualTo(1.0);
+    }
 }
