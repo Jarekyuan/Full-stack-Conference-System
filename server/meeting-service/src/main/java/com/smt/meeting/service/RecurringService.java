@@ -26,6 +26,7 @@ import com.smt.meeting.entity.MeetingRecurring;
 import com.smt.meeting.entity.MeetingRoom;
 import com.smt.meeting.entity.RoomStrategy;
 import com.smt.meeting.enums.MeetingEventEnum;
+import com.smt.meeting.enums.MeetingStatusEnum;
 import com.smt.meeting.lock.MeetingLockHelper;
 import com.smt.meeting.mapper.MeetingMapper;
 import com.smt.meeting.mapper.MeetingRecurringMapper;
@@ -98,7 +99,7 @@ public class RecurringService {
         SortedSet<LocalDate> dates = occurrences.stream()
                 .map(occ -> occ[0].toLocalDate())
                 .collect(Collectors.toCollection(TreeSet::new));
-        return lockHelper.executeWithLockOnDates(room.getId(), dates, () ->
+        RecurringCreateVO result = lockHelper.executeWithLockOnDates(room.getId(), dates, () ->
                 transactionTemplate.execute(tx -> {
                     meetingRoomMapper.selectIdForUpdate(room.getId()); // 数据库兜底，与单场创建同一把
                     // 锁内复查维护状态（同单场创建）：锁外快检与管理员的维护操作之间存在窗口
@@ -140,10 +141,14 @@ public class RecurringService {
                         stateMachine.logCreation(m.getId(), status, organiserId, "周期会议");
                     }
 
-                    // 日历缓存：直接删覆盖区间（**不逐场发领域事件**——那会顺带产生 N 条"预约创建"通知，
-                    // 组织人自己刚建的系列没必要收 5 条；缓存失效是本进程内的事，直接调用更直白）
-                    calendarCacheEvictor.evict(room.getId(), occurrences.get(0)[0],
-                            occurrences.get(occurrences.size() - 1)[1]);
+                    // 系列只发**一条汇总创建事件**（以第一场为载体）：
+                    // ① 不逐场发，避免组织人收到 N 条“预约创建”；
+                    // ② 但必须发，否则待审批系列不会产生 APPROVAL_TODO（T5.1 评审 R5）。
+                    // 审批中心仍按 status=10 列出全部场次，通知只是“有新待办”的入口。
+                    Meeting first = meetings.get(0);
+                    eventPublisher.publishEvent(MeetingDomainEvent.created(
+                            first.getId(), first.getTitle(), first.getRoomId(), organiserId,
+                            first.getStartTime(), first.getEndTime(), status));
 
                     log.info("[周期会议] 已创建系列 {}：{} 场（room={}, {} 起每周{} {}）",
                             rule.getId(), meetings.size(), room.getId(), dto.getStartDate(),
@@ -151,6 +156,14 @@ public class RecurringService {
                     return new RecurringCreateVO(rule.getId(), meetings.size(),
                             meetings.stream().map(Meeting::getId).toList());
                 }));
+
+        // Cache-Aside：**事务提交后**再删缓存（T5.1 评审 R2）。evict 会按周区间逐周删除，
+        // 覆盖系列跨的每一周，而不是只删首末两周。
+        if (result.created() > 0) {
+            calendarCacheEvictor.evict(room.getId(), occurrences.get(0)[0],
+                    occurrences.get(occurrences.size() - 1)[1]);
+        }
+        return result;
     }
 
     /**
@@ -179,32 +192,34 @@ public class RecurringService {
         if (!rule.getOrganiserId().equals(operatorId)) {
             throw new BusinessException(ErrorCode.NOT_MEETING_OWNER);
         }
-        List<Meeting> meetings = meetingMapper.selectByRecurringId(recurringId);
 
-        // 未开始 = 还能取消的（10/20）；其余是历史，直接算 skipped
-        List<Meeting> cancellable = meetings.stream()
-                .filter(m -> m.getStatus() != null && (m.getStatus() == 10 || m.getStatus() == 20))
-                .toList();
-        List<Meeting> ongoing = meetings.stream()
-                .filter(m -> m.getStatus() != null && m.getStatus() == 30)
-                .toList();
-        if (!ongoing.isEmpty()) {
-            throw new BusinessException(ErrorCode.MEETING_STATUS_NOT_ALLOWED.getCode(),
-                    String.format("系列内有 %d 场进行中的会议（最早 %s），请先单独处理",
-                            ongoing.size(), ongoing.get(0).getStartTime()));
-        }
-        if (cancellable.isEmpty()) {
-            // 没有可取消的场次：不算错误（可能全是历史场次），返回 0/总数，让调用方自己判断
-            return new RecurringCancelVO(0, meetings.size());
-        }
-
-        SortedSet<LocalDate> dates = cancellable.stream()
+        // 先用当前快照的日期拿锁（只用于锁范围）。真正的状态分类在锁内事务里**重读后**做，
+        // 避免“锁外读到 20、锁内已经被改成 30/60”的 TOCTOU（T5.2 评审 O1）。
+        List<Meeting> snapshot = meetingMapper.selectByRecurringId(recurringId);
+        SortedSet<LocalDate> dates = snapshot.stream()
                 .map(m -> m.getStartTime().toLocalDate())
                 .collect(Collectors.toCollection(TreeSet::new));
-        return lockHelper.executeWithLockOnDates(rule.getRoomId(), dates, () ->
+
+        RecurringCancelVO result = lockHelper.executeWithLockOnDates(rule.getRoomId(), dates, () ->
                 transactionTemplate.execute(tx -> {
                     meetingRoomMapper.selectIdForUpdate(rule.getRoomId()); // 数据库兜底，与单场取消同一把
-                    for (Meeting m : cancellable) {
+                    List<Meeting> meetings = meetingMapper.selectByRecurringId(recurringId);
+                    LocalDateTime now = LocalDateTime.now();
+                    CancelPlan plan = classifyCancel(meetings, now);
+                    if (!plan.ongoing().isEmpty()) {
+                        Meeting first = plan.ongoing().get(0);
+                        throw new BusinessException(ErrorCode.MEETING_STATUS_NOT_ALLOWED.getCode(),
+                                String.format("系列内有 %d 场进行中的会议（最早 %s），请先单独处理",
+                                        plan.ongoing().size(), first.getStartTime()));
+                    }
+                    if (plan.cancellable().isEmpty()) {
+                        // 没有可取消的场次：不算错误（可能全是历史场次），返回 0/总数
+                        return new RecurringCancelVO(0, meetings.size());
+                    }
+                    // R-6：与单场取消同一条取消截止规则；整系列全有或全无
+                    ensureCancelDeadline(plan.cancellable(), roomStrategyMapper.selectByRoomId(rule.getRoomId()), now);
+
+                    for (Meeting m : plan.cancellable()) {
                         stateMachine.transition(m.getId(), MeetingEventEnum.CANCEL, operatorId, reason);
                         meetingMapper.updateCancelInfo(m.getId(), reason);
                         // 领域事件：**逐场发**（单场取消也是这么做的）。系列场次通常没有参会人 →
@@ -213,15 +228,95 @@ public class RecurringService {
                                 m.getId(), m.getTitle(), m.getRoomId(), m.getOrganiserId(),
                                 m.getStartTime(), m.getEndTime(), reason));
                     }
-                    // 日历缓存：直接删覆盖区间（与创建同理：不逐场发事件去驱动缓存，本进程内直接调用更直白）
-                    calendarCacheEvictor.evict(rule.getRoomId(),
-                            cancellable.get(0).getStartTime(),
-                            cancellable.get(cancellable.size() - 1).getEndTime());
-
-                    log.info("[周期会议] 系列 {} 已取消 {} 场（历史场次跳过 {} 场）",
-                            recurringId, cancellable.size(), meetings.size() - cancellable.size());
-                    return new RecurringCancelVO(cancellable.size(), meetings.size() - cancellable.size());
+                    log.info("[周期会议] 系列 {} 已取消 {} 场（历史/终态跳过 {} 场）",
+                            recurringId, plan.cancellable().size(), meetings.size() - plan.cancellable().size());
+                    return new RecurringCancelVO(plan.cancellable().size(),
+                            meetings.size() - plan.cancellable().size());
                 }));
+
+        // Cache-Aside：事务提交后逐周删（T5.1 评审 R2），覆盖系列跨的每一周。
+        if (result.cancelled() > 0 && !snapshot.isEmpty()) {
+            LocalDateTime firstStart = snapshot.stream().map(Meeting::getStartTime)
+                    .min(LocalDateTime::compareTo).orElse(null);
+            LocalDateTime lastEnd = snapshot.stream().map(Meeting::getEndTime)
+                    .max(LocalDateTime::compareTo).orElse(null);
+            calendarCacheEvictor.evict(rule.getRoomId(), firstStart, lastEnd);
+        }
+        return result;
+    }
+
+    /**
+     * 系列取消的三分类（纯函数，T5.2 评审 C1）。
+     *
+     * <p>不能只看 status：状态任务 60 秒一轮，“已开始但仍是 20”的会议会被误取消；
+     * 时间已过的待审批(10) 会永远停在待办箱，也不能算“未来场次”。
+     *
+     * <ul>
+     *   <li>终态 40/50/60 → skipped；</li>
+     *   <li>{@code now >= end} → skipped（历史）；</li>
+     *   <li>{@code start <= now < end} → 进行中，整系列拒绝（含状态未推进的 20 与卡住的 10）；</li>
+     *   <li>{@code now < start} 且 status 10/20 → 可取消；其余 → skipped。</li>
+     * </ul>
+     */
+    static CancelPlan classifyCancel(List<Meeting> meetings, LocalDateTime now) {
+        List<Meeting> cancellable = new ArrayList<>();
+        List<Meeting> ongoing = new ArrayList<>();
+        for (Meeting m : meetings) {
+            Integer status = m.getStatus();
+            LocalDateTime start = m.getStartTime();
+            LocalDateTime end = m.getEndTime();
+            // 脏数据（无状态/无时间）按 skipped 处理：不阻塞整系列取消，也不把它当未来场次
+            if (status == null || start == null || end == null) {
+                continue;
+            }
+            int s = status;
+            if (s == MeetingStatusEnum.FINISHED.getCode()
+                    || s == MeetingStatusEnum.CANCELLED.getCode()
+                    || s == MeetingStatusEnum.REJECTED.getCode()) {
+                continue;
+            }
+            if (!now.isBefore(end)) {
+                continue; // 已结束（含定时任务尚未转 40 的 20/30）
+            }
+            if (!now.isBefore(start)) {
+                // 已开始未结束：20 可能是定时任务尚未推进（60s 一轮），一律按进行中拦截
+                if (s == MeetingStatusEnum.PENDING_APPROVAL.getCode()
+                        || s == MeetingStatusEnum.RESERVED.getCode()
+                        || s == MeetingStatusEnum.ONGOING.getCode()) {
+                    ongoing.add(m);
+                }
+                continue;
+            }
+            if (s == MeetingStatusEnum.PENDING_APPROVAL.getCode()
+                    || s == MeetingStatusEnum.RESERVED.getCode()) {
+                cancellable.add(m);
+            }
+        }
+        return new CancelPlan(cancellable, ongoing);
+    }
+
+    /** 取消分类结果；skipped 由“总场次 − cancellable”在调用方计算。 */
+    record CancelPlan(List<Meeting> cancellable, List<Meeting> ongoing) {
+    }
+
+    /**
+     * R-6 取消截止（包内可见，便于单测）：整系列全有或全无，命中任一场直接 30005。
+     * 与单场取消的 `now.isAfter(start - deadline)` 严格对齐（恰好等于截止点仍允许）。
+     */
+    static void ensureCancelDeadline(List<Meeting> cancellable, RoomStrategy strategy, LocalDateTime now) {
+        if (strategy == null || strategy.getCancelDeadlineMinutes() == null) {
+            return;
+        }
+        int deadline = strategy.getCancelDeadlineMinutes();
+        if (deadline <= 0) {
+            return;
+        }
+        for (Meeting m : cancellable) {
+            if (now.isAfter(m.getStartTime().minusMinutes(deadline))) {
+                throw new BusinessException(ErrorCode.CANCEL_DEADLINE_PASSED.getCode(),
+                        String.format("%s 那场距开始不足 %d 分钟，不可取消", m.getStartTime(), deadline));
+            }
+        }
     }
 
     // ---------- 内部 ----------
@@ -238,11 +333,7 @@ public class RecurringService {
             throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(), "重复结束日期不能早于开始日期");
         }
         LocalTime startTime = minutesToTime(dto.getStartMinutes());
-        LocalTime endTime = startTime.plusMinutes(dto.getDurationMinutes());
-        if (endTime.isBefore(startTime) || endTime.equals(LocalTime.MIDNIGHT)) {
-            // 跨天（09:00 + 720 分钟落到次日）：本系统的占用模型是"按自然日加锁"，跨天场次会让锁与占用对不上
-            throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(), "单场时长不能跨天（结束时间须在当日 24:00 前）");
-        }
+        int durationMinutes = dto.getDurationMinutes();
 
         List<LocalDateTime[]> occurrences = new ArrayList<>();
         for (LocalDate d = dto.getStartDate(); !d.isAfter(dto.getEndDate()); d = d.plusDays(1)) {
@@ -250,7 +341,14 @@ public class RecurringService {
                 continue;
             }
             LocalDateTime start = LocalDateTime.of(d, startTime);
-            LocalDateTime end = LocalDateTime.of(d, endTime);
+            // 用**完整日期时间**做增量，而不是 LocalTime.plusMinutes：
+            // 后者按 24h 取模，1500 分钟会被静默截成 60 分钟（T5.1 评审 R1）。
+            LocalDateTime end = start.plusMinutes(durationMinutes);
+            if (!end.toLocalDate().equals(d)) {
+                // 本系统的占用模型是"按自然日加锁"，跨天场次会让锁与占用对不上
+                throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(),
+                        String.format("第 %d 场（%s）时长跨天：结束时间须在当日 24:00 前", occurrences.size() + 1, d));
+            }
             try {
                 reserveService.validateTime(start, end, strategy);
             } catch (BusinessException e) {
@@ -274,8 +372,10 @@ public class RecurringService {
     /** 逐场冲突检测（锁内调用）：把冲突归属到具体场次上 */
     private List<RecurringConflictVO> checkConflicts(Long roomId, List<LocalDateTime[]> occurrences) {
         List<RecurringConflictVO> conflicts = new ArrayList<>();
+        // 策略只查一次：60 场系列没必要重复查 60 次 room_strategy（评审 O2）
+        int buffer = conflictChecker.bufferMinutes(roomId);
         for (LocalDateTime[] occ : occurrences) {
-            for (MeetingConflictVO c : conflictChecker.findConflicts(roomId, occ[0], occ[1], null)) {
+            for (MeetingConflictVO c : conflictChecker.findConflicts(roomId, occ[0], occ[1], null, buffer)) {
                 RecurringConflictVO vo = new RecurringConflictVO();
                 vo.setOccurrenceStart(occ[0]);
                 vo.setMeetingId(c.getMeetingId());

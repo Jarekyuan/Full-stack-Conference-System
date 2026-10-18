@@ -28,6 +28,7 @@ import {
 } from '@/api/meeting'
 import type { Room } from '@/api/room'
 import DeptUserPicker from '@/components/DeptUserPicker'
+import { disabledTimeForToday } from '@/components/datePickerLimits'
 import { useAppRequest } from '@/hooks/useAppRequest'
 import { ApiError } from '@/api/types'
 import { API_TIME_FORMAT, bookingSchema, type BookingForm } from '@/pages/bookingSchema'
@@ -199,6 +200,11 @@ export default function BookingDrawer({ open, prefill, rooms, onClose, onSuccess
       participants: values.userIds.length ? { userIds: values.userIds } : undefined,
     }
     if (values.repeatWeekly) {
+      // R16/O6：房间可能是在勾选“每周”之后才被改到不支持周期的；提交前再挡一次
+      if (selectedRoom?.allowRecurring !== 1) {
+        message.warning('该会议室未开放周期预约')
+        return
+      }
       await submitRecurring(values)
       return
     }
@@ -296,16 +302,8 @@ export default function BookingDrawer({ open, prefill, rooms, onClose, onSuccess
                 onChange={(v) => field.onChange(v)}
                 // 过去时间在 UI 层就不可选（T6.1）；后端 validateTime 仍会兜底 30003
                 disabledDate={(current) => current.isBefore(dayjs().startOf('day'))}
-                disabledTime={(current) => {
-                  if (!current || !current.isSame(dayjs(), 'day')) return {}
-                  const now = dayjs()
-                  return {
-                    disabledHours: () => Array.from({ length: now.hour() }, (_, i) => i),
-                    disabledMinutes: (hour: number) =>
-                      hour === now.hour() ? Array.from({ length: now.minute() }, (_, i) => i) : [],
-                    disabledSeconds: () => Array.from({ length: 60 }, (_, i) => i),
-                  }
-                }}
+                // C3：规则抽到 datePickerLimits；绝不能返回 disabledSeconds（会让今天所有值 invalid）
+                disabledTime={(current) => disabledTimeForToday(current)}
               />
             )}
           />
@@ -332,15 +330,36 @@ export default function BookingDrawer({ open, prefill, rooms, onClose, onSuccess
         )}
 
         {/* 周期会议（T5.4）：勾选后展开"重复到哪天"。星期几不另选——它就是开始时间所属的星期几 */}
-        <Form.Item label="每周重复" tooltip="勾选后按本次的开始时间生成【每周一次】的系列会议">
+        <Form.Item
+          label="每周重复"
+          tooltip={
+            selectedRoom?.allowRecurring === 1
+              ? '勾选后按本次的开始时间生成【每周一次】的系列会议'
+              : '该会议室未开放周期预约'
+          }
+        >
           <Controller
             name="repeatWeekly"
             control={control}
             render={({ field }) => (
-              <Switch checked={field.value} onChange={field.onChange} checkedChildren="每周" unCheckedChildren="单次" />
+              <Switch
+                checked={field.value}
+                onChange={field.onChange}
+                checkedChildren="每周"
+                unCheckedChildren="单次"
+                disabled={selectedRoom?.allowRecurring !== 1}
+              />
             )}
           />
         </Form.Item>
+        {repeatWeekly && (
+          <Alert
+            type="info"
+            showIcon
+            className="mb-3"
+            message="周期会议暂不支持参会人与备注，提交时这两项将按空保存"
+          />
+        )}
         {repeatWeekly && (
           <Form.Item
             label="重复到哪天"
@@ -364,8 +383,10 @@ export default function BookingDrawer({ open, prefill, rooms, onClose, onSuccess
                   disabledDate={(d) =>
                     !d ||
                     !timeRange?.[0]?.isValid() ||
-                    d.isBefore(timeRange[0].startOf('day')) ||
-                    d.isAfter(timeRange[0].add(selectedRoom?.advanceDays ?? 30, 'day'))
+                    // 与 zod/后端一致：结束日期必须严格晚于开始日期（同日由后端允许但 UI 不提供）
+                    !d.isAfter(timeRange[0].startOf('day')) ||
+                    // 提前量是相对“今天”而不是相对“开始日”（O7）
+                    d.isAfter(dayjs().add(selectedRoom?.advanceDays ?? 30, 'day').endOf('day'))
                   }
                 />
               )}

@@ -15,7 +15,7 @@
 # ============================================================================
 set -u
 
-BASE="${BASE:-http://127.0.0.1:8080}"
+BASE="${BASE_URL:-${BASE:-http://127.0.0.1:8080}}"
 ROOM_ID=1
 MYSQL=(docker exec smt-mysql mysql --default-character-set=utf8mb4 -uroot -proot123 -N -e)
 PASS=0
@@ -173,12 +173,17 @@ invited_flag() { # $1 token
 # ---------- ④ 邀请关系 + 缓存隔离（两个顺序都验） ----------
 evict_calendar "$ROOM_ID" "$FUTURE_WEEK"
 F1=$(invited_flag "$U1")
+# R14.4：必须证明这次请求真的写入了缓存；否则“缓存完全没启用”时两个方向也都会绿
+check "user1 的请求已写入日历缓存（前置）" \
+  "$(redis_cli EXISTS "cache:calendar:${ROOM_ID}:${FUTURE_WEEK}" | tr -d '\r')" "1"
 F3_AFTER_HIT=$(invited_flag "$U3")   # 缓存已由 user1 的请求建立
 check "user1（参会人）看到 invited=true" "$([ "$F1" = "True" ] && echo 1 || echo 0)" "invited=$F1"
 check "缓存命中后 user3 仍是 invited=false（不串用户）" "$([ "$F3_AFTER_HIT" = "False" ] && echo 1 || echo 0)" "invited=$F3_AFTER_HIT"
 
 evict_calendar "$ROOM_ID" "$FUTURE_WEEK"
 F3=$(invited_flag "$U3")
+check "user3 的请求已写入日历缓存（反向前置）" \
+  "$(redis_cli EXISTS "cache:calendar:${ROOM_ID}:${FUTURE_WEEK}" | tr -d '\r')" "1"
 F1_AFTER_HIT=$(invited_flag "$U1")   # 缓存由 user3 的请求建立
 check "user3（无关）看到 invited=false" "$([ "$F3" = "False" ] && echo 1 || echo 0)" "invited=$F3"
 check "缓存命中后 user1 仍是 invited=true（反向也不串）" "$([ "$F1_AFTER_HIT" = "True" ] && echo 1 || echo 0)" "invited=$F1_AFTER_HIT"
@@ -205,6 +210,30 @@ check "批量日历无失败房间" "$([ "$B_FAILED" = "0" ] && echo 1 || echo 0
 check "批量日历每个房间补齐 7 天" "$([ "$B_DAYS_OK" = "1" ] && echo 1 || echo 0)"
 check "批量日历 invited 装饰正确（user1=true）" "$([ "$B_INVITED" = "True" ] && echo 1 || echo 0)" "invited=$B_INVITED"
 check "批量日历 weekStart 正确" "$([ "$B_WEEK" = "$FUTURE_WEEK" ] && echo 1 || echo 0)" "weekStart=$B_WEEK"
+
+# R14.8：>50 必须 10001；空/非正 id 也拒绝；批量与单房间返回的会议集合必须一致
+MANY_IDS=$(python3 -c "print(','.join(str(i) for i in range(1, 52)))")
+MANY_CODE=$(get_api "/api/rooms/calendar?week=$FUTURE_WEEK&roomIds=$MANY_IDS" "$U1" | \
+  python3 -c 'import sys,json;print(json.load(sys.stdin).get("code"))')
+check "批量日历 >50 个房间 → 10001" "$([ "$MANY_CODE" = "10001" ] && echo 1 || echo 0)" "code=$MANY_CODE"
+EMPTY_CODE=$(get_api "/api/rooms/calendar?week=$FUTURE_WEEK&roomIds=" "$U1" | \
+  python3 -c 'import sys,json;print(json.load(sys.stdin).get("code"))')
+check "批量日历空 roomIds → 10001" "$([ "$EMPTY_CODE" = "10001" ] && echo 1 || echo 0)" "code=$EMPTY_CODE"
+NEG_CODE=$(get_api "/api/rooms/calendar?week=$FUTURE_WEEK&roomIds=-1" "$U1" | \
+  python3 -c 'import sys,json;print(json.load(sys.stdin).get("code"))')
+check "批量日历非正 roomId → 10001" "$([ "$NEG_CODE" = "10001" ] && echo 1 || echo 0)" "code=$NEG_CODE"
+
+SINGLE_IDS=$(get_api "/api/rooms/1/calendar?week=$FUTURE_WEEK" "$U1" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)['data']
+print(' '.join(str(m['meetingId']) for day in d['days'] for m in day['meetings']))")
+BATCH_IDS=$(get_api "/api/rooms/calendar?week=$FUTURE_WEEK&roomIds=1,6" "$U1" | python3 -c "
+import sys, json
+items = json.load(sys.stdin)['data']['items']
+r1 = next(x for x in items if x['roomId'] == 1)
+print(' '.join(str(m['meetingId']) for day in r1['days'] for m in day['meetings']))")
+check "批量与单房间返回的会议集合一致" \
+  "$([ "$BATCH_IDS" = "$SINGLE_IDS" ] && echo 1 || echo 0)" "batch=[$BATCH_IDS] single=[$SINGLE_IDS]"
 
 # ---------- ⑤ 按部门选人接口 ----------
 SEARCH_OUT=$(get_api "/api/users/search?deptId=2" "$U1" | python3 -c '

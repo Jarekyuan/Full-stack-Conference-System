@@ -58,7 +58,7 @@ export default function DeptUserPicker({ value = [], onChange, disabled }: DeptU
   const selectedIds = useMemo(() => new Set(draft), [draft])
   const labelOf = (id: number) => selectedMap.get(id)?.realName ?? `用户#${id}`
 
-  const { run: debouncedSearch } = useDebounceFn(
+  const { run: debouncedSearch, cancel: cancelDebouncedSearch } = useDebounceFn(
     (kw: string, dept: number | undefined) => {
       if (!kw.trim() && dept == null) return
       runSearch(kw.trim() || undefined, dept)
@@ -96,6 +96,9 @@ export default function DeptUserPicker({ value = [], onChange, disabled }: DeptU
   }
 
   const selectDept = (key: string) => {
+    // R16：切换部门前取消仍在排队的“旧部门 + 关键字”防抖请求，
+    // 否则它会在 400ms 后成为“最后一次请求”，把新部门的结果覆盖掉。
+    cancelDebouncedSearch()
     const nextDept = key === 'all' ? undefined : Number(key)
     setDeptId(nextDept)
     if (nextDept == null && !keyword.trim()) {
@@ -181,6 +184,9 @@ export default function DeptUserPicker({ value = [], onChange, disabled }: DeptU
                 }}
               />
             </Spin>
+            <Text type="secondary" className="mt-2 block text-xs">
+              部门人数含停用用户；右侧只列启用成员
+            </Text>
           </div>
 
           {/* 右：该部门用户 / 搜索结果 */}
@@ -188,7 +194,7 @@ export default function DeptUserPicker({ value = [], onChange, disabled }: DeptU
             <Input
               allowClear
               value={keyword}
-              placeholder="搜索姓名或用户名（可跨部门）"
+              placeholder="搜索姓名或用户名（当前部门内；跨部门请选“全部部门”）"
               onChange={(e) => {
                 setKeyword(e.target.value)
                 debouncedSearch(e.target.value, deptId)

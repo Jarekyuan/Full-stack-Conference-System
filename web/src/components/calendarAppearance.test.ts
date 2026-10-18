@@ -69,9 +69,16 @@ describe('calendarCategory（日历四色）', () => {
     expect(calendarCategory(meeting(endingNow), ME, NOW).expired).toBe(true)
   })
 
-  it('status=40 即使时间数据异常在未来说，也按“未过期 + 其他”处理（不误判为我的）', () => {
-    // 正常情况下 40 一定已经过去；这里只验证函数不依赖 status 猜过期
-    expect(calendarCategory(meeting({ status: 40, organiserId: ME }), ME, NOW).category).toBe('mine')
+  it('status=40 即使 endTime 仍在未来（提前结束），也按已过期处理（评审 R9）', () => {
+    // 提前结束只把 status 改成 40、end_time 仍是原值；不能让它继续显示为“我预订/邀请我的”
+    expect(calendarCategory(meeting({ status: 40, organiserId: ME }), ME, NOW)).toEqual({
+      category: 'other',
+      expired: true,
+    })
+    expect(calendarCategory(meeting({ status: 40, invited: true }), ME, NOW)).toEqual({
+      category: 'other',
+      expired: true,
+    })
   })
 
   it('没有当前用户信息时，“我预订”退化为 other；invited 是服务端按当前用户算好的，仍可信', () => {

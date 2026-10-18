@@ -47,11 +47,19 @@ public class AvailabilityController {
     @GetMapping("/calendar")
     public Result<RoomCalendarsVO> calendars(@RequestParam String week,
                                              @RequestParam List<Long> roomIds) {
-        if (roomIds.size() > 50) {
+        // R14.8/O3：显式拒绝空列表/非正 id；先去重再判 50，重复 id 不应占用上限
+        if (roomIds == null || roomIds.isEmpty()) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(), "roomIds 不能为空");
+        }
+        List<Long> distinct = roomIds.stream().distinct().toList();
+        if (distinct.stream().anyMatch(id -> id == null || id <= 0)) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(), "roomIds 只能包含正数");
+        }
+        if (distinct.size() > 50) {
             throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(), "一次最多查询 50 个会议室");
         }
         LocalDate weekDate = parseWeek(week);
-        return Result.success(availabilityService.calendars(roomIds, weekDate, UserContext.getUserId()));
+        return Result.success(availabilityService.calendars(distinct, weekDate, UserContext.getUserId()));
     }
 
     /** 单会议室某周日程（week 传该周任意一天，格式 yyyy-MM-dd） */

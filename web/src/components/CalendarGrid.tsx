@@ -64,6 +64,8 @@ interface CalendarGridProps {
   dates: string[]
   /** roomId → 该会议室本周 7 天日程（后端已补齐 7 天并按索引对齐） */
   daysByRoom: Map<number, CalendarDay[]>
+  /** 这些房间的日历加载失败：行标“加载失败”，空格不可点（O4） */
+  failedRoomIds?: number[]
   currentUserId?: number
   /** 审批人（APPROVER/ADMIN）：待审批块显示“待你审批”而不是“待审批” */
   canApprove?: boolean
@@ -178,6 +180,7 @@ function DayCell({
   meetings,
   currentUserId,
   canApprove,
+  failed,
   onEmptyClick,
   onMeetingClick,
 }: {
@@ -186,6 +189,8 @@ function DayCell({
   meetings: CalendarMeeting[]
   currentUserId?: number
   canApprove?: boolean
+  /** 房间日历加载失败：禁用空格点击，避免基于“空数据”发起预约 */
+  failed?: boolean
   onEmptyClick: (slot: EmptySlot) => void
   onMeetingClick: (meeting: CalendarMeeting) => void
 }) {
@@ -213,7 +218,7 @@ function DayCell({
       data-testid={`day-cell-${room.id}-${date}`}
       className={`relative border-l border-gray-100 dark:border-slate-800 ${ratio >= 1 ? 'bg-gray-50 dark:bg-slate-950' : 'hover:bg-blue-50/40 dark:hover:bg-blue-950/30'}`}
       style={{ height: CELL_HEIGHT }}
-      onClick={handleEmptyClick}
+      onClick={failed ? undefined : handleEmptyClick}
     >
       {HOUR_LINES.map((m) => (
         <div
@@ -225,7 +230,7 @@ function DayCell({
       {ratio > 0 && (
         <div
           data-testid={`past-overlay-${room.id}-${date}`}
-          className="pointer-events-none absolute inset-x-0 top-0 bg-gray-100/80 dark:bg-slate-900/80"
+          className="pointer-events-none absolute inset-x-0 top-0 bg-gray-100/80 dark:bg-slate-950/80"
           style={{ height: `${ratio * 100}%` }}
         />
       )}
@@ -279,6 +284,7 @@ function RoomRowInner({
   currentUserId,
   canApprove,
   isLastRoom,
+  failed,
   onEmptyClick,
   onMeetingClick,
 }: {
@@ -289,6 +295,8 @@ function RoomRowInner({
   canApprove?: boolean
   /** 最后一行才显示 20:00（避免与下一行 08:00 在行边界重叠） */
   isLastRoom?: boolean
+  /** 该房间日历加载失败：禁点空格，避免在“看起来空”的格子上发起预约 */
+  failed?: boolean
   onEmptyClick: (slot: EmptySlot) => void
   onMeetingClick: (meeting: CalendarMeeting) => void
 }) {
@@ -297,7 +305,9 @@ function RoomRowInner({
       <Popover content={<RoomInfoCard room={room} />} placement="right" mouseEnterDelay={0.15}>
         <div className="flex cursor-help flex-col justify-center border-r border-gray-100 dark:border-slate-800 px-2">
           <div className="truncate text-sm font-medium">{room.name}</div>
-          <div className="truncate text-xs text-gray-400 dark:text-slate-400">{room.location}</div>
+          <div className="truncate text-xs text-gray-400 dark:text-slate-400">
+            {failed ? <span className="text-red-500 dark:text-red-400">日程加载失败</span> : room.location}
+          </div>
         </div>
       </Popover>
       <TimeAxis showEnd={isLastRoom} />
@@ -309,6 +319,7 @@ function RoomRowInner({
           meetings={days[i]?.meetings ?? EMPTY_MEETINGS}
           currentUserId={currentUserId}
           canApprove={canApprove}
+          failed={failed}
           onEmptyClick={onEmptyClick}
           onMeetingClick={onMeetingClick}
         />
@@ -324,6 +335,7 @@ function CalendarGridInner({
   rooms,
   dates,
   daysByRoom,
+  failedRoomIds,
   currentUserId,
   canApprove,
   emptyText,
@@ -362,6 +374,7 @@ function CalendarGridInner({
               currentUserId={currentUserId}
               canApprove={canApprove}
               isLastRoom={index === rooms.length - 1}
+              failed={failedRoomIds?.includes(room.id)}
               onEmptyClick={onEmptyClick}
               onMeetingClick={onMeetingClick}
             />

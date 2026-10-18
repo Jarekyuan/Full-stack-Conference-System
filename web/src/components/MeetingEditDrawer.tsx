@@ -12,9 +12,10 @@ import { Controller, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import dayjs, { type Dayjs } from 'dayjs'
-import { App, Button, DatePicker, Drawer, Form, Input, Select, Spin } from 'antd'
+import { App, Button, DatePicker, Drawer, Empty, Form, Input, Select, Spin } from 'antd'
 import { getMeeting, updateMeeting } from '@/api/meeting'
 import { listRooms } from '@/api/room'
+import { disabledTimeForToday } from '@/components/datePickerLimits'
 import { ApiError } from '@/api/types'
 import { useAppRequest } from '@/hooks/useAppRequest'
 import { API_TIME_FORMAT } from '@/pages/bookingSchema'
@@ -53,9 +54,21 @@ export default function MeetingEditDrawer({
   onSuccess,
 }: MeetingEditDrawerProps) {
   const { message } = App.useApp()
-  const { data: detail, loading: detailLoading, run: loadDetail } = useAppRequest(getMeeting)
+  const {
+    data: detail,
+    loading: detailLoading,
+    run: loadDetail,
+    mutate: mutateDetail,
+  } = useAppRequest(getMeeting)
   const { data: rooms } = useAppRequest(() => listRooms(), { manual: false })
   const { runAsync: doUpdate, loading: saving } = useAppRequest(updateMeeting, { toastError: false })
+
+  /**
+   * R10：ahooks 的 `run` 不会清空旧 data（成功才 setData）；
+   * 打开 B 时若 B 的详情请求慢/失败，detail 仍是 A，旧实现会渲染 A 的表单并用 A 的 id/version 提交。
+   * 这里用 id 守卫把“不是当前会议的 detail”视为无效，并在打开时主动清空。
+   */
+  const currentDetail = detail && detail.id === meetingId ? detail : undefined
 
   const {
     control,
@@ -69,30 +82,31 @@ export default function MeetingEditDrawer({
 
   useEffect(() => {
     if (open && meetingId != null) {
+      mutateDetail(undefined) // 清掉上一场的缓存，避免请求失败时回落到旧表单
       loadDetail(meetingId)
     }
-  }, [open, meetingId, loadDetail])
+  }, [open, meetingId, loadDetail, mutateDetail])
 
   useEffect(() => {
-    if (!open || !detail) return
+    if (!open || !currentDetail) return
     reset({
-      title: detail.title,
-      roomId: detail.roomId,
-      timeRange: [dayjs(detail.startTime), dayjs(detail.endTime)],
-      remark: detail.remark ?? '',
+      title: currentDetail.title,
+      roomId: currentDetail.roomId,
+      timeRange: [dayjs(currentDetail.startTime), dayjs(currentDetail.endTime)],
+      remark: currentDetail.remark ?? '',
     })
-  }, [open, detail, reset])
+  }, [open, currentDetail, reset])
 
   const onSubmit = async (values: MeetingEditForm) => {
-    if (!detail) return
+    if (!currentDetail || currentDetail.id !== meetingId) return
     try {
-      await doUpdate(detail.id, {
+      await doUpdate(currentDetail.id, {
         title: values.title.trim(),
         roomId: values.roomId,
         startTime: values.timeRange[0].format(API_TIME_FORMAT),
         endTime: values.timeRange[1].format(API_TIME_FORMAT),
         remark: values.remark?.trim() || undefined,
-        version: detail.version,
+        version: currentDetail.version,
       })
       message.success('会议已更新')
       onSuccess()
@@ -110,13 +124,22 @@ export default function MeetingEditDrawer({
       onClose={onClose}
       width={460}
       extra={
-        <Button type="primary" loading={saving} onClick={handleSubmit(onSubmit)}>
+        <Button
+          type="primary"
+          loading={saving}
+          disabled={detailLoading || !currentDetail}
+          onClick={handleSubmit(onSubmit)}
+        >
           保存
         </Button>
       }
     >
-      {detailLoading || !detail ? (
+      {detailLoading ? (
         <Spin />
+      ) : !currentDetail ? (
+        <Empty description="会议加载失败">
+          <Button onClick={() => meetingId != null && loadDetail(meetingId)}>重试</Button>
+        </Empty>
       ) : (
         <Form layout="vertical">
           <Form.Item
@@ -170,16 +193,8 @@ export default function MeetingEditDrawer({
                   value={field.value}
                   onChange={(v) => field.onChange(v)}
                   disabledDate={(current) => current.isBefore(dayjs().startOf('day'))}
-                  disabledTime={(current) => {
-                    if (!current || !current.isSame(dayjs(), 'day')) return {}
-                    const now = dayjs()
-                    return {
-                      disabledHours: () => Array.from({ length: now.hour() }, (_, i) => i),
-                      disabledMinutes: (hour: number) =>
-                        hour === now.hour() ? Array.from({ length: now.minute() }, (_, i) => i) : [],
-                      disabledSeconds: () => Array.from({ length: 60 }, (_, i) => i),
-                    }
-                  }}
+                  // C3：与预约 Drawer 共用同一份规则；绝不能返回 disabledSeconds
+                  disabledTime={(current) => disabledTimeForToday(current)}
                 />
               )}
             />

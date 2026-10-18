@@ -30,7 +30,7 @@ public class CalendarCacheEvictor {
     private final StringRedisTemplate redis;
 
     /**
-     * 删除覆盖 [start, end] 的周缓存（会议可能横跨两周，两边的 key 都要删）。
+     * 删除覆盖 [start, end] 的**每一周**缓存（会议可能横跨两周，周期系列更是跨多周）。
      * 缓存是旁路：Redis 故障只告警，绝不影响业务。
      */
     public void evict(Long roomId, LocalDateTime start, LocalDateTime end) {
@@ -38,11 +38,12 @@ public class CalendarCacheEvictor {
             return;
         }
         try {
-            LocalDate startWeek = weekStart(start);
-            LocalDate endWeek = weekStart(end);
-            redis.delete(CALENDAR_KEY_PREFIX + roomId + ":" + startWeek);
-            if (!endWeek.equals(startWeek)) {
-                redis.delete(CALENDAR_KEY_PREFIX + roomId + ":" + endWeek);
+            LocalDate week = weekStart(start);
+            LocalDate lastWeek = weekStart(end);
+            // 逐周删除：周期系列一次跨 N 周时，只删首末两周会让中间周继续返回旧数据（T5.1 评审 R2）
+            while (!week.isAfter(lastWeek)) {
+                redis.delete(CALENDAR_KEY_PREFIX + roomId + ":" + week);
+                week = week.plusWeeks(1);
             }
         } catch (Exception e) {
             log.warn("[缓存] 删除日历缓存失败（缓存会自然过期）: roomId={}, err={}", roomId, e.getMessage());

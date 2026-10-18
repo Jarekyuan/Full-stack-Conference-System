@@ -39,6 +39,9 @@ public class RecurringCreateDTO {
 
     @NotNull(message = "会议时长不能为空")
     @Min(value = 1, message = "会议时长非法")
+    // 上限 1439：本系统的单场会议不能跨天；不设上限时 LocalTime.plusMinutes 会按 24h 取模，
+    // 1500 分钟会被静默截成 60 分钟（T5.1 评审 R1）。
+    @Max(value = 1439, message = "单场会议不能跨天（时长最多 1439 分钟）")
     private Integer durationMinutes;
 
     @NotNull(message = "重复开始日期不能为空")

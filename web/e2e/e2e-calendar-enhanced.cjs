@@ -98,7 +98,13 @@ const apiGet = async (path, token) =>
       VALUES ('E2E日历-待审批', 1, 5, '${tue} 10:00:00', '${tue} 11:00:00', 10);
       SELECT LAST_INSERT_ID();`);
     if (idD) createdIds.push(idD);
-    check('测试数据插入成功（4 场）', createdIds.length === 4, `ids=${createdIds.join(',')}`);
+    // R9：提前结束（40）但 endTime 仍在未来——应按已过期灰色，而不是“我预订”蓝色
+    const idE = sql(`INSERT INTO smt_meeting.meeting
+      (title, room_id, organiser_id, start_time, end_time, status)
+      VALUES ('E2E日历-提前结束', 1, 4, '${tue} 16:00:00', '${tue} 17:00:00', 40);
+      SELECT LAST_INSERT_ID();`);
+    if (idE) createdIds.push(idE);
+    check('测试数据插入成功（5 场）', createdIds.length === 5, `ids=${createdIds.join(',')}`);
     evictCalendarCache(1, fmt(nextMonday));
 
     browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -207,6 +213,12 @@ const apiGet = async (path, token) =>
         (await blockC.count()) === 1 &&
         (await blockD.count()) === 1,
     );
+    const blockE = page.locator(`[data-testid="meeting-block-${idE}"]`);
+    check(
+      '提前结束(40) 但 endTime 未来 → 分类=other（不是 mine）',
+      (await blockE.count()) === 1 && (await blockE.getAttribute('data-category')) === 'other',
+    );
+    check('提前结束块降透明度', ((await blockE.getAttribute('class')) ?? '').includes('opacity-60'));
     check('我预订块分类=mine', (await blockA.getAttribute('data-category')) === 'mine');
     check('邀请我的块分类=invited', (await blockB.getAttribute('data-category')) === 'invited');
     check('其他块分类=other', (await blockC.getAttribute('data-category')) === 'other');
@@ -261,6 +273,18 @@ const apiGet = async (path, token) =>
         (await page.locator('.ant-modal-title').filter({ hasText: '选择参会人' }).count()) > 0,
       );
       const modal = page.locator('.ant-modal-content').last();
+      // R16：默认在研发部；输入“张”后立刻切到产品部，旧部门的 400ms 防抖不能覆盖新部门结果
+      const userSearch = modal.getByPlaceholder(/搜索姓名或用户名/);
+      await userSearch.fill('张');
+      await modal.locator('.ant-tree').getByText(/产品部/).first().click();
+      await page.waitForTimeout(900);
+      check(
+        '切换部门后旧关键字防抖不覆盖新部门',
+        (await modal.locator('.ant-list-item', { hasText: '张三' }).count()) === 0,
+      );
+      // 清掉关键字并回到研发部，继续原有选人流程
+      await userSearch.fill('');
+      await page.waitForTimeout(500);
       await modal.locator('.ant-tree').getByText(/研发部/).first().click();
       await page.waitForTimeout(800);
       const userRow = modal.locator('.ant-list-item', { hasText: '张三' }).first();

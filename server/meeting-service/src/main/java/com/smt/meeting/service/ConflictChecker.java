@@ -40,14 +40,22 @@ public class ConflictChecker {
      */
     public List<MeetingConflictVO> findConflicts(Long roomId, LocalDateTime start, LocalDateTime end,
                                                  Long excludeMeetingId) {
-        int buffer = resolveBufferMinutes(roomId);
+        return findConflicts(roomId, start, end, excludeMeetingId, bufferMinutes(roomId));
+    }
+
+    /**
+     * 批量/周期场景复用同一个 buffer（T5.1 评审 O2）：一次系列创建要检 N 场，
+     * 每场都查一次 room_strategy 是 N 次无谓查询；调用方先取一次再传进来。
+     */
+    public List<MeetingConflictVO> findConflicts(Long roomId, LocalDateTime start, LocalDateTime end,
+                                                 Long excludeMeetingId, int buffer) {
         LocalDateTime scanStart = start.minusMinutes(buffer);
         LocalDateTime scanEnd = end.plusMinutes(buffer);
         return meetingMapper.selectConflicts(roomId, scanStart, scanEnd, excludeMeetingId);
     }
 
     /** 该会议室锁定缓冲分钟数（无策略或未配置按 0） */
-    private int resolveBufferMinutes(Long roomId) {
+    public int bufferMinutes(Long roomId) {
         RoomStrategy strategy = roomStrategyMapper.selectByRoomId(roomId);
         if (strategy == null || strategy.getBufferMinutes() == null) {
             return 0;

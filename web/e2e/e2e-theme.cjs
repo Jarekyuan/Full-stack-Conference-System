@@ -62,6 +62,16 @@ async function useMode(page, label) {
     const siderBg = await page.locator('.ant-layout-sider').evaluate((el) => getComputedStyle(el).backgroundColor);
     check('Sider 背景不是白色', siderBg !== 'rgb(255, 255, 255)', siderBg);
 
+    // R15：暗色下“过去时段灰罩”必须与容器有对比，不能和 slate-900 同色
+    await page.getByRole('button', { name: '上一周' }).click();
+    await sleep(1000);
+    const pastOverlay = page.locator('[data-testid^="past-overlay-"]').first();
+    check('上一周存在过去时段遮罩', (await pastOverlay.count()) > 0);
+    if (await pastOverlay.count()) {
+      const overlayBg = await pastOverlay.evaluate((el) => getComputedStyle(el).backgroundColor);
+      check('暗色过去遮罩使用有对比的 slate-950', overlayBg.includes('2, 6, 23'), overlayBg);
+    }
+
     // ③ 刷新持久化（内联脚本在 React 挂载前就应设置 dark）
     await page.reload({ waitUntil: 'networkidle' });
     await sleep(1000);
@@ -70,6 +80,16 @@ async function useMode(page, label) {
       () => JSON.parse(localStorage.getItem('meeting.theme') || '{}').state?.mode,
     );
     check('localStorage 记住 dark 模式', storedMode === 'dark', storedMode);
+
+    // R14.9：阻断 React 主包，证明 dark 是 index.html 内联脚本在挂载前设置的，
+    // 而不是 AppThemeProvider 挂载后补的（旧断言等 networkidle，删掉内联脚本也会绿）
+    await page.route('**/src/main.tsx*', (route) => route.abort());
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await sleep(500);
+    check('React 挂载前已带 dark（防闪烁内联脚本）', await isDark(page));
+    await page.unroute('**/src/main.tsx*');
+    await page.reload({ waitUntil: 'networkidle' });
+    await sleep(1200);
 
     // ④ 跟随系统：系统暗 ↔ 系统亮
     await useMode(page, '跟随系统');

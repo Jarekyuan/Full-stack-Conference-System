@@ -111,7 +111,7 @@ public class MeetingController {
      */
     @PostMapping("/recurring/{id}/cancel")
     public Result<RecurringCancelVO> cancelRecurring(@PathVariable Long id,
-                                                     @RequestBody(required = false) MeetingCancelDTO dto) {
+                                                     @Valid @RequestBody(required = false) MeetingCancelDTO dto) {
         String reason = dto == null ? null : dto.getReason();
         return Result.success(recurringService.cancel(id, reason, UserContext.getUserId()));
     }

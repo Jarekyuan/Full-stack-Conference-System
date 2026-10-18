@@ -21,10 +21,6 @@ ROOM=2            # 白桦厅：免审批、allow_recurring=1（与测试用不�
 ROOM_NO_RECUR=6   # 云杉厅：allow_recurring=0
 PASS=0; FAIL=0
 
-# 限流开关（T4.8 起创建预约有用户级限流）：本脚本要连发多次 → 借用同一个开关
-source "$(dirname "$0")/lib/ratelimit.sh"
-ratelimit_disable_for_script
-
 j() { python3 -c "import sys,json;d=json.load(sys.stdin);print($1)" 2>/dev/null; }
 sql() { eval "$MYSQL \"$1\"" 2>/dev/null | grep -v "Using a password"; }
 redis() { docker exec -e REDISCLI_AUTH="${REDIS_PASSWORD:-redis123}" smt-redis redis-cli "$@"; }
@@ -46,6 +42,11 @@ cleanup() {
   done
 }
 trap cleanup EXIT
+
+# 限流开关：**必须在 cleanup trap 安装之后**再调用——lib 会把已有的 EXIT trap 链进去；
+# 反过来（先 disable 再 trap cleanup）会覆盖恢复钩子，脚本跑完限流永久停在 0（评审 C2）。
+source "$(dirname "$0")/lib/ratelimit.sh"
+ratelimit_disable_for_script
 
 login() {
   local body; body=$(printf '{"username":"%s","password":"%s"}' "$1" "$2")
@@ -112,8 +113,26 @@ check "规则表里有这条规则（含 day_of_week/start_minutes）" \
   "$(sql "SELECT CONCAT(day_of_week,'/',start_minutes,'/',duration_minutes) FROM smt_meeting.meeting_recurring WHERE id=$RID;")" "3/960/60"
 check "每场都有创建日志（状态变更必须留痕）" \
   "$(sql "SELECT COUNT(*) FROM smt_meeting.meeting_status_log WHERE meeting_id IN ($(echo $M_IDS | tr ' ' ',')) AND event='RESERVE';")" "3"
-check "每场间隔 7 天" \
-  "$(sql "SELECT COUNT(DISTINCT DATEDIFF(start_time, (SELECT MIN(start_time) FROM (SELECT start_time FROM smt_meeting.meeting WHERE id IN ($(echo $M_IDS | tr ' ' ','))) t))) FROM smt_meeting.meeting WHERE id IN ($(echo $M_IDS | tr ' ' ','));")" "3"
+# R14.2：只数“3 个不同偏移”证明不了 7 天间隔（0/1/2 天也会返回 3）；
+# 直接钉住相对首场的偏移序列 = 0,7,14。
+check "每场间隔 7 天（偏移序列 0,7,14）" \
+  "$(sql "SELECT GROUP_CONCAT(DATEDIFF(start_time, (SELECT MIN(start_time) FROM (SELECT start_time FROM smt_meeting.meeting WHERE id IN ($(echo $M_IDS | tr ' ' ','))) t)) ORDER BY start_time) FROM smt_meeting.meeting WHERE id IN ($(echo $M_IDS | tr ' ' ','));")" "0,7,14"
+
+echo
+echo "=== 1.5 时长边界：>=1440 取模漏洞（评审 R1）==="
+# 1500 分钟按 LocalTime 取模会变成 60 分钟；DTO @Max(1439) 必须在进 Service 前拒绝
+DUR_BODY=$(printf '{"roomId":%s,"title":"T51-超长","dayOfWeek":3,"startMinutes":540,"durationMinutes":1500,"startDate":"%s","endDate":"%s"}' "$ROOM" "$START_DAY" "$START_DAY")
+DUR=$(recur "$U1" "$DUR_BODY")
+check "durationMinutes=1500 被拒 → 10001" "$(echo "$DUR" | j "d['code']")" "10001"
+check "没有落库（超长系列）" "$(sql "SELECT COUNT(*) FROM smt_meeting.meeting WHERE title='T51-超长';")" "0"
+# 23:30 + 60 分钟即使 <=1439 也要按跨天拒绝（不能被 LocalTime 取模混过去）
+CROSS_BODY=$(printf '{"roomId":%s,"title":"T51-跨天","dayOfWeek":3,"startMinutes":1410,"durationMinutes":60,"startDate":"%s","endDate":"%s"}' "$ROOM" "$START_DAY" "$START_DAY")
+CROSS=$(recur "$U1" "$CROSS_BODY")
+check "23:30 + 60 分钟跨天被拒 → 10001" "$(echo "$CROSS" | j "d['code']")" "10001"
+check "没有落库（跨天系列）" "$(sql "SELECT COUNT(*) FROM smt_meeting.meeting WHERE title='T51-跨天';")" "0"
+# 防御性清理：若修复前跑过旧版本，残留也不影响下一次
+DUR_IDS=$(sql "SELECT id FROM smt_meeting.meeting WHERE title IN ('T51-超长','T51-跨天');")
+[ -n "$DUR_IDS" ] && IDS="$IDS $(echo $DUR_IDS)"
 
 echo
 echo "=== 2. 冲突清单准确到"哪一场" + 冲突时一场都不落库 ==="
@@ -176,16 +195,54 @@ check "重发被幂等挡下（10006）" "$(echo "$SECOND" | j "d['code']")" "10
 check "库里该系列仍只有 3 场" "$(sql "SELECT COUNT(*) FROM smt_meeting.meeting WHERE recurring_id=$FIRST_RID;")" "3"
 
 echo
+echo "=== 5.5 需审批系列 → APPROVAL_TODO（评审 R5）==="
+# room 3（梧桐厅）need_approval=1、allow_recurring=1；只建一场，避免等待多场审批
+AP_START=$(free_window_start 3 3 9 600 60) || exit 1
+AP_BODY=$(printf '{"roomId":3,"title":"T51-审批系列","dayOfWeek":3,"startMinutes":600,"durationMinutes":60,"startDate":"%s","endDate":"%s"}' "$AP_START" "$AP_START")
+AP_RESP=$(recur "$U1" "$AP_BODY")
+AP_RID=$(echo "$AP_RESP" | j "d['data']['recurringId']")
+AP_IDS=$(echo "$AP_RESP" | j "' '.join(str(i) for i in d['data']['meetingIds'])" 2>/dev/null)
+[ -n "$AP_RID" ] && [ "$AP_RID" != "None" ] && [ -n "$AP_IDS" ] || { echo "❌ 建审批系列失败: $AP_RESP"; exit 1; }
+IDS="$IDS $AP_IDS"
+AP_FIRST=$(echo $AP_IDS | awk '{print $1}')
+AP_LIST=$(echo $AP_IDS | tr ' ' ',')
+check "需审批系列创建成功，首场状态=10" "$(sql "SELECT status FROM smt_meeting.meeting WHERE id=$AP_FIRST;")" "10"
+# 通知是异步消费的：轮询等证据，不睡固定时间
+AP_TODO=0
+for _ in $(seq 1 15); do
+  AP_TODO=$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE type='APPROVAL_TODO' AND meeting_id IN ($AP_LIST);")
+  [ "${AP_TODO:-0}" -ge 1 ] && break
+  sleep 1
+done
+AP_COUNT=$(sql "SELECT COUNT(DISTINCT ur.user_id) FROM smt_meeting.sys_user_role ur
+  JOIN smt_meeting.sys_role r ON r.id=ur.role_id
+  JOIN smt_meeting.sys_user u ON u.id=ur.user_id
+  WHERE r.code='APPROVER' AND r.status=1 AND u.status=1;")
+check "审批人收到 APPROVAL_TODO" "$([ "${AP_TODO:-0}" -ge 1 ] && echo yes || echo no)" "yes"
+check "只发汇总一条（每人一条，不是逐场 N 条）" "$AP_TODO" "$AP_COUNT"
+
+echo
 echo "=== 6. 日历缓存失效（不逐场发事件，但缓存必须删）==="
 CAL=$(curl -s --noproxy '*' "$BASE/api/rooms/$ROOM/calendar?week=$START_DAY" -H "Authorization: Bearer $U1")
 WEEK=$(echo "$CAL" | j "d['data']['weekStart']")
 CKEY="cache:calendar:${ROOM}:${WEEK}"
 check "先烘热该周缓存" "$(redis EXISTS "$CKEY" | tr -d '\r')" "1"
+# 系列跨三周：中间周也必须被清（评审 R2；旧实现只删首末两周）
+D2=$(python3 -c "import datetime;print(datetime.date.fromisoformat('$START_DAY')+datetime.timedelta(days=7))")
+D3=$(python3 -c "import datetime;print(datetime.date.fromisoformat('$START_DAY')+datetime.timedelta(days=14))")
+WEEK2=$(curl -s --noproxy '*' "$BASE/api/rooms/$ROOM/calendar?week=$D2" -H "Authorization: Bearer $U1" | j "d['data']['weekStart']")
+WEEK3=$(curl -s --noproxy '*' "$BASE/api/rooms/$ROOM/calendar?week=$D3" -H "Authorization: Bearer $U1" | j "d['data']['weekStart']")
+CKEY2="cache:calendar:${ROOM}:${WEEK2}"
+CKEY3="cache:calendar:${ROOM}:${WEEK3}"
+check "先烘热第二周缓存" "$(redis EXISTS "$CKEY2" | tr -d '\r')" "1"
+check "先烘热第三周缓存" "$(redis EXISTS "$CKEY3" | tr -d '\r')" "1"
 NEW_BODY=$(printf '{"roomId":%s,"title":"T51-缓存","dayOfWeek":3,"startMinutes":1140,"durationMinutes":60,"startDate":"%s","endDate":"%s"}' "$ROOM" "$START_DAY" "$END_DAY")
 NEW_RESP=$(recur "$U1" "$NEW_BODY")
 NEW_IDS=$(echo "$NEW_RESP" | j "' '.join(str(i) for i in d['data']['meetingIds'])" 2>/dev/null)
 [ -n "$NEW_IDS" ] && IDS="$IDS $NEW_IDS"
-check "缓存已被清" "$(redis EXISTS "$CKEY" | tr -d '\r')" "0"
+check "首周缓存已被清" "$(redis EXISTS "$CKEY" | tr -d '\r')" "0"
+check "**中间周缓存也被清**（不是只删首末两周）" "$(redis EXISTS "$CKEY2" | tr -d '\r')" "0"
+check "末周缓存已被清" "$(redis EXISTS "$CKEY3" | tr -d '\r')" "0"
 # ⚠️ 不数"某几天的会议总数"（第一版写死 5，纯属巧合式断言）：直接确认**本次新建的场次**都在日历里
 # ⚠️ 只核对**第一场**：系列的三场跨了三周，而这里查的是其中一周的日历——
 # 第一版拿 3 个 id 去核对一整周，永远会"缺 2 个"（其实是它们不在这周）
@@ -201,6 +258,7 @@ check "再查日历，本次新建的场次都在（期望 [$NEW_IDS]）" \
 echo
 echo "=== 7. 清理与残留 ==="
 cleanup
+ratelimit_restore   # 手工 cleanup 后显式恢复；trap - EXIT 会连链式恢复钩子一起移除
 trap - EXIT
 ID_LIST=$(echo $IDS | tr ' ' ',')
 check "库里已无本次数据" "$(sql "SELECT COUNT(*) FROM smt_meeting.meeting WHERE id IN ($ID_LIST);")" "0"

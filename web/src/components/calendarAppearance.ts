@@ -17,7 +17,7 @@ export type CalendarCategory = 'pending' | 'mine' | 'invited' | 'other'
 
 export interface CalendarCategoryResult {
   category: CalendarCategory
-  /** 结束时间已过（含 status=40）；其他类里再降透明度区分 */
+  /** 结束时间已过**或已提前结束(status=40)**；其他类里再降透明度区分 */
   expired: boolean
 }
 
@@ -58,8 +58,9 @@ export function calendarCategory(
   currentUserId: number | undefined,
   now: Dayjs = dayjs(),
 ): CalendarCategoryResult {
-  // 结束时间 <= now 即视为过期（含定时任务尚未推到 40 的 20/30 旧数据）
-  const expired = !dayjs(meeting.endTime).isAfter(now)
+  // 结束时间 <= now 视为过期；status=40 也直接按过期处理——
+  // “提前结束”只改状态、不改 end_time，只看 endTime 会让这场会继续显示成我预订/邀请我的（评审 R9）
+  const expired = meeting.status === 40 || !dayjs(meeting.endTime).isAfter(now)
   if (expired) {
     return { category: 'other', expired: true }
   }

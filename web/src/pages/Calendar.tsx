@@ -1,8 +1,8 @@
 /**
  * src/pages/Calendar.tsx
  * 日历预约页（02 文档 4.2 核心页面）：顶部周切换器 + 会议室 × 7 天网格。
- * 数据编排：listRooms() 取可用会议室 → 对每个会议室并发取该周日历
- *   （calendar 接口是**单会议室**维度，页面是多会议室，故 Promise.all 扇出）。
+ * 数据编排：listRooms() 取可用会议室 → 按 50 分片调用批量周日程接口
+ *   （T6.3；超过 50 间房时多片并发，合并 items/failedRoomIds）。
  * 竞态处理：请求结果里带上"本次请求的周"，渲染前与当前周比对——
  *   快速切周时过期响应即使后到也不会画进网格（docs/02 4.2 明确要求）。
  * 本任务（T2.F1）做到"点空格带出预填时间"；预约 Drawer 表单由 T2.F2 接入。
@@ -15,6 +15,7 @@ import { useNavigate } from 'react-router-dom'
 import { getRoomCalendars, type CalendarDay, type CalendarMeeting } from '@/api/meeting'
 import { listRooms, type Room } from '@/api/room'
 import { CALENDAR_CATEGORY_META, type CalendarCategory } from '@/components/calendarAppearance'
+import { chunkRoomIds } from '@/components/calendarBatch'
 import { CalendarGrid, type EmptySlot } from '@/components/CalendarGrid'
 import BookingDrawer, { type BookingPrefill } from '@/pages/BookingDrawer'
 import { useAppRequest } from '@/hooks/useAppRequest'
@@ -31,7 +32,7 @@ interface WeekPayload {
   week: string
   rooms: Room[]
   daysByRoom: Map<number, CalendarDay[]>
-  /** 取数失败的会议室（逐房间容错，见下方 allSettled 说明） */
+  /** 取数失败的会议室（后端逐房间容错；分片请求合并） */
   failedRoomIds: number[]
 }
 
@@ -54,13 +55,20 @@ export default function Calendar() {
       if (rooms.length === 0) {
         return { week: weekStr, rooms, daysByRoom: new Map<number, CalendarDay[]>(), failedRoomIds: [] }
       }
-      // T6.3：一次批量请求取全部会议室（原来 N 个房间 = N 个 /rooms/{id}/calendar 请求）。
-      // 后端仍按房间缓存/逐房间容错；failedRoomIds 用于保留“单个房间失败不空白整周”的语义。
-      const calendars = await getRoomCalendars(rooms.map((room) => room.id), weekStr)
-      const daysByRoom = new Map<number, CalendarDay[]>(
-        calendars.items.map((item) => [item.roomId, item.days]),
+      // T6.3：批量请求取全部会议室（原来 N 个房间 = N 个 /rooms/{id}/calendar 请求）。
+      // 后端硬上限 50；R11：超过 50 间时按 50 分片并发，合并后再渲染，避免第 51 间房整页空白。
+      const calendars = await Promise.all(
+        chunkRoomIds(rooms.map((room) => room.id)).map((ids) => getRoomCalendars(ids, weekStr)),
       )
-      return { week: weekStr, rooms, daysByRoom, failedRoomIds: calendars.failedRoomIds }
+      const daysByRoom = new Map<number, CalendarDay[]>(
+        calendars.flatMap((c) => c.items).map((item) => [item.roomId, item.days]),
+      )
+      return {
+        week: weekStr,
+        rooms,
+        daysByRoom,
+        failedRoomIds: calendars.flatMap((c) => c.failedRoomIds),
+      }
     },
     { manual: false, refreshDeps: [weekStr] },
   )
@@ -181,6 +189,7 @@ export default function Calendar() {
               rooms={filteredRooms}
               dates={dates}
               daysByRoom={payload.daysByRoom}
+              failedRoomIds={payload.failedRoomIds}
               currentUserId={user?.id}
               canApprove={canApprove}
               emptyText={roomKeyword.trim() ? '没有匹配的会议室' : '暂无可用会议室'}
