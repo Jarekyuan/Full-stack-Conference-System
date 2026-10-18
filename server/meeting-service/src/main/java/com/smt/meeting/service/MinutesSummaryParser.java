@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Set;
 
 @Slf4j
@@ -28,7 +29,8 @@ public class MinutesSummaryParser {
         try {
             return objectMapper.readValue(json, MinutesSummaryVO.class);
         } catch (Exception e) {
-            log.warn("会议纪要 summary_json 解析失败，按空处理", e);
+            // 只记异常类型：Jackson 的异常消息会内嵌 summary JSON 原文（含会议内容），不得入日志。
+            log.warn("会议纪要 summary_json 解析失败，按空处理: {}", e.getClass().getSimpleName());
             return null;
         }
     }
@@ -42,6 +44,10 @@ public class MinutesSummaryParser {
             throw new BusinessException(ErrorCode.AI_GENERATION_FAILED.getCode(),
                     "AI 返回的不是合法 JSON");
         }
+        if (summary == null) {
+            throw new BusinessException(ErrorCode.AI_GENERATION_FAILED.getCode(),
+                    "AI 返回的不是合法 JSON");
+        }
         if (summary.getSummary() == null || summary.getSummary().isBlank()) {
             throw new BusinessException(ErrorCode.AI_GENERATION_FAILED.getCode(),
                     "AI 纪要缺少摘要");
@@ -50,6 +56,17 @@ public class MinutesSummaryParser {
                 || summary.getActionItems() == null || summary.getRisks() == null) {
             throw new BusinessException(ErrorCode.AI_GENERATION_FAILED.getCode(),
                     "AI 纪要字段不完整");
+        }
+        if (hasNullElement(summary.getKeyPoints()) || hasNullElement(summary.getDecisions())
+                || hasNullElement(summary.getActionItems()) || hasNullElement(summary.getRisks())) {
+            throw new BusinessException(ErrorCode.AI_GENERATION_FAILED.getCode(),
+                    "AI 纪要包含空元素");
+        }
+        for (MinutesSummaryVO.DecisionVO decision : summary.getDecisions()) {
+            if (decision.getContent() == null || decision.getContent().isBlank()) {
+                throw new BusinessException(ErrorCode.AI_GENERATION_FAILED.getCode(),
+                        "AI 决策缺少内容");
+            }
         }
         for (MinutesSummaryVO.ActionItemVO item : summary.getActionItems()) {
             if (item.getTask() == null || item.getTask().isBlank()) {
@@ -70,6 +87,15 @@ public class MinutesSummaryParser {
             }
         }
         return summary;
+    }
+
+    private static boolean hasNullElement(List<?> values) {
+        for (Object value : values) {
+            if (value == null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 便于单测构造：不依赖 Spring。 */

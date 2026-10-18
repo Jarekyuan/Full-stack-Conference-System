@@ -4,6 +4,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
@@ -17,7 +18,8 @@ public class MinutesImportDTO {
     @NotBlank(message = "转写文本不能为空")
     private String transcriptText;
 
-    @Positive(message = "录音时长必须为正数")
+    /** 录音时长允许 0–24 小时；0 合法（缺省时服务端改用最后分段 end_ms） */
+    @PositiveOrZero(message = "录音时长不能为负数")
     private Long durationMs;
 
     @Size(max = 32, message = "转写来源长度不能超过 32")

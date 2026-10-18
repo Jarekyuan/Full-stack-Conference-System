@@ -11,6 +11,7 @@ import com.smt.meeting.entity.Meeting;
 import com.smt.meeting.entity.MeetingMinutes;
 import com.smt.meeting.entity.MinutesSpeaker;
 import com.smt.meeting.entity.TranscriptSegment;
+import com.smt.meeting.enums.FileObjectStatus;
 import com.smt.meeting.enums.MinutesAiStatus;
 import com.smt.meeting.mapper.FileObjectMapper;
 import com.smt.meeting.mapper.MeetingMinutesMapper;
@@ -20,9 +21,12 @@ import com.smt.meeting.vo.MinutesSpeakerVO;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -34,24 +38,29 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
  * Task 8：纪要主服务。
  *
- * <p>重点钉住：无纪要时详情返回 null；导入前置校验（会议状态/文件归属）；
- * 首次导入与覆盖导入的写路径；旧音频清理；发言人重命名；预签名 URL；导入锁抢不到返回 10007。</p>
+ * <p>重点钉住：无纪要时详情返回 null；导入前置校验（会议状态/文件归属/24h 上限）；
+ * 首次导入与覆盖导入的写路径；锁内文件复查；旧音频清理与事务提交顺序；
+ * 发言人重命名；预签名 URL；导入锁的获取/失败/中断/异常释放。</p>
  */
 class MinutesServiceTest {
 
     private static final Long MEETING_ID = 42L;
     private static final Long USER_ID = 4L;
+    private static final long MAX_DURATION_MS = 86_400_000L;
 
     private MeetingMinutesMapper minutesMapper;
     private MinutesSpeakerMapper speakerMapper;
@@ -82,17 +91,21 @@ class MinutesServiceTest {
         when(lock.tryLock(3, TimeUnit.SECONDS)).thenReturn(true);
         when(lock.isHeldByCurrentThread()).thenReturn(true);
 
-        // 让 mock 的 TransactionTemplate 真正执行回调，同时保留复用/事务语义的验证点
+        // 让 mock 的 TransactionTemplate 真正执行回调，同时保留事务语义的验证点
         doAnswer(invocation -> {
             TransactionCallback<?> callback = invocation.getArgument(0);
             return callback.doInTransaction(mock(TransactionStatus.class));
         }).when(transactionTemplate).execute(any());
 
+        service = newService(transactionTemplate);
+    }
+
+    private MinutesService newService(TransactionTemplate template) {
         MinutesProperties properties = new MinutesProperties();
-        service = new MinutesService(minutesMapper, speakerMapper, segmentMapper,
+        return new MinutesService(minutesMapper, speakerMapper, segmentMapper,
                 fileObjectMapper, permissionService, insightsService,
                 MinutesSummaryParser.withObjectMapper(new ObjectMapper()),
-                new TranscriptParser(properties), storage, transactionTemplate, redisson);
+                new TranscriptParser(properties), storage, template, redisson);
     }
 
     // ---------- 夹具 ----------
@@ -112,7 +125,7 @@ class MinutesServiceTest {
         file.setBizType("MINUTES_AUDIO");
         file.setBizId(MEETING_ID);
         file.setObjectKey("minutes/42/x.m4a");
-        file.setStatus(0);
+        file.setStatus(FileObjectStatus.NORMAL);
         file.setOriginalName("x.m4a");
         file.setSizeBytes(100L);
         return file;
@@ -124,6 +137,22 @@ class MinutesServiceTest {
         dto.setTranscriptText("[0:1.000,0:2.000,0]  你好");
         dto.setDurationMs(2_000L);
         return dto;
+    }
+
+    private MeetingMinutes existingMinutes(Long id, Long audioFileId) {
+        MeetingMinutes minutes = new MeetingMinutes();
+        minutes.setId(id);
+        minutes.setMeetingId(MEETING_ID);
+        minutes.setAudioFileId(audioFileId);
+        return minutes;
+    }
+
+    private static String transcriptWithSegments(int count) {
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < count; i++) {
+            text.append("[0:1.000,0:2.000,0]  第").append(i).append("段\n");
+        }
+        return text.toString();
     }
 
     private static int codeOf(Throwable throwable) {
@@ -168,6 +197,40 @@ class MinutesServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(MinutesServiceTest::codeOf)
                 .isEqualTo(ErrorCode.FILE_TYPE_NOT_ALLOWED.getCode());
+
+        verify(redisson, never()).getLock(anyString());
+    }
+
+    @Test
+    void importRevalidatesFileInsideLock() {
+        when(permissionService.requireMeeting(MEETING_ID)).thenReturn(meeting(40));
+        FileObject normal = audioFile(9L);
+        FileObject deleted = audioFile(9L);
+        deleted.setStatus(FileObjectStatus.DELETED);
+        // 锁前校验通过；拿到锁后（并发重新导入已把文件标记删除）复查失败
+        when(fileObjectMapper.selectById(9L)).thenReturn(normal, deleted);
+
+        assertThatThrownBy(() -> service.importMinutes(MEETING_ID, importDTO(), USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(MinutesServiceTest::codeOf)
+                .isEqualTo(ErrorCode.FILE_TYPE_NOT_ALLOWED.getCode());
+
+        verify(fileObjectMapper, times(2)).selectById(9L);
+        verify(minutesMapper, never()).insert(any(MeetingMinutes.class));
+        verify(lock).unlock();
+    }
+
+    @Test
+    void importRejectsDurationBeyond24Hours() {
+        when(permissionService.requireMeeting(MEETING_ID)).thenReturn(meeting(40));
+        when(fileObjectMapper.selectById(9L)).thenReturn(audioFile(9L));
+        MinutesImportDTO dto = importDTO();
+        dto.setDurationMs(MAX_DURATION_MS + 1);
+
+        assertThatThrownBy(() -> service.importMinutes(MEETING_ID, dto, USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(MinutesServiceTest::codeOf)
+                .isEqualTo(ErrorCode.PARAM_ERROR.getCode());
 
         verify(redisson, never()).getLock(anyString());
     }
@@ -232,8 +295,33 @@ class MinutesServiceTest {
         });
 
         verify(minutesMapper).resetAi(99L);
-        verify(minutesMapper, never()).updateImport(any(), any(), any(Long.class), anyString());
+        verify(minutesMapper, never()).updateImport(any(), any(), anyLong(), anyString());
         verify(storage, never()).delete(anyString());
+    }
+
+    @Test
+    void importBatchesSegmentsBy500() {
+        when(permissionService.requireMeeting(MEETING_ID)).thenReturn(meeting(40));
+        when(fileObjectMapper.selectById(9L)).thenReturn(audioFile(9L));
+        when(minutesMapper.selectByMeetingId(MEETING_ID)).thenReturn(null);
+        doAnswer(invocation -> {
+            MeetingMinutes minutes = invocation.getArgument(0);
+            minutes.setId(99L);
+            return 1;
+        }).when(minutesMapper).insert(any(MeetingMinutes.class));
+        MinutesImportDTO dto = importDTO();
+        dto.setTranscriptText(transcriptWithSegments(501));
+
+        service.importMinutes(MEETING_ID, dto, USER_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<TranscriptSegment>> segmentCaptor = ArgumentCaptor.forClass(List.class);
+        verify(segmentMapper, times(2)).batchInsert(segmentCaptor.capture());
+        assertThat(segmentCaptor.getAllValues()).hasSize(2);
+        assertThat(segmentCaptor.getAllValues().get(0)).hasSize(500);
+        assertThat(segmentCaptor.getAllValues().get(1)).hasSize(1);
+        verify(speakerMapper).batchInsert(any());
+        verify(minutesMapper).resetAi(99L);
     }
 
     // ---------- import：覆盖导入 ----------
@@ -243,10 +331,7 @@ class MinutesServiceTest {
         when(permissionService.requireMeeting(MEETING_ID)).thenReturn(meeting(40));
         when(fileObjectMapper.selectById(9L)).thenReturn(audioFile(9L));
 
-        MeetingMinutes existing = new MeetingMinutes();
-        existing.setId(99L);
-        existing.setMeetingId(MEETING_ID);
-        existing.setAudioFileId(8L);
+        MeetingMinutes existing = existingMinutes(99L, 8L);
         when(minutesMapper.selectByMeetingId(MEETING_ID)).thenReturn(existing);
         when(minutesMapper.selectByMeetingIdForUpdate(MEETING_ID)).thenReturn(existing);
 
@@ -269,6 +354,64 @@ class MinutesServiceTest {
         verify(lock).unlock();
     }
 
+    @Test
+    void importSkipsCleanupWhenAudioFileUnchanged() {
+        when(permissionService.requireMeeting(MEETING_ID)).thenReturn(meeting(40));
+        when(fileObjectMapper.selectById(9L)).thenReturn(audioFile(9L));
+
+        MeetingMinutes existing = existingMinutes(99L, 9L);
+        when(minutesMapper.selectByMeetingId(MEETING_ID)).thenReturn(existing);
+        when(minutesMapper.selectByMeetingIdForUpdate(MEETING_ID)).thenReturn(existing);
+
+        assertThat(service.importMinutes(MEETING_ID, importDTO(), USER_ID)).isEqualTo(99L);
+
+        verify(minutesMapper).updateImport(99L, 9L, 2_000L, "TENCENT_ASR");
+        verify(fileObjectMapper, never()).markDeleted(any());
+        verify(storage, never()).delete(anyString());
+    }
+
+    @Test
+    void importCommitsBeforeCleaningOldFile() {
+        when(permissionService.requireMeeting(MEETING_ID)).thenReturn(meeting(40));
+        when(fileObjectMapper.selectById(9L)).thenReturn(audioFile(9L));
+
+        MeetingMinutes existing = existingMinutes(99L, 8L);
+        when(minutesMapper.selectByMeetingId(MEETING_ID)).thenReturn(existing);
+        when(minutesMapper.selectByMeetingIdForUpdate(MEETING_ID)).thenReturn(existing);
+        FileObject oldFile = audioFile(8L);
+        oldFile.setObjectKey("minutes/42/old.m4a");
+        when(fileObjectMapper.selectById(8L)).thenReturn(oldFile);
+
+        // 真实 TransactionTemplate + mock 事务管理器：验证 commit 与旧对象清理的先后顺序
+        PlatformTransactionManager txManager = mock(PlatformTransactionManager.class);
+        when(txManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        MinutesService realTransactionService = newService(new TransactionTemplate(txManager));
+
+        assertThat(realTransactionService.importMinutes(MEETING_ID, importDTO(), USER_ID))
+                .isEqualTo(99L);
+
+        InOrder inOrder = inOrder(txManager, fileObjectMapper, storage);
+        inOrder.verify(txManager).commit(any());
+        inOrder.verify(fileObjectMapper).markDeleted(8L);
+        inOrder.verify(storage).delete("minutes/42/old.m4a");
+    }
+
+    @Test
+    void importTransactionFailureSkipsCleanupAndUnlocks() {
+        when(permissionService.requireMeeting(MEETING_ID)).thenReturn(meeting(40));
+        when(fileObjectMapper.selectById(9L)).thenReturn(audioFile(9L));
+        when(minutesMapper.selectByMeetingId(MEETING_ID))
+                .thenThrow(new RuntimeException("db down"));
+
+        assertThatThrownBy(() -> service.importMinutes(MEETING_ID, importDTO(), USER_ID))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("db down");
+
+        verify(fileObjectMapper, never()).markDeleted(any());
+        verify(storage, never()).delete(anyString());
+        verify(lock).unlock();
+    }
+
     // ---------- import：锁 ----------
 
     @Test
@@ -276,6 +419,7 @@ class MinutesServiceTest {
         when(permissionService.requireMeeting(MEETING_ID)).thenReturn(meeting(40));
         when(fileObjectMapper.selectById(9L)).thenReturn(audioFile(9L));
         when(lock.tryLock(3, TimeUnit.SECONDS)).thenReturn(false);
+        when(lock.isHeldByCurrentThread()).thenReturn(false);
 
         assertThatThrownBy(() -> service.importMinutes(MEETING_ID, importDTO(), USER_ID))
                 .isInstanceOf(BusinessException.class)
@@ -285,6 +429,44 @@ class MinutesServiceTest {
         verify(transactionTemplate, never()).execute(any());
         verify(minutesMapper, never()).insert(any(MeetingMinutes.class));
         verify(lock, never()).unlock();
+    }
+
+    @Test
+    void importInterruptedReturnsSystemBusyAndRestoresFlag() throws Exception {
+        when(permissionService.requireMeeting(MEETING_ID)).thenReturn(meeting(40));
+        when(fileObjectMapper.selectById(9L)).thenReturn(audioFile(9L));
+        when(lock.isHeldByCurrentThread()).thenReturn(false);
+        when(lock.tryLock(3, TimeUnit.SECONDS))
+                .thenThrow(new InterruptedException("interrupted"));
+
+        try {
+            assertThatThrownBy(() -> service.importMinutes(MEETING_ID, importDTO(), USER_ID))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(MinutesServiceTest::codeOf)
+                    .isEqualTo(ErrorCode.SYSTEM_BUSY.getCode());
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+        } finally {
+            Thread.interrupted(); // 清除中断标志，避免影响后续用例
+        }
+
+        verify(transactionTemplate, never()).execute(any());
+        verify(lock, never()).unlock();
+    }
+
+    @Test
+    void importLockFailureAfterAcquisitionStillUnlocks() throws Exception {
+        when(permissionService.requireMeeting(MEETING_ID)).thenReturn(meeting(40));
+        when(fileObjectMapper.selectById(9L)).thenReturn(audioFile(9L));
+        // isHeldByCurrentThread=true（setUp）模拟"服务端已加锁后 Redis 响应超时"
+        when(lock.tryLock(3, TimeUnit.SECONDS))
+                .thenThrow(new RuntimeException("redis timeout"));
+
+        assertThatThrownBy(() -> service.importMinutes(MEETING_ID, importDTO(), USER_ID))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("redis timeout");
+
+        verify(lock).unlock();
+        verify(transactionTemplate, never()).execute(any());
     }
 
     // ---------- renameSpeaker ----------
@@ -306,7 +488,26 @@ class MinutesServiceTest {
         assertThat(result.getSpeakerKey()).isEqualTo("0");
         assertThat(result.getDisplayName()).isEqualTo("张三");
         assertThat(result.getColor()).isEqualTo("#7D8CFF");
+        verify(speakerMapper).updateDisplayName(99L, "0", "张三", "#7D8CFF");
         verify(permissionService).assertCanManage(any(Meeting.class), eq(USER_ID));
+    }
+
+    @Test
+    void renameSpeakerUnknownKeyReturnsNotFound() {
+        when(permissionService.requireMeeting(MEETING_ID)).thenReturn(meeting(40));
+        MeetingMinutes minutes = new MeetingMinutes();
+        minutes.setId(99L);
+        when(minutesMapper.selectByMeetingId(MEETING_ID)).thenReturn(minutes);
+        when(speakerMapper.updateDisplayName(99L, "missing", "张三", "#7D8CFF")).thenReturn(0);
+
+        SpeakerUpdateDTO dto = new SpeakerUpdateDTO();
+        dto.setDisplayName("张三");
+        dto.setColor("#7D8CFF");
+
+        assertThatThrownBy(() -> service.renameSpeaker(MEETING_ID, "missing", dto, USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(MinutesServiceTest::codeOf)
+                .isEqualTo(ErrorCode.NOT_FOUND.getCode());
     }
 
     // ---------- audioUrl ----------
@@ -314,9 +515,7 @@ class MinutesServiceTest {
     @Test
     void audioUrlUsesPresignedGet() {
         when(permissionService.requireMeeting(MEETING_ID)).thenReturn(meeting(40));
-        MeetingMinutes minutes = new MeetingMinutes();
-        minutes.setId(99L);
-        minutes.setAudioFileId(9L);
+        MeetingMinutes minutes = existingMinutes(99L, 9L);
         when(minutesMapper.selectByMeetingId(MEETING_ID)).thenReturn(minutes);
         when(fileObjectMapper.selectById(9L)).thenReturn(audioFile(9L));
         when(storage.presignGet(eq("minutes/42/x.m4a"), any(Duration.class)))
@@ -331,5 +530,22 @@ class MinutesServiceTest {
         verify(storage).presignGet(eq("minutes/42/x.m4a"), ttlCaptor.capture());
         assertThat(ttlCaptor.getValue()).isEqualTo(Duration.ofMinutes(60));
         verify(permissionService).assertCanView(any(Meeting.class), eq(USER_ID));
+    }
+
+    @Test
+    void audioUrlRejectsDeletedFile() {
+        when(permissionService.requireMeeting(MEETING_ID)).thenReturn(meeting(40));
+        MeetingMinutes minutes = existingMinutes(99L, 9L);
+        when(minutesMapper.selectByMeetingId(MEETING_ID)).thenReturn(minutes);
+        FileObject deleted = audioFile(9L);
+        deleted.setStatus(FileObjectStatus.DELETED);
+        when(fileObjectMapper.selectById(9L)).thenReturn(deleted);
+
+        assertThatThrownBy(() -> service.audioUrl(MEETING_ID, USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(MinutesServiceTest::codeOf)
+                .isEqualTo(ErrorCode.MINUTES_NOT_FOUND.getCode());
+
+        verify(storage, never()).presignGet(anyString(), any());
     }
 }

@@ -144,14 +144,8 @@ public class MinutesService {
         if (!Integer.valueOf(MeetingStatusEnum.FINISHED.getCode()).equals(meeting.getStatus())) {
             throw new BusinessException(ErrorCode.MINUTES_STATUS_NOT_ALLOWED);
         }
-        FileObject file = fileObjectMapper.selectById(dto.getFileId());
-        if (file == null
-                || !FileBizType.MINUTES_AUDIO.equals(file.getBizType())
-                || !meetingId.equals(file.getBizId())
-                || !Integer.valueOf(FileObjectStatus.NORMAL).equals(file.getStatus())) {
-            throw new BusinessException(ErrorCode.FILE_TYPE_NOT_ALLOWED.getCode(),
-                    "音频文件不属于该会议或已删除");
-        }
+        // 锁前快速失败（避免为明显非法的文件做解析/抢锁）；拿到锁后还会再读一次并复查状态。
+        requireImportableFile(meetingId, dto.getFileId());
 
         TranscriptParser.ParseResult parsed = transcriptParser.parse(dto.getTranscriptText());
         long requestedDuration = dto.getDurationMs() == null ? 0L : dto.getDurationMs();
@@ -163,17 +157,19 @@ public class MinutesService {
                 ? DEFAULT_SOURCE : dto.getSource();
 
         RLock lock = redisson.getLock(IMPORT_LOCK_PREFIX + meetingId);
-        boolean acquired;
+        // tryLock 放进 try/finally：若 Redis 在服务端已加锁后超时抛异常，
+        // finally 仍会按 isHeldByCurrentThread 释放，避免锁泄漏到看门狗租约之外。
         try {
-            acquired = lock.tryLock(LOCK_WAIT_SECONDS, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new BusinessException(ErrorCode.SYSTEM_BUSY);
-        }
-        if (!acquired) {
-            throw new BusinessException(ErrorCode.SYSTEM_BUSY);
-        }
-        try {
+            boolean acquired;
+            try {
+                acquired = lock.tryLock(LOCK_WAIT_SECONDS, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new BusinessException(ErrorCode.SYSTEM_BUSY);
+            }
+            if (!acquired) {
+                throw new BusinessException(ErrorCode.SYSTEM_BUSY);
+            }
             ImportResult result = transactionTemplate.execute(status ->
                     doImport(meeting, dto, userId, parsed, durationMs, source));
             // 事务已提交：旧对象删除失败只记日志，不回滚本次导入。
@@ -196,6 +192,9 @@ public class MinutesService {
                                   TranscriptParser.ParseResult parsed,
                                   long durationMs, String source) {
         Long meetingId = meeting.getId();
+        // 锁内复查文件：并发重新导入可能在上面的锁前校验之后把该文件标记删除。
+        requireImportableFile(meetingId, dto.getFileId());
+
         MeetingMinutes current = minutesMapper.selectByMeetingId(meetingId);
         if (current != null) {
             current = minutesMapper.selectByMeetingIdForUpdate(meetingId);
@@ -251,11 +250,27 @@ public class MinutesService {
             throw new BusinessException(ErrorCode.MINUTES_NOT_FOUND);
         }
         FileObject file = fileObjectMapper.selectById(minutes.getAudioFileId());
-        if (file == null) {
+        if (file == null || !Integer.valueOf(FileObjectStatus.NORMAL).equals(file.getStatus())) {
             throw new BusinessException(ErrorCode.MINUTES_NOT_FOUND);
         }
         String url = storage.presignGet(file.getObjectKey(), AUDIO_URL_TTL);
         return new AudioUrlVO(url, LocalDateTime.now().plus(AUDIO_URL_TTL));
+    }
+
+    /**
+     * 校验音频文件可绑定到该会议：存在、业务类型正确、归属该会议且未删除。
+     * 导入路径调用两次——锁前快速失败 + 锁内复查（防并发删除）。
+     */
+    private FileObject requireImportableFile(Long meetingId, Long fileId) {
+        FileObject file = fileObjectMapper.selectById(fileId);
+        if (file == null
+                || !FileBizType.MINUTES_AUDIO.equals(file.getBizType())
+                || !meetingId.equals(file.getBizId())
+                || !Integer.valueOf(FileObjectStatus.NORMAL).equals(file.getStatus())) {
+            throw new BusinessException(ErrorCode.FILE_TYPE_NOT_ALLOWED.getCode(),
+                    "音频文件不属于该会议或已删除");
+        }
+        return file;
     }
 
     private MeetingMinutes requireMinutes(Long meetingId) {
@@ -271,7 +286,7 @@ public class MinutesService {
             return null;
         }
         FileObject file = fileObjectMapper.selectById(minutes.getAudioFileId());
-        if (file == null) {
+        if (file == null || !Integer.valueOf(FileObjectStatus.NORMAL).equals(file.getStatus())) {
             return null;
         }
         MinutesDetailVO.AudioVO audio = new MinutesDetailVO.AudioVO();
