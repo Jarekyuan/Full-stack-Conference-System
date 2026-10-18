@@ -347,7 +347,7 @@ public class RecurringService {
             if (!end.toLocalDate().equals(d)) {
                 // 本系统的占用模型是"按自然日加锁"，跨天场次会让锁与占用对不上
                 throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(),
-                        String.format("第 %d 场（%s）时长跨天：结束时间须在当日 24:00 前", occurrences.size() + 1, d));
+                        String.format("第 %d 场（%s）时长跨天：结束时间须在当日 20:00 前", occurrences.size() + 1, d));
             }
             try {
                 reserveService.validateTime(start, end, strategy);

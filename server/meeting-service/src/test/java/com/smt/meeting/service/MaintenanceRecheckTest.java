@@ -159,6 +159,27 @@ class MaintenanceRecheckTest {
     }
 
     @Test
+    void extendShouldRejectWhenRoomIsMaintenance() {
+        // O19：延长也是新增占用，维护中的房间必须在锁内拒绝
+        Meeting meeting = new Meeting();
+        meeting.setId(MEETING_ID);
+        meeting.setRoomId(ROOM_ID);
+        meeting.setOrganiserId(OPERATOR_ID);
+        meeting.setStatus(30);
+        meeting.setStartTime(futureStart());
+        meeting.setEndTime(futureStart().plusHours(1));
+        when(meetingMapper.selectById(MEETING_ID)).thenReturn(meeting);
+        when(meetingMapper.selectByIdForUpdate(MEETING_ID)).thenReturn(meeting);
+        when(roomMapper.selectById(ROOM_ID)).thenReturn(room(1));
+
+        assertThatThrownBy(() -> reserveService.extend(MEETING_ID, 10, OPERATOR_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getCode())
+                .isEqualTo(ErrorCode.ROOM_MAINTENANCE.getCode());
+        verify(meetingMapper, never()).updateEndTime(any(), any(), anyInt(), anyInt());
+    }
+
+    @Test
     void recurringCreateShouldRejectWhenRoomBecomesMaintenanceAfterQuickCheck() {
         when(roomMapper.selectById(ROOM_ID)).thenReturn(room(0), room(1));
 

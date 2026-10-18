@@ -1,5 +1,6 @@
 package com.smt.meeting.service;
 
+import com.smt.common.context.UserContext;
 import com.smt.common.exception.BusinessException;
 import com.smt.common.result.ErrorCode;
 import com.smt.meeting.dto.MeetingCreateDTO;
@@ -28,6 +29,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashSet;
 import java.util.List;
@@ -115,17 +117,25 @@ public class MeetingReserveService {
         if (meeting == null) {
             throw new BusinessException(ErrorCode.MEETING_NOT_FOUND);
         }
-        // 数据权限：只能操作自己组织的会议
-        if (!meeting.getOrganiserId().equals(operatorId)) {
+        // 数据权限：组织人本人；ADMIN 可代取消别人的会议（O15，必须填原因）
+        boolean isOwner = meeting.getOrganiserId().equals(operatorId);
+        boolean adminOverride = !isOwner && UserContext.getRoles().contains("ADMIN");
+        if (!isOwner && !adminOverride) {
             throw new BusinessException(ErrorCode.NOT_MEETING_OWNER);
         }
-        // R-6 取消截止：now > start - cancel_deadline 时不可取消
-        RoomStrategy strategy = roomStrategyMapper.selectByRoomId(meeting.getRoomId());
-        if (strategy != null && strategy.getCancelDeadlineMinutes() != null) {
-            LocalDateTime deadline = meeting.getStartTime().minusMinutes(strategy.getCancelDeadlineMinutes());
-            if (LocalDateTime.now().isAfter(deadline)) {
-                throw new BusinessException(ErrorCode.CANCEL_DEADLINE_PASSED.getCode(),
-                        "距会议开始不足 " + strategy.getCancelDeadlineMinutes() + " 分钟，不可取消");
+        if (adminOverride && (reason == null || reason.isBlank())) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(), "管理员代取消必须填写原因");
+        }
+        // R-6 取消截止：now > start - cancel_deadline 时不可取消。
+        // 管理员代取消是运营兜底，不受 R-6 限制（仍需原因 + 审计 + 通知组织人）。
+        if (!adminOverride) {
+            RoomStrategy strategy = roomStrategyMapper.selectByRoomId(meeting.getRoomId());
+            if (strategy != null && strategy.getCancelDeadlineMinutes() != null) {
+                LocalDateTime deadline = meeting.getStartTime().minusMinutes(strategy.getCancelDeadlineMinutes());
+                if (LocalDateTime.now().isAfter(deadline)) {
+                    throw new BusinessException(ErrorCode.CANCEL_DEADLINE_PASSED.getCode(),
+                            "距会议开始不足 " + strategy.getCancelDeadlineMinutes() + " 分钟，不可取消");
+                }
             }
         }
         lockHelper.executeWithLock(meeting.getRoomId(), meeting.getStartTime(), meeting.getEndTime(), () ->
@@ -137,7 +147,7 @@ public class MeetingReserveService {
                     meetingMapper.updateCancelInfo(meetingId, reason);
                     eventPublisher.publishEvent(MeetingDomainEvent.cancelled(
                             meetingId, meeting.getTitle(), meeting.getRoomId(), meeting.getOrganiserId(),
-                            meeting.getStartTime(), meeting.getEndTime(), reason));
+                            meeting.getStartTime(), meeting.getEndTime(), reason, operatorId));
                     return null;
                 }));
     }
@@ -231,7 +241,7 @@ public class MeetingReserveService {
 
     /**
      * 可延长上限（只读，登录即可查；R-15）：
-     * `min(下一场会议开始 − 锁定缓冲, 当日 24:00) − 当前结束时间`，并给出人话解释。
+     * `min(下一场会议开始 − 锁定缓冲, 当日 20:00) − 当前结束时间`，并给出人话解释。
      */
     public ExtendLimitVO extendLimit(Long meetingId) {
         Meeting meeting = meetingMapper.selectById(meetingId);
@@ -285,6 +295,8 @@ public class MeetingReserveService {
                     }
                     requireOngoing(locked);
                     requireNotEnded(locked);
+                    // O19：维护中的房间不接新的占用——“延长”也是新增占用，锁内复查
+                    ensureRoomNotMaintenanceAfterLock(locked.getRoomId());
 
                     // 锁内重算上限（作准）：锁外那次算完到这里之间，可能刚有人订了下一场
                     long limitInside = computeExtendLimit(locked).maxDelayMinutes();
@@ -383,16 +395,19 @@ public class MeetingReserveService {
         }
     }
 
-    /** R-15 上限计算：min(下一场开始 − 缓冲, 当日 24:00) − 当前 end，并解释"是谁卡住了你" */
+    /** R-15 上限计算：min(下一场开始 − 缓冲, 当日 20:00) − 当前 end，并解释"是谁卡住了你" */
     private ExtendLimitVO computeExtendLimit(Meeting meeting) {
         LocalDateTime end = meeting.getEndTime();
-        LocalDateTime dayEnd = end.toLocalDate().plusDays(1).atStartOfDay(); // 当日 24:00
+        LocalDateTime dayEnd = end.toLocalDate().atTime(BUSINESS_END); // O23：与可预约窗口一致
+        if (!dayEnd.isAfter(end)) {
+            return new ExtendLimitVO(0, "已超过 20:00，不可延长");
+        }
         RoomStrategy strategy = roomStrategyMapper.selectByRoomId(meeting.getRoomId());
         int buffer = strategy == null || strategy.getBufferMinutes() == null ? 0 : strategy.getBufferMinutes();
 
         LocalDateTime nextStart = meetingMapper.selectNextMeetingStart(meeting.getRoomId(), end, meeting.getId());
         LocalDateTime limit = dayEnd;
-        String reason = "当日无后续会议，最多可延至 24:00";
+        String reason = "当日无后续会议，最多可延至 20:00";
         if (nextStart != null) {
             LocalDateTime byNext = nextStart.minusMinutes(buffer);
             if (byNext.isBefore(limit)) {
@@ -403,7 +418,7 @@ public class MeetingReserveService {
                         : String.format("下一场会议 %s 开始", nextStart.format(HHMM));
             } else {
                 // 不写"次日"：selectNextMeetingStart 不限日期，下一场也可能在后天
-                reason = "下一场会议不在当日，最多可延至 24:00";
+                reason = "下一场会议不在当日，最多可延至 20:00";
             }
         }
         long maxDelay = Math.max(Duration.between(end, limit).toMinutes(), 0);
@@ -442,6 +457,10 @@ public class MeetingReserveService {
     }
 
     /** 时间合法性 + 策略窗口（R-2 时长 / R-5 提前天数）；策略为空时只做基础校验 */
+    /** 可预约窗口（O23）：与日历时间轴/统计的每天 720 分钟口径一致 */
+    private static final LocalTime BUSINESS_START = LocalTime.of(8, 0);
+    private static final LocalTime BUSINESS_END = LocalTime.of(20, 0);
+
     /**
      * 时间校验链（私有 → **包内可见**，T5.1 周期会议复用同一份）。
      * 之所以共用而不是抄一份：这条链会随业务变（新增窗口/节假日规则…），
@@ -459,6 +478,16 @@ public class MeetingReserveService {
                 && start.isAfter(now.plusDays(strategy.getAdvanceDays()))) {
             throw new BusinessException(ErrorCode.OUT_OF_RESERVE_WINDOW.getCode(),
                     "最多提前 " + strategy.getAdvanceDays() + " 天预约");
+        }
+        // O23：与日历时间轴（08:00–20:00）和统计口径（每天 720 分钟）对齐；
+        // 跨天会议会让日历块被裁到 20:00、统计超出可用分钟，直接禁止。
+        if (!end.toLocalDate().equals(start.toLocalDate())) {
+            throw new BusinessException(ErrorCode.OUT_OF_RESERVE_WINDOW.getCode(),
+                    "会议不能跨天（结束时间须在当日 20:00 前）");
+        }
+        if (start.toLocalTime().isBefore(BUSINESS_START) || end.toLocalTime().isAfter(BUSINESS_END)) {
+            throw new BusinessException(ErrorCode.OUT_OF_RESERVE_WINDOW.getCode(),
+                    "可预约时间为 08:00–20:00");
         }
         if (strategy != null && strategy.getMaxDurationMinutes() != null) {
             long minutes = Duration.between(start, end).toMinutes();

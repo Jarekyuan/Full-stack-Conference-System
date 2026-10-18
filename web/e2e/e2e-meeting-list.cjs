@@ -232,6 +232,33 @@ const sql = (q) =>
     check('非组织人看不到编辑按钮（20 已预约）', (await p2.getByRole('button', { name: '编辑会议' }).count()) === 0);
     check('非组织人看不到取消按钮（20 已预约）', (await p2.getByRole('button', { name: '取消会议' }).count()) === 0);
     await p2.close();
+
+    // ---------- ⑧ ADMIN 代取消（O15） ----------
+    const p3 = await browser.newPage({ viewport: { width: 1512, height: 1100 } });
+    await p3.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
+    await p3.getByPlaceholder('请输入用户名').fill('admin');
+    await p3.getByPlaceholder('请输入密码').fill('admin123');
+    await p3.locator('button[type="submit"]').click();
+    await p3.waitForURL('**/calendar', { timeout: 10000 });
+    await p3.goto(`${BASE}/meetings`, { waitUntil: 'networkidle' });
+    await p3.waitForTimeout(800);
+    await p3.getByText('全部会议', { exact: true }).click();
+    await p3.waitForTimeout(1000);
+    await p3.getByPlaceholder('搜索会议主题').fill(marker);
+    await p3.waitForTimeout(1600);
+    const adminRowC = p3.locator('.ant-table-tbody tr.ant-table-row', { hasText: titleC });
+    check('ADMIN 切到全部会议后能看到别人的会议', (await adminRowC.count()) === 1);
+    await adminRowC.getByRole('button', { name: /代取消/ }).click();
+    await p3.waitForTimeout(600);
+    const adminCancelModal = p3.locator('.ant-modal-content').last();
+    check('代取消弹窗要求原因（确定按钮初始禁用）',
+      await adminCancelModal.getByRole('button', { name: '确认取消' }).isDisabled());
+    await adminCancelModal.locator('textarea').fill('E2E 管理员代取消');
+    await adminCancelModal.getByRole('button', { name: '确认取消' }).click();
+    await p3.waitForTimeout(1800);
+    check('ADMIN 代取消后会议变为已取消',
+      ((await p3.locator('.ant-table-tbody tr.ant-table-row', { hasText: titleC }).textContent()) ?? '').includes('已取消'));
+    await p3.close();
     await page.close();
   } catch (e) {
     check(`执行异常: ${e.message}`, false);

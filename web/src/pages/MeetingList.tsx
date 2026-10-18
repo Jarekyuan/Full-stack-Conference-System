@@ -11,7 +11,7 @@
  *   · 取消：组织人 + 10/20（30 进行中禁止；R-6 取消截止由服务端判）
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Button, Card, DatePicker, Input, Select, Space, Table, type TableColumnsType } from 'antd'
+import { Button, Card, DatePicker, Input, Segmented, Select, Space, Table, type TableColumnsType } from 'antd'
 import { useDebounceFn } from 'ahooks'
 import { useNavigate } from 'react-router-dom'
 import dayjs, { type Dayjs } from 'dayjs'
@@ -37,7 +37,11 @@ interface ListPayload {
 
 export default function MeetingList() {
   const navigate = useNavigate()
-  const currentUserId = useUserStore((s) => s.user?.id)
+  const currentUser = useUserStore((s) => s.user)
+  const currentUserId = currentUser?.id
+  const isAdmin = (currentUser?.roles ?? []).includes('ADMIN')
+  /** O15：ADMIN 可在“我的会议/全部会议”之间切换，代取消别人的会议 */
+  const [scope, setScope] = useState<'mine' | 'all'>('mine')
   const [statuses, setStatuses] = useState<number[]>([])
   const [keyword, setKeyword] = useState('')
   const [roomId, setRoomId] = useState<number | undefined>(undefined)
@@ -51,7 +55,7 @@ export default function MeetingList() {
   const statusParam = statuses.join(',')
   const startDate = dateRange?.[0]?.format('YYYY-MM-DD')
   const endDate = dateRange?.[1]?.format('YYYY-MM-DD')
-  const queryKey = `${statusParam}|${keyword}|${roomId ?? ''}|${startDate ?? ''}|${endDate ?? ''}|${page}|${refreshKey}`
+  const queryKey = `${scope}|${statusParam}|${keyword}|${roomId ?? ''}|${startDate ?? ''}|${endDate ?? ''}|${page}|${refreshKey}`
 
   // 这里**刻意不做**"响应键比对"守卫：ahooks 的 Fetch 自带 count 守卫，过期响应本就不会覆盖新结果，
   // 再比对一遍只会让翻页/改筛选的瞬间表格闪成"暂无数据 + 共 0 条"（评审 R9）。
@@ -59,7 +63,7 @@ export default function MeetingList() {
   const { data, loading } = useAppRequest<ListPayload>(
     async () => {
       const result = await listMeetings({
-        scope: 'mine',
+        scope,
         status: statusParam || undefined,
         roomId,
         startDate,
@@ -115,7 +119,8 @@ export default function MeetingList() {
         render: (_, r) => {
           const isOrganiser = r.organiserId === currentUserId
           const canEdit = isOrganiser && r.status === 20
-          const canCancel = isOrganiser && (r.status === 10 || r.status === 20)
+          // O15：ADMIN 可代取消别人的 10/20；编辑仍只允许组织人
+          const canCancel = (isOrganiser || isAdmin) && (r.status === 10 || r.status === 20)
           return (
             <Space size={0}>
               <Button
@@ -141,7 +146,7 @@ export default function MeetingList() {
                   danger
                   onClick={(e) => { e.stopPropagation(); setCancelId(r.id) }}
                 >
-                  取消
+                  {isOrganiser ? '取消' : '代取消'}
                 </Button>
               )}
             </Space>
@@ -149,7 +154,7 @@ export default function MeetingList() {
         },
       },
     ],
-    [navigate, currentUserId],
+    [navigate, currentUserId, isAdmin],
   )
 
   const handleStatusChange = useCallback((values: number[]) => {
@@ -157,9 +162,25 @@ export default function MeetingList() {
     setPage(1) // 换筛选条件必须回到第一页，否则可能停在超出范围的页码上
   }, [])
 
+  const cancelRow = (data?.list ?? []).find((r) => r.id === cancelId)
+  const requireCancelReason = isAdmin && cancelRow != null && cancelRow.organiserId !== currentUserId
+
   return (
-    <Card title="我的会议">
+    <Card title={scope === 'all' ? '全部会议' : '我的会议'}>
       <Space className="mb-4" wrap>
+        {isAdmin && (
+          <Segmented
+            options={[
+              { label: '我的会议', value: 'mine' },
+              { label: '全部会议', value: 'all' },
+            ]}
+            value={scope}
+            onChange={(v) => {
+              setScope(v as 'mine' | 'all')
+              setPage(1)
+            }}
+          />
+        )}
         <Select
           mode="multiple"
           allowClear
@@ -241,6 +262,7 @@ export default function MeetingList() {
       <CancelMeetingModal
         open={cancelId !== null}
         meetingId={cancelId}
+        requireReason={requireCancelReason}
         onClose={() => setCancelId(null)}
         onSuccess={refreshList}
       />

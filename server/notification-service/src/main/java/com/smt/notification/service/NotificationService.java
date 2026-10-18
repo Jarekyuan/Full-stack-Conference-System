@@ -129,8 +129,12 @@ public class NotificationService {
         if (StrUtil.isNotBlank(e.comment())) {
             content.append("取消原因：").append(e.comment());
         }
-        save(NotificationType.MEETING_CANCELLED, "会议已取消", content.toString(), e,
-                recipientMapper.selectParticipantIds(e.meetingId()));
+        // 组织人自己取消不必通知自己；**ADMIN 代取消**（operator ≠ organiser）必须让组织人知道（O15）
+        LinkedHashSet<Long> recipients = new LinkedHashSet<>(recipientMapper.selectParticipantIds(e.meetingId()));
+        if (e.organiserId() != null && !java.util.Objects.equals(e.operatorId(), e.organiserId())) {
+            recipients.add(e.organiserId());
+        }
+        save(NotificationType.MEETING_CANCELLED, "会议已取消", content.toString(), e, new ArrayList<>(recipients));
     }
 
     /**

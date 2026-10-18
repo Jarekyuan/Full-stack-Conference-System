@@ -20,8 +20,9 @@ import com.smt.meeting.vo.ExtendLimitVO;
 /**
  * T4.10 补齐：延长上限计算（T3.4 / R-15）的三种封顶场景。
  *
- * <p>规则：`min(下一场开始 − 锁定缓冲, 当日 24:00) − 当前结束`。三种 reason 是给前端**直接展示**的
- * （docs/04 4.6 写明"不让前端算业务规则"），所以文案也得钉住——它是接口契约的一部分。
+ * <p>规则：`min(下一场开始 − 锁定缓冲, 当日 20:00) − 当前结束`（O23 与可预约窗口对齐）。
+ * 三种 reason 是给前端**直接展示**的（docs/04 4.6 写明"不让前端算业务规则"），
+ * 所以文案也得钉住——它是接口契约的一部分。
  */
 class MeetingExtendLimitTest {
 
@@ -74,29 +75,41 @@ class MeetingExtendLimitTest {
 
     @Test
     void limitedByDayEndWhenNoNextMeeting() {
-        LocalDateTime end = LocalDateTime.of(2026, 11, 20, 22, 0);
+        LocalDateTime end = LocalDateTime.of(2026, 11, 20, 18, 0);
         when(meetingMapper.selectById(MEETING_ID)).thenReturn(ongoing(end));
         when(strategyMapper.selectByRoomId(ROOM_ID)).thenReturn(strategy(0));
         when(meetingMapper.selectNextMeetingStart(any(), any(), anyLong())).thenReturn(null);
 
         ExtendLimitVO vo = service.extendLimit(MEETING_ID);
 
-        assertThat(vo.maxDelayMinutes()).isEqualTo(120); // 22:00 → 次日 00:00
-        assertThat(vo.reason()).isEqualTo("当日无后续会议，最多可延至 24:00");
+        assertThat(vo.maxDelayMinutes()).isEqualTo(120); // 18:00 → 20:00
+        assertThat(vo.reason()).isEqualTo("当日无后续会议，最多可延至 20:00");
     }
 
     @Test
     void nextMeetingBeyondTodayStillCappedByDayEnd() {
-        LocalDateTime end = LocalDateTime.of(2026, 11, 20, 22, 0);
+        LocalDateTime end = LocalDateTime.of(2026, 11, 20, 18, 0);
         when(meetingMapper.selectById(MEETING_ID)).thenReturn(ongoing(end));
         when(strategyMapper.selectByRoomId(ROOM_ID)).thenReturn(strategy(0));
-        // 下一场在次日 → 仍按当日 24:00 封顶（跨天延长会让"按天加锁"的约定失效）
+        // 下一场在次日 → 仍按当日 20:00 封顶（跨天延长会让"按天加锁"的约定失效）
         when(meetingMapper.selectNextMeetingStart(any(), any(), anyLong()))
                 .thenReturn(LocalDateTime.of(2026, 11, 21, 9, 0));
 
         ExtendLimitVO vo = service.extendLimit(MEETING_ID);
 
         assertThat(vo.maxDelayMinutes()).isEqualTo(120);
-        assertThat(vo.reason()).isEqualTo("下一场会议不在当日，最多可延至 24:00");
+        assertThat(vo.reason()).isEqualTo("下一场会议不在当日，最多可延至 20:00");
+    }
+
+    @Test
+    void endedAfterBusinessHoursCannotBeExtended() {
+        LocalDateTime end = LocalDateTime.of(2026, 11, 20, 21, 0);
+        when(meetingMapper.selectById(MEETING_ID)).thenReturn(ongoing(end));
+        when(strategyMapper.selectByRoomId(ROOM_ID)).thenReturn(strategy(0));
+
+        ExtendLimitVO vo = service.extendLimit(MEETING_ID);
+
+        assertThat(vo.maxDelayMinutes()).isZero();
+        assertThat(vo.reason()).isEqualTo("已超过 20:00，不可延长");
     }
 }

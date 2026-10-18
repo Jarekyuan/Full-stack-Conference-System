@@ -69,6 +69,33 @@ describe('bookingSchema', () => {
     ).toBe('不能预约过去的时间')
   })
 
+  it('08:00 前 / 20:00 后 / 跨天都不合法（O23）', () => {
+    expect(
+      firstMessage({
+        ...validInput,
+        timeRange: [dayjs('2099-01-01 07:30'), dayjs('2099-01-01 08:30')],
+      }),
+    ).toBe('开始时间需在 08:00–20:00 之间')
+    expect(
+      firstMessage({
+        ...validInput,
+        timeRange: [dayjs('2099-01-01 21:00'), dayjs('2099-01-01 22:00')],
+      }),
+    ).toBe('开始时间需在 08:00–20:00 之间')
+    expect(
+      firstMessage({
+        ...validInput,
+        timeRange: [dayjs('2099-01-01 19:00'), dayjs('2099-01-01 20:30')],
+      }),
+    ).toBe('结束时间不能晚于 20:00')
+    expect(
+      firstMessage({
+        ...validInput,
+        timeRange: [dayjs('2099-01-01 23:00'), dayjs('2099-01-02 01:00')],
+      }),
+    ).toContain('跨天')
+  })
+
   it('主题：空白字符串与超长都拦下', () => {
     expect(firstMessage({ ...validInput, title: '   ' })).toBe('请填写会议主题')
     expect(firstMessage({ ...validInput, title: 'x'.repeat(101) })).toBe('主题最长 100 字符')

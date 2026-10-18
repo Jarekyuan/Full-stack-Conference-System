@@ -127,6 +127,7 @@ ADMIN_LOGIN=$(login admin admin123)
 ADMIN_TOKEN=$(token_of "$ADMIN_LOGIN")
 U1_LOGIN=$(login user1 user123)
 U1_TOKEN=$(token_of "$U1_LOGIN")
+U1_ID=$(sql "SELECT id FROM smt_meeting.sys_user WHERE username='user1';")
 U2_ID=$(sql "SELECT id FROM smt_meeting.sys_user WHERE username='user2';")
 APPROVER_LOGIN=$(login approver1 user123)
 APPROVER_TOKEN=$(token_of "$APPROVER_LOGIN")
@@ -250,6 +251,30 @@ check "启用的参会人收到 MEETING_UPDATED" "$([ "$UPD_U2" = "1" ] && echo 
 UPD_DISABLED=$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE meeting_id=$MEETING_A AND user_id=$USER_ID AND type='MEETING_UPDATED';")
 check "停用参会人不再收 MEETING_UPDATED" "$([ "$UPD_DISABLED" = "0" ] && echo 1 || echo 0)" "count=$UPD_DISABLED"
 
+# ---------- ⑤.7 ADMIN 代取消（O15）：必须填原因；组织人收到通知 ----------
+NO_REASON_CANCEL=$(post_api "/api/meetings/$MEETING_A/cancel" "$ADMIN_TOKEN" '{}')
+check "管理员代取消未填原因 → 10001" \
+  "$([ "$(code_of "$NO_REASON_CANCEL")" = "10001" ] && echo 1 || echo 0)" "code=$(code_of "$NO_REASON_CANCEL")"
+ADMIN_CANCEL=$(post_api "/api/meetings/$MEETING_A/cancel" "$ADMIN_TOKEN" '{"reason":"T62 管理员代取消"}')
+check "管理员代取消成功" "$([ "$(code_of "$ADMIN_CANCEL")" = "0" ] && echo 1 || echo 0)" "code=$(code_of "$ADMIN_CANCEL")"
+STATUS_AFTER_ADMIN_CANCEL=$(sql "SELECT status FROM smt_meeting.meeting WHERE id=$MEETING_A;")
+check "会议状态已是 50" \
+  "$([ "$STATUS_AFTER_ADMIN_CANCEL" = "50" ] && echo 1 || echo 0)" "status=$STATUS_AFTER_ADMIN_CANCEL"
+REASON_AFTER_ADMIN_CANCEL=$(sql "SELECT cancel_reason FROM smt_meeting.meeting WHERE id=$MEETING_A;")
+check "代取消原因已写入" \
+  "$([ "$REASON_AFTER_ADMIN_CANCEL" = "T62 管理员代取消" ] && echo 1 || echo 0)" "reason=$REASON_AFTER_ADMIN_CANCEL"
+U1_CANCEL_NOTIF=0
+for _ in $(seq 1 15); do
+  U1_CANCEL_NOTIF=$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE meeting_id=$MEETING_A AND user_id=$U1_ID AND type='MEETING_CANCELLED';")
+  [ "$U1_CANCEL_NOTIF" = "1" ] && break
+  sleep 1
+done
+check "组织人收到管理员代取消通知" \
+  "$([ "$U1_CANCEL_NOTIF" = "1" ] && echo 1 || echo 0)" "count=$U1_CANCEL_NOTIF"
+U2_CANCEL_NOTIF=$(sql "SELECT COUNT(*) FROM smt_meeting.notification WHERE meeting_id=$MEETING_A AND user_id=$U2_ID AND type='MEETING_CANCELLED';")
+check "启用参会人也收到取消通知" \
+  "$([ "$U2_CANCEL_NOTIF" = "1" ] && echo 1 || echo 0)" "count=$U2_CANCEL_NOTIF"
+
 # ---------- ⑤.5 停用/不存在的用户不能作为参会人（评审 R6） ----------
 DISABLED_HOUR=""
 for h in 14 15 16 11 9; do
@@ -288,6 +313,21 @@ if [ -n "$DISABLED_HOUR" ]; then
     "{\"title\":\"T62超量参会人-$STAMP\",\"roomId\":1,\"startTime\":\"$D2 $(printf '%02d' "$DISABLED_HOUR"):00:00\",\"endTime\":\"$D2 $(printf '%02d' $((DISABLED_HOUR + 1))):00:00\",\"participants\":{\"userIds\":[$MANY_IDS]}}")
   check "参会人超过 100 → 10001" "$([ "$(code_of "$MANY_RESP")" = "10001" ] && echo 1 || echo 0)" "code=$(code_of "$MANY_RESP")"
 fi
+
+# ---------- ⑤.55 可预约窗口 08:00–20:00 / 不可跨天（O23） ----------
+WINDOW_TITLE="T62窗口外-$STAMP"
+WINDOW_RESP=$(post_api "/api/meetings" "$U1_TOKEN" \
+  "{\"title\":\"$WINDOW_TITLE\",\"roomId\":1,\"startTime\":\"$D2 21:00:00\",\"endTime\":\"$D2 22:00:00\"}")
+check "20:00 后创建 → 30003" "$([ "$(code_of "$WINDOW_RESP")" = "30003" ] && echo 1 || echo 0)" "code=$(code_of "$WINDOW_RESP")"
+WINDOW_LEFT=$(sql "SELECT COUNT(*) FROM smt_meeting.meeting WHERE title='$WINDOW_TITLE';")
+check "窗口外没有落库" "$([ "$WINDOW_LEFT" = "0" ] && echo 1 || echo 0)" "count=$WINDOW_LEFT"
+D3=$(python3 -c "import datetime;print(datetime.date.fromisoformat('$D2')+datetime.timedelta(days=1))")
+CROSS_TITLE="T62跨天-$STAMP"
+CROSS_RESP=$(post_api "/api/meetings" "$U1_TOKEN" \
+  "{\"title\":\"$CROSS_TITLE\",\"roomId\":1,\"startTime\":\"$D2 23:30:00\",\"endTime\":\"$D3 01:30:00\"}")
+check "跨天创建 → 30003" "$([ "$(code_of "$CROSS_RESP")" = "30003" ] && echo 1 || echo 0)" "code=$(code_of "$CROSS_RESP")"
+CROSS_LEFT=$(sql "SELECT COUNT(*) FROM smt_meeting.meeting WHERE title='$CROSS_TITLE';")
+check "跨天没有落库" "$([ "$CROSS_LEFT" = "0" ] && echo 1 || echo 0)" "count=$CROSS_LEFT"
 
 # ---------- ⑤.6 最后一名启用 ADMIN 保护（评审 R7） ----------
 ADMIN2_USERNAME="t62_admin_$STAMP"

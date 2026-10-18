@@ -97,20 +97,12 @@
   O17（keyword/roleIds/统计区间上限）、O20（房间删除后锁内复查抛 30001）、
   O21（铃铛/部门操作 aria-label + 会议列表行/通知条目 Enter/Space 进入）、O22（dashboard 清理窗口）、
   O24（选人部门人数“含停用”说明）、O25（重复结束日期禁同日）。
-- N1~N15 全部处理（N8 为历史快照数字，当前已写成 118 例）。
+- N1~N15 全部处理（N8 为历史快照数字，当前已写成 120 例）。
 
-**明确不改（产品口径/低风险，已记录）**：
-- **O15** 停用仍组织未来会议的用户：未来会议继续占房，管理员没有代取消/转交入口。
-  需要“转交/代会”产品能力，本轮只记录；停用前请先人工处理其未来会议。
+**明确不改（低风险，已记录）**：
 - **O16** 部门删除与用户绑定是 check-then-act、树环数据会被丢弃：父级不可变，环只可能由手工改库产生；
   并发窗口影响低，未加锁。
 - **O18** 用户资料/角色更新 last-write-wins：管理端低频；加 version 需要改表/契约，暂不做。
-- **O19** 维护中的房间不阻止进行中会议延长：维护语义按“不接新预约、已有会议可继续”理解；
-  若产品要求“维护后不许延长”，再补 `ensureRoomNotMaintenanceAfterLock`。
-- **O23** 08:00–20:00 之外仍可创建会议，但日历块高 0/不可见，统计按 720 分钟：
-  跨天会议是现有能力，收窄营业时段需要产品决定；未改。
-
-**仍未修**：仅上述“明确不改”的产品口径项。其余 Required/Optional/Nit 已处理。
 
 **验证（第三批，汇总）**：后端 **118 例**全绿；`verify-state-consequences` **39/39**、
 `verify-m5-stats` **28/28**、`verify-calendar-optimize` **30/30**、`verify-m5-recurring` **41/41**、
@@ -118,6 +110,23 @@
 `e2e-theme` **16/16**、`e2e-dashboard` **12/12**、`e2e-notify-center` **14/14**、
 `e2e-org-users` **22/22**、`e2e-calendar-enhanced` **28/28**、`e2e-meeting-list` **22/22**、
 `e2e-booking` **19/19**；`npm run check` **65 例**、`npm run build` 通过。
+
+### 修复状态（2026-10-18 产品口径批，已实施）
+
+| 项 | 状态 | 修复内容 |
+|---|---|---|
+| O23 | ✅ 已修 | 定义可预约窗口 **08:00–20:00、不可跨天**（docs/01 R-16）：后端 `validateTime` 拒绝窗口外/跨天；延长上限从 24:00 收到 20:00；前端 `datePickerLimits` 统一遮挡 + zod `businessHoursViolation`；统计脚本的跨天数据改为 SQL 造历史数据，继续验证裁剪 SQL |
+| O15 | ✅ 已修 | ADMIN 代取消：ADMIN 可取消任何 10/20 会议，**原因必填**、**不受 R-6 限制**，走状态机/审计；`MEETING_CANCELLED` 在 operator≠organiser 时通知组织人；会议列表给 ADMIN 增加“全部会议”范围 + “代取消”，弹窗原因必填；详情页同步 |
+| O19 | ✅ 已修 | `extend()` 在房间行锁/会议行锁之后复查维护状态（30002）；`MaintenanceRecheckTest` 覆盖；维护中不再允许延长 |
+
+**验证（2026-10-18）**：后端 **120 例**全绿；`verify-state-consequences` **49/49**、
+`verify-m5-stats` **28/28**、`verify-calendar-optimize` **30/30**、`verify-m5-recurring` **41/41**、
+`verify-m5-recurring-cancel` **36/36**、`verify-m4-notify-api` **46/46**；
+`e2e-theme` **16/16**、`e2e-dashboard` **12/12**、`e2e-notify-center` **14/14**、
+`e2e-org-users` **22/22**、`e2e-calendar-enhanced` **28/28**、`e2e-meeting-list` **25/25**、
+`e2e-booking` **19/19**；`npm run check` **68 例**、`npm run build` 通过。
+
+**仍未修**：仅 O16/O18 两条低风险项，见上方“明确不改”。
 
 ---
 

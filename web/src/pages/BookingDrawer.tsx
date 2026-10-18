@@ -28,7 +28,7 @@ import {
 } from '@/api/meeting'
 import type { Room } from '@/api/room'
 import DeptUserPicker from '@/components/DeptUserPicker'
-import { disabledTimeForToday } from '@/components/datePickerLimits'
+import { disabledTimeForBooking } from '@/components/datePickerLimits'
 import { useAppRequest } from '@/hooks/useAppRequest'
 import { ApiError } from '@/api/types'
 import { API_TIME_FORMAT, bookingSchema, type BookingForm } from '@/pages/bookingSchema'
@@ -303,7 +303,7 @@ export default function BookingDrawer({ open, prefill, rooms, onClose, onSuccess
                 // 过去时间在 UI 层就不可选（T6.1）；后端 validateTime 仍会兜底 30003
                 disabledDate={(current) => current.isBefore(dayjs().startOf('day'))}
                 // C3：规则抽到 datePickerLimits；绝不能返回 disabledSeconds（会让今天所有值 invalid）
-                disabledTime={(current) => disabledTimeForToday(current)}
+                disabledTime={(current) => disabledTimeForBooking(current)}
               />
             )}
           />

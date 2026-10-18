@@ -7,7 +7,7 @@
  *   · 延长会议 / 提前结束（T3.F2）：**仅进行中（30）**
  * 真正的裁决都在服务端（40004 归属 / 40002 状态 / 40006 超上限 / 40001 冲突）。
  *
- * 延长的上限由**服务端**算（R-15：min(下一场开始 − 缓冲, 当日 24:00)），前端只负责展示——
+ * 延长的上限由**服务端**算（R-15：min(下一场开始 − 缓冲, 当日 20:00)），前端只负责展示——
  * 这条规则涉及三个量的取小，前端再算一遍就是重写一遍规则，迟早不一致。
  */
 import { useCallback, useEffect, useState } from 'react'
@@ -137,7 +137,10 @@ export default function MeetingDetail() {
   }
 
   const isOrganiser = !!currentUser && currentUser.id === detail.organiserId
-  const canCancel = isOrganiser && CANCELLABLE_STATUS.includes(detail.status)
+  const isAdmin = (currentUser?.roles ?? []).includes('ADMIN')
+  /** O15：组织人可取消；ADMIN 可代取消（必须填原因，后端同样校验） */
+  const adminCancel = isAdmin && !isOrganiser
+  const canCancel = (isOrganiser || isAdmin) && CANCELLABLE_STATUS.includes(detail.status)
   /** 仅组织人 + 20 已预约可编辑（R-12；改到需审批会议室会回退到 10） */
   const canEdit = isOrganiser && detail.status === 20
   /** 进行中 + 组织人 = 可延长/提前结束（30 是唯一入口，见 docs/01 迁移矩阵） */
@@ -202,7 +205,7 @@ export default function MeetingDetail() {
         )}
         {canCancel && (
           <Button danger onClick={() => setCancelOpen(true)}>
-            取消会议
+            {adminCancel ? '代取消会议' : '取消会议'}
           </Button>
         )}
         {/* 进行中才有"延长/提前结束"（状态机只允许 30 出发，见 docs/01 迁移矩阵） */}
@@ -219,6 +222,7 @@ export default function MeetingDetail() {
       <CancelMeetingModal
         open={cancelOpen}
         meetingId={meetingId}
+        requireReason={adminCancel}
         onClose={() => setCancelOpen(false)}
         onSuccess={refresh}
       />
@@ -229,7 +233,7 @@ export default function MeetingDetail() {
         onSuccess={refresh}
       />
 
-      {/* 延长：上限与理由都来自服务端（R-15 的 min(下一场−缓冲, 当日 24:00) 不在前端重算） */}
+      {/* 延长：上限与理由都来自服务端（R-15 的 min(下一场−缓冲, 当日 20:00) 不在前端重算） */}
       <Modal
         title="延长会议"
         open={extendOpen}
@@ -246,7 +250,7 @@ export default function MeetingDetail() {
             </p>
             <p className="mb-2">
               最多可延长 <b>{limit.maxDelayMinutes}</b> 分钟
-              {limit.maxDelayMinutes < 1 && '——已无延长空间（下一场会议紧随其后或已到当日 24:00）'}
+              {limit.maxDelayMinutes < 1 && '——已无延长空间（下一场会议紧随其后或已到当日 20:00）'}
             </p>
             <Space>
               <span>延长</span>

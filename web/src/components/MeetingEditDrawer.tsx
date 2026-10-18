@@ -15,7 +15,7 @@ import dayjs, { type Dayjs } from 'dayjs'
 import { App, Button, DatePicker, Drawer, Empty, Form, Input, Select, Spin } from 'antd'
 import { getMeeting, updateMeeting } from '@/api/meeting'
 import { listRooms } from '@/api/room'
-import { disabledTimeForToday } from '@/components/datePickerLimits'
+import { businessHoursViolation, disabledTimeForBooking } from '@/components/datePickerLimits'
 import { ApiError } from '@/api/types'
 import { useAppRequest } from '@/hooks/useAppRequest'
 import { API_TIME_FORMAT } from '@/pages/bookingSchema'
@@ -36,6 +36,12 @@ const editSchema = z
   .refine((v) => v.timeRange[0].isBefore(v.timeRange[1]), {
     path: ['timeRange'],
     message: '结束时间必须晚于开始时间',
+  })
+  .superRefine((v, ctx) => {
+    const msg = businessHoursViolation(v.timeRange[0], v.timeRange[1])
+    if (msg) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['timeRange'], message: msg })
+    }
   })
 
 type MeetingEditForm = z.infer<typeof editSchema>
@@ -194,7 +200,7 @@ export default function MeetingEditDrawer({
                   onChange={(v) => field.onChange(v)}
                   disabledDate={(current) => current.isBefore(dayjs().startOf('day'))}
                   // C3：与预约 Drawer 共用同一份规则；绝不能返回 disabledSeconds
-                  disabledTime={(current) => disabledTimeForToday(current)}
+                  disabledTime={(current) => disabledTimeForBooking(current)}
                 />
               )}
             />

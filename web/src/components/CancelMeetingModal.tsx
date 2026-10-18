@@ -13,6 +13,8 @@ import { useAppRequest } from '@/hooks/useAppRequest'
 interface CancelMeetingModalProps {
   open: boolean
   meetingId: number | null
+  /** ADMIN 代取消时必须填写原因（后端同样校验） */
+  requireReason?: boolean
   onClose: () => void
   onSuccess: () => void
 }
@@ -20,6 +22,7 @@ interface CancelMeetingModalProps {
 export default function CancelMeetingModal({
   open,
   meetingId,
+  requireReason = false,
   onClose,
   onSuccess,
 }: CancelMeetingModalProps) {
@@ -52,10 +55,14 @@ export default function CancelMeetingModal({
       onCancel={onClose}
       onOk={handleOk}
       okText="确认取消"
-      okButtonProps={{ danger: true }}
+      okButtonProps={{ danger: true, disabled: requireReason && !reason.trim() }}
       destroyOnClose
     >
-      <p>取消后时段将被释放，且不可恢复。可填写取消原因（选填）：</p>
+      <p>
+        {requireReason
+          ? '管理员代取消必须填写原因，取消后时段将被释放并通知组织人：'
+          : '取消后时段将被释放，且不可恢复。可填写取消原因（选填）：'}
+      </p>
       <Input.TextArea
         rows={3}
         maxLength={200}

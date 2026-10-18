@@ -68,11 +68,21 @@ public record MeetingDomainEvent(
                 startTime, endTime, 60, approverId, comment);
     }
 
-    /** 取消：comment = 取消原因（可空） */
+    /** 取消：comment = 取消原因（可空）；operatorId 默认组织人 */
     public static MeetingDomainEvent cancelled(Long meetingId, String title, Long roomId, Long organiserId,
                                                LocalDateTime startTime, LocalDateTime endTime, String reason) {
+        return cancelled(meetingId, title, roomId, organiserId, startTime, endTime, reason, organiserId);
+    }
+
+    /**
+     * 取消（显式操作人）：ADMIN 代取消时 operatorId ≠ organiserId，
+     * 通知服务据此把组织人也加进收件人（O15）。
+     */
+    public static MeetingDomainEvent cancelled(Long meetingId, String title, Long roomId, Long organiserId,
+                                               LocalDateTime startTime, LocalDateTime endTime,
+                                               String reason, Long operatorId) {
         return new MeetingDomainEvent(MeetingEventType.CANCELLED, meetingId, title, roomId, organiserId,
-                startTime, endTime, 50, organiserId, reason);
+                startTime, endTime, 50, operatorId, reason);
     }
 
     /**

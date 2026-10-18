@@ -8,6 +8,7 @@
  */
 import { z } from 'zod'
 import dayjs, { type Dayjs } from 'dayjs'
+import { businessHoursViolation } from '@/components/datePickerLimits'
 
 /** 后端统一时间格式 */
 export const API_TIME_FORMAT = 'YYYY-MM-DD HH:mm:ss'
@@ -44,6 +45,13 @@ export const bookingSchema = z
   .refine((v) => v.timeRange[0].isAfter(dayjs()), {
     path: ['timeRange'],
     message: '不能预约过去的时间',
+  })
+  // O23：08:00–20:00、不可跨天（与后端 validateTime / 日历时间轴 / 统计口径一致）
+  .superRefine((v, ctx) => {
+    const msg = businessHoursViolation(v.timeRange[0], v.timeRange[1])
+    if (msg) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['timeRange'], message: msg })
+    }
   })
   .refine((v) => !v.repeatWeekly || (v.repeatEndDate && dayjs.isDayjs(v.repeatEndDate)), {
     path: ['repeatEndDate'],

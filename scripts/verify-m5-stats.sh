@@ -155,9 +155,11 @@ ROOM_MIN_D3_BEFORE=$(usage "$D3" "$D3" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)['data']
 print(next((i['totalMinutes'] for i in d['items'] if i['roomId'] == $ROOM), 0))")
-X=$(book "$U1" "T53-跨天" "$D2 23:30:00" "$D3 01:30:00")
-check "跨天会议已创建" "$([ -n "$X" ] && [ "$X" != "None" ] && echo yes || echo no)" "yes"
-[ "$X" != "None" ] && IDS="$IDS $X"
+# O23 后 API 已禁止跨天；这里用 SQL 造“历史遗留”跨天数据，继续验证 H-1 的区间裁剪 SQL
+X=$(sql "INSERT INTO smt_meeting.meeting (title, room_id, organiser_id, start_time, end_time, status)
+  VALUES ('T53-跨天', $ROOM, $U1_ID, '$D2 23:30:00', '$D3 01:30:00', 40); SELECT LAST_INSERT_ID();")
+check "跨天历史数据插入成功（统计裁剪回归）" "$([ -n "$X" ] && echo yes || echo no)" "yes"
+[ -n "$X" ] && IDS="$IDS $X"
 check "只查 D2：该会议室时长**只增加了 30**（23:30–24:00 那一段）" \
   "$(( $(usage "$D2" "$D2" | python3 -c "
 import sys, json

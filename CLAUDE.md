@@ -153,14 +153,24 @@
 - **Optional/Nit**：批量参数校验、选人/周期文案、重复结束日期上限、详情闪屏、列表页码回退、
   编辑自己禁摘 ADMIN、通知中心 WS 列表刷新、错误态+重试、OrgUsers 拆成
   `DeptFormModal`/`UserFormModal`（847→约 480 行）、房间删除锁内 30001、aria-label 等。
-- **明确不改（记录在评审文档）**：停用用户未来会议无代取消入口、用户更新 last-write-wins、
-  维护中会议可延长、08–20 外会议日历不可见（产品口径）。
+- **明确不改（记录在评审文档）**：部门并发/树环、用户更新 last-write-wins（低风险）。
 - 验证：后端 **118 例**；`verify-state-consequences` **39/39**、`verify-m5-stats` **28/28**、
   `verify-calendar-optimize` **30/30**、`verify-m5-recurring` **41/41**、
   `verify-m5-recurring-cancel` **36/36**、`verify-m4-notify-api` **46/46**；
   `e2e-theme` **16/16**、`e2e-dashboard` **12/12**、`e2e-notify-center` **14/14**、
   `e2e-org-users` **22/22**、`e2e-calendar-enhanced` **28/28**、`e2e-meeting-list` **22/22**、
   `e2e-booking` **19/19**；`npm run check` **65 例**、`npm run build` 通过。
+
+**产品口径批（2026-10-18，O23/O15/O19，记录见 `docs/review-M5-T6.md`）**：
+- **O23 可预约窗口**：统一为 **08:00–20:00、不可跨天**（docs/01 R-16）。后端 `validateTime` 拒绝
+  窗口外/跨天；延长上限从 24:00 收到 20:00；前端 `datePickerLimits` + zod 同步；统计每天 720 分钟一致。
+- **O15 ADMIN 代取消**：ADMIN 可取消任何 10/20 会议，原因必填、不受 R-6 限制、走状态机/审计；
+  取消事件在 operator≠organiser 时通知组织人；会议列表给 ADMIN 增加“全部会议”范围 + “代取消”。
+- **O19 维护中延长**：`extend()` 在房间行锁/会议行锁后复查维护状态（30002）。
+- 验证：后端 **120 例**；`verify-state-consequences` **49/49**、`verify-m5-stats` **28/28**、
+  `verify-calendar-optimize` **30/30**、`verify-m5-recurring` **41/41**、
+  `verify-m5-recurring-cancel` **36/36**、`verify-m4-notify-api` **46/46**；
+  `e2e-meeting-list` **25/25**、其余 e2e 全绿；`npm run check` **68 例**、`npm run build` 通过。
 
 **M4 演示脚本（可照做）**：user1 登录前端（:5173）→ 另开一个浏览器/接口以 approver1 身份审批 →
 user1 端**铃铛角标秒级 +1**（WS）→ 打开通知中心看到"审批通过"→ 点掉角标归零。
