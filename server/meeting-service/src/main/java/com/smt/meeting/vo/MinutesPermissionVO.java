@@ -7,6 +7,6 @@ import lombok.Data;
 @AllArgsConstructor
 public class MinutesPermissionVO {
 
-    private Boolean canManage;
-    private Boolean canView;
+    private boolean canManage;
+    private boolean canView;
 }

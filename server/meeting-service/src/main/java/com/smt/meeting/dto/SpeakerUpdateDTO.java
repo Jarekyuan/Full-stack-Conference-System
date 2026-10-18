@@ -7,6 +7,12 @@ import lombok.Data;
 
 @Data
 public class SpeakerUpdateDTO {
-    @NotBlank @Size(max = 50) private String displayName;
-    @NotBlank @Pattern(regexp = "^#[0-9A-Fa-f]{6}$", message = "颜色必须是 #RRGGBB") private String color;
+
+    @NotBlank(message = "发言人名称不能为空")
+    @Size(max = 50, message = "发言人名称长度不能超过 50")
+    private String displayName;
+
+    @NotBlank(message = "颜色不能为空")
+    @Pattern(regexp = "^#[0-9A-Fa-f]{6}$", message = "颜色必须是 #RRGGBB")
+    private String color;
 }

@@ -359,6 +359,7 @@ git commit -m "feat(minutes): 新增会议纪要与文件上传 5 张表
 - Create: `.../enums/MinutesAiStatus.java`
 - Create: `.../enums/UploadSessionStatus.java`
 - Create: `.../enums/FileBizType.java`
+- Create: `.../enums/FileObjectStatus.java`
 - Create: `.../dto/MultipartInitDTO.java`
 - Create: `.../dto/MultipartCompleteDTO.java`
 - Create: `.../dto/MinutesImportDTO.java`
@@ -445,6 +446,18 @@ public enum MinutesAiStatus {
         }
         throw new IllegalArgumentException("未知纪要 AI 状态: " + code);
     }
+
+    /**
+     * 未知状态回退为原始数字，避免错误处理路径本身因未知 DB 值再抛异常。
+     */
+    public static String labelOrRaw(int code) {
+        for (MinutesAiStatus value : values()) {
+            if (value.code == code) {
+                return value.name();
+            }
+        }
+        return String.valueOf(code);
+    }
 }
 ```
 
@@ -475,6 +488,21 @@ public final class FileBizType {
     public static final String MINUTES_AUDIO = "MINUTES_AUDIO";
 
     private FileBizType() {
+    }
+}
+```
+
+`FileObjectStatus.java`:
+
+```java
+package com.smt.meeting.enums;
+
+public final class FileObjectStatus {
+
+    public static final int NORMAL = 0;
+    public static final int DELETED = 10;
+
+    private FileObjectStatus() {
     }
 }
 ```
@@ -1798,6 +1826,7 @@ public interface TranscriptSegmentMapper {
     </select>
 
     <update id="markDeleted">
+        <!-- 10 = FileObjectStatus.DELETED（XML 无法引用 Java 常量） -->
         UPDATE file_object SET status = 10 WHERE id = #{id}
     </update>
 </mapper>
@@ -2876,6 +2905,7 @@ import com.smt.meeting.entity.FileObject;
 import com.smt.meeting.entity.FileUploadSession;
 import com.smt.meeting.entity.Meeting;
 import com.smt.meeting.enums.FileBizType;
+import com.smt.meeting.enums.FileObjectStatus;
 import com.smt.meeting.enums.UploadSessionStatus;
 import com.smt.meeting.mapper.FileObjectMapper;
 import com.smt.meeting.mapper.FileUploadSessionMapper;
@@ -3042,7 +3072,7 @@ public class MultipartUploadService {
         file.setOriginalName(session.getOriginalName());
         file.setSizeBytes(session.getSizeBytes());
         file.setContentType(session.getContentType());
-        file.setStatus(0);
+        file.setStatus(FileObjectStatus.NORMAL);
         file.setUploadedBy(userId);
         fileObjectMapper.insert(file);
         sessionMapper.markCompleted(uploadId, file.getId());
@@ -3655,6 +3685,7 @@ import com.smt.meeting.entity.Meeting;
 import com.smt.meeting.entity.MeetingMinutes;
 import com.smt.meeting.entity.MinutesSpeaker;
 import com.smt.meeting.entity.TranscriptSegment;
+import com.smt.meeting.enums.FileObjectStatus;
 import com.smt.meeting.enums.MinutesAiStatus;
 import com.smt.meeting.mapper.FileObjectMapper;
 import com.smt.meeting.mapper.MeetingMinutesMapper;
@@ -3757,7 +3788,7 @@ public class MinutesService {
         if (file == null
                 || !com.smt.meeting.enums.FileBizType.MINUTES_AUDIO.equals(file.getBizType())
                 || !meetingId.equals(file.getBizId())
-                || !Integer.valueOf(0).equals(file.getStatus())) {
+                || !Integer.valueOf(FileObjectStatus.NORMAL).equals(file.getStatus())) {
             throw new BusinessException(ErrorCode.FILE_TYPE_NOT_ALLOWED.getCode(),
                     "音频文件不属于该会议");
         }
@@ -4326,8 +4357,8 @@ public class MinutesAiStateMachine {
     public void assertTransition(int from, int to) {
         if (!ALLOWED.contains(from + "->" + to)) {
             throw new IllegalStateException(
-                    "非法纪要 AI 状态迁移: " + MinutesAiStatus.of(from)
-                            + " -> " + MinutesAiStatus.of(to));
+                    "非法纪要 AI 状态迁移: " + MinutesAiStatus.labelOrRaw(from)
+                            + " -> " + MinutesAiStatus.labelOrRaw(to));
         }
     }
 }
