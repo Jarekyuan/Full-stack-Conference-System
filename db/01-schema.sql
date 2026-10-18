@@ -315,7 +315,7 @@ CREATE TABLE IF NOT EXISTS file_upload_session (
   PRIMARY KEY (id),
   UNIQUE KEY uk_upload_id (upload_id),
   KEY idx_creator_status (created_by, status),
-  KEY idx_expires (expires_at)
+  KEY idx_status_expires (status, expires_at)
 ) ENGINE = InnoDB COMMENT = '分片上传会话';
 
 -- ----------------------------------------------------------------------------
@@ -340,7 +340,7 @@ CREATE TABLE IF NOT EXISTS meeting_minutes (
   updated_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (id),
   UNIQUE KEY uk_meeting (meeting_id),
-  KEY idx_ai_status (ai_status)
+  KEY idx_ai_status (ai_status, updated_at)
 ) ENGINE = InnoDB COMMENT = '会议纪要';
 
 -- ----------------------------------------------------------------------------
@@ -371,6 +371,6 @@ CREATE TABLE IF NOT EXISTS meeting_transcript_segment (
   text        TEXT        NOT NULL COMMENT '分段文本',
   created_at  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   PRIMARY KEY (id),
-  KEY idx_minutes_seq (minutes_id, seq),
+  UNIQUE KEY uk_minutes_seq (minutes_id, seq),
   KEY idx_minutes_start (minutes_id, start_ms)
 ) ENGINE = InnoDB COMMENT = '转写分段';

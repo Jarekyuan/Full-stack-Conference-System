@@ -215,7 +215,7 @@ CREATE TABLE IF NOT EXISTS file_upload_session (
   PRIMARY KEY (id),
   UNIQUE KEY uk_upload_id (upload_id),
   KEY idx_creator_status (created_by, status),
-  KEY idx_expires (expires_at)
+  KEY idx_status_expires (status, expires_at)
 ) ENGINE = InnoDB COMMENT = '分片上传会话';
 
 -- ----------------------------------------------------------------------------
@@ -240,7 +240,7 @@ CREATE TABLE IF NOT EXISTS meeting_minutes (
   updated_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (id),
   UNIQUE KEY uk_meeting (meeting_id),
-  KEY idx_ai_status (ai_status)
+  KEY idx_ai_status (ai_status, updated_at)
 ) ENGINE = InnoDB COMMENT = '会议纪要';
 
 -- ----------------------------------------------------------------------------
@@ -271,7 +271,7 @@ CREATE TABLE IF NOT EXISTS meeting_transcript_segment (
   text        TEXT        NOT NULL COMMENT '分段文本',
   created_at  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   PRIMARY KEY (id),
-  KEY idx_minutes_seq (minutes_id, seq),
+  UNIQUE KEY uk_minutes_seq (minutes_id, seq),
   KEY idx_minutes_start (minutes_id, start_ms)
 ) ENGINE = InnoDB COMMENT = '转写分段';
 ```
@@ -291,12 +291,12 @@ CREATE TABLE IF NOT EXISTS meeting_transcript_segment (
 
 - 用途：保存 COS `uploadId`、对象 key、分片大小/数量、过期时间与完成后的 `file_id`。
 - 分片进度**不落库**，以对象存储 `listParts` 为准。
-- 关键索引：`uk_upload_id`、`idx_creator_status`、`idx_expires`。
+- 关键索引：`uk_upload_id`、`idx_creator_status`、`idx_status_expires(status, expires_at)`。
 
 ### 3.12 meeting_minutes 会议纪要
 
 - 一场会议一份（`uk_meeting`）。
-- `ai_status` 五态：0 未生成 / 10 待生成 / 20 生成中 / 30 成功 / 40 失败；`idx_ai_status` 供 worker 扫描。
+- `ai_status` 五态：0 未生成 / 10 待生成 / 20 生成中 / 30 成功 / 40 失败；`idx_ai_status(ai_status, updated_at)` 供 worker 扫描。
 - `summary_json` 用 MySQL JSON 列；`ai_error` 只存用户可读文案。
 
 ### 3.13 meeting_minutes_speaker 纪要发言人
@@ -305,7 +305,7 @@ CREATE TABLE IF NOT EXISTS meeting_transcript_segment (
 
 ### 3.14 meeting_transcript_segment 转写分段
 
-- `start_ms/end_ms` 为相对音频开始的毫秒；`idx_minutes_seq` 保证顺序读取，`idx_minutes_start` 供二分/时间轴查询。
+- `start_ms/end_ms` 为相对音频开始的毫秒；`uk_minutes_seq(minutes_id, seq)` 保证顺序号唯一并支撑顺序读取，`idx_minutes_start` 供二分/时间轴查询。
 ```
 
 同时把文档头部的“15 张表”改为“20 张表”，把 ER 图/模块归属表中 meeting-service 的表清单补上 5 张新表。
