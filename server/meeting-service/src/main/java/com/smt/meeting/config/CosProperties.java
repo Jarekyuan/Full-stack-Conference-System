@@ -16,6 +16,5 @@ public class CosProperties {
     private String secretKey = "";
     private String region = "";
     private String bucket = "";
-    private Integer partUrlTtlMinutes = 60;
-    private Integer downloadUrlTtlMinutes = 60;
+    // 预签名 URL 的 TTL 由调用方传入（分片见 minutes.upload.part-url-ttl-minutes），此处不再重复配置
 }

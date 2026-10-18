@@ -115,6 +115,36 @@ class FileUploadSessionTaskTest {
     }
 
     @Test
+    void successfulCleanupShouldUnlock() {
+        when(sessionMapper.selectExpired(any(), anyInt()))
+                .thenReturn(List.of(session("u1")));
+        when(sessionMapper.markStatus("u1", UploadSessionStatus.EXPIRED)).thenReturn(1);
+
+        task.cleanup();
+
+        verify(storage).abortMultipart(OBJECT_KEY, "u1");
+        verify(sessionMapper).markStatus("u1", UploadSessionStatus.EXPIRED);
+        verify(lock).unlock();
+    }
+
+    @Test
+    void markStatusFailureShouldNotStopBatchAndLeaveSessionRetryable() {
+        when(sessionMapper.selectExpired(any(), anyInt()))
+                .thenReturn(List.of(session("u1"), session("u2")));
+        // abort 成功但 DB 标记失败：状态仍是进行中，下一轮会再次命中
+        when(sessionMapper.markStatus("u1", UploadSessionStatus.EXPIRED))
+                .thenThrow(new RuntimeException("DB 抖动"));
+        when(sessionMapper.markStatus("u2", UploadSessionStatus.EXPIRED)).thenReturn(1);
+
+        int cleaned = task.cleanExpiredSessions();
+
+        assertThat(cleaned).isEqualTo(1);
+        verify(storage).abortMultipart(OBJECT_KEY, "u1");
+        verify(storage).abortMultipart(OBJECT_KEY, "u2");
+        verify(sessionMapper).markStatus("u2", UploadSessionStatus.EXPIRED);
+    }
+
+    @Test
     void unlockShouldBeSkippedIfLockLost() {
         when(sessionMapper.selectExpired(any(), anyInt())).thenReturn(List.of());
         // 看门狗没续上、锁已易主：直接 unlock 会抛 IllegalMonitorStateException

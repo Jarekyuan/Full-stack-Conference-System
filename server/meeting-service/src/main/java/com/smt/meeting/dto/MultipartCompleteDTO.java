@@ -15,11 +15,12 @@ public class MultipartCompleteDTO {
     /**
      * 分片列表。
      *
-     * <p>不在此处使用 {@code @NotEmpty}：空/null 列表属于"分片不完整"的业务语义（70007），
-     * 由 Service 统一处理，避免同一个错误在 Bean Validation 层变成 10001。</p>
+     * <p>不在此处使用 {@code @NotEmpty} 或元素级 {@code @NotNull}：空/null 列表与 null 元素
+     * 都属于"分片不完整"的业务语义（70007），统一由 Service 处理，
+     * 避免同一个错误在 Bean Validation 层变成 10001。</p>
      */
     @Valid
-    private List<@NotNull(message = "分片不能为空") Part> parts;
+    private List<Part> parts;
 
     @Data
     public static class Part {

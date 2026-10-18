@@ -68,6 +68,11 @@ public class MultipartUploadService {
             "audio/aac", "audio/ogg");
     /** 单次批量取 URL 的上限（与 docs/04 契约一致） */
     private static final int MAX_PART_URLS_PER_BATCH = 50;
+    /**
+     * 分片总数上限：与 COS ListParts 单页上限（1000）对齐。
+     * complete 前的 size 预检依赖 listParts 全量返回；超过 1000 会被截断，预检误判为不完整。
+     */
+    private static final int MAX_TOTAL_PARTS = 1000;
     /** 对象键里的月份目录固定为 6 位 yyyyMM */
     private static final DateTimeFormatter MONTH_FORMAT = DateTimeFormatter.ofPattern("yyyyMM");
 
@@ -96,7 +101,13 @@ public class MultipartUploadService {
         validateFile(dto);
         long size = dto.getFileSize();
         int chunkSize = properties.getUpload().getChunkSizeBytes();
-        int totalParts = (int) ((size + chunkSize - 1) / chunkSize);
+        // 先用 long 判断再做 int 转换：chunkSize 配置很小时，2GiB/1 会溢出成负数绕过上限
+        long totalPartsValue = (size + chunkSize - 1) / chunkSize;
+        if (totalPartsValue > MAX_TOTAL_PARTS) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(),
+                    "分片数超过 1000，请增大分片大小");
+        }
+        int totalParts = (int) totalPartsValue;
 
         String extension = extension(dto.getFileName());
         String objectKey = "minutes/" + dto.getBizId() + "/"
@@ -208,8 +219,18 @@ public class MultipartUploadService {
         }
         List<MultipartCompleteDTO.Part> parts = validatedParts(dto, session);
 
-        // 预检必须在 completeMultipart 之前：complete 会消费 uploadId，事后再发现大小不符无法重试
-        long uploadedSize = storage.listParts(session.getObjectKey(), uploadId).stream()
+        // 预检必须在 completeMultipart 之前：complete 会消费 uploadId，事后再发现大小不符无法重试。
+        // listParts 抛 70006 时可能是并发 complete 已合并（COS NoSuchUpload），先按幂等恢复。
+        List<ObjectStorage.UploadedPart> uploaded;
+        try {
+            uploaded = storage.listParts(session.getObjectKey(), uploadId);
+        } catch (BusinessException e) {
+            if (e.getCode() == ErrorCode.UPLOAD_SESSION_NOT_FOUND.getCode()) {
+                return recoverIfCompleted(uploadId, userId, e);
+            }
+            throw e;
+        }
+        long uploadedSize = uploaded.stream()
                 .mapToLong(ObjectStorage.UploadedPart::size)
                 .sum();
         if (uploadedSize != session.getSizeBytes()) {
@@ -227,11 +248,7 @@ public class MultipartUploadService {
         } catch (BusinessException e) {
             // 并发完成/已被合并：会话若已变成完成态，按幂等返回第一次的文件
             if (e.getCode() == ErrorCode.UPLOAD_SESSION_NOT_FOUND.getCode()) {
-                FileUploadSession latest = sessionMapper.selectByUploadId(uploadId);
-                if (latest != null && latest.getCreatedBy().equals(userId)
-                        && latest.getStatus() == UploadSessionStatus.COMPLETED) {
-                    return existingFile(latest);
-                }
+                return recoverIfCompleted(uploadId, userId, e);
             }
             throw e;
         }
@@ -247,9 +264,8 @@ public class MultipartUploadService {
         try {
             return transactionTemplate.execute(status -> persistCompleted(uploadId, userId));
         } catch (RuntimeException e) {
-            // 对象已合并但没有 file_object 指向它：best-effort 清掉，避免泄漏
-            deleteQuietly(object.objectKey());
-            throw e;
+            // DB 事务提交结果未知：先确认是否其实已提交，再决定能不能删对象
+            return recoverAfterPersistenceFailure(uploadId, userId, object.objectKey(), e);
         }
     }
 
@@ -333,6 +349,53 @@ public class MultipartUploadService {
             }
         }
         return sorted;
+    }
+
+    /**
+     * 70006 恢复：并发 complete 可能已经把会话改成完成态（COS 的 complete/listParts 都会
+     * 对已消费的 uploadId 抛 NoSuchUpload）。重读会话——已完成则返回第一次落库的文件，
+     * 否则抛回原始 70006；重读本身失败时同样抛回原始异常（不掩盖真实原因）。
+     */
+    private FileCompleteVO recoverIfCompleted(String uploadId, Long userId,
+                                              BusinessException original) {
+        FileUploadSession latest;
+        try {
+            latest = sessionMapper.selectByUploadId(uploadId);
+        } catch (RuntimeException rereadFailure) {
+            throw original;
+        }
+        if (latest != null && latest.getCreatedBy().equals(userId)
+                && latest.getStatus() == UploadSessionStatus.COMPLETED) {
+            return existingFile(latest);
+        }
+        throw original;
+    }
+
+    /**
+     * DB 落库失败（提交结果未知）时的恢复。
+     *
+     * <ul>
+     *   <li>重读为已完成 → 说明事务其实已提交，直接返回文件，<b>绝不删除对象</b>；</li>
+     *   <li>重读本身失败 → 无法确认是否提交，保留对象（删除可能误删已提交对象）并抛回原异常；</li>
+     *   <li>确认未完成 → best-effort 删除对象并 CAS 置为已中止，再抛回原异常。</li>
+     * </ul>
+     */
+    private FileCompleteVO recoverAfterPersistenceFailure(String uploadId, Long userId,
+                                                          String objectKey,
+                                                          RuntimeException original) {
+        FileUploadSession latest;
+        try {
+            latest = sessionMapper.selectByUploadId(uploadId);
+        } catch (RuntimeException rereadFailure) {
+            throw original;
+        }
+        if (latest != null && latest.getCreatedBy().equals(userId)
+                && latest.getStatus() == UploadSessionStatus.COMPLETED) {
+            return existingFile(latest);
+        }
+        deleteQuietly(objectKey);
+        markStatusQuietly(uploadId, UploadSessionStatus.ABORTED);
+        throw original;
     }
 
     /** 读取会话已关联的文件；数据不一致（file_id 悬空）按会话不存在处理。 */

@@ -278,6 +278,54 @@ class MultipartUploadServiceTest {
     }
 
     @Test
+    void initShouldAllowExactly1000Parts() {
+        when(permissionService.requireMeeting(MEETING_ID))
+                .thenReturn(meeting(MeetingStatusEnum.FINISHED.getCode()));
+        properties.getUpload().setChunkSizeBytes(1);
+        when(storage.initMultipart(anyString(), anyString()))
+                .thenReturn(new ObjectStorage.MultipartInit(UPLOAD_ID));
+        MultipartInitDTO dto = initDTO();
+        dto.setFileSize(1000L);
+
+        MultipartInitVO result = service.init(dto, USER_ID);
+
+        // COS ListParts 单页上限 1000：恰好 1000 片仍可被预检完整枚举
+        assertThat(result.getTotalParts()).isEqualTo(1000);
+        verify(sessionMapper).insert(any(FileUploadSession.class));
+    }
+
+    @Test
+    void initShouldRejectMoreThan1000Parts() {
+        when(permissionService.requireMeeting(MEETING_ID))
+                .thenReturn(meeting(MeetingStatusEnum.FINISHED.getCode()));
+        properties.getUpload().setChunkSizeBytes(1);
+        MultipartInitDTO dto = initDTO();
+        dto.setFileSize(1001L);
+
+        assertThatThrownBy(() -> service.init(dto, USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(MultipartUploadServiceTest::codeOf)
+                .isEqualTo(ErrorCode.PARAM_ERROR.getCode());
+        verify(storage, never()).initMultipart(anyString(), anyString());
+    }
+
+    @Test
+    void initShouldRejectHugePartCountWithoutIntOverflow() {
+        when(permissionService.requireMeeting(MEETING_ID))
+                .thenReturn(meeting(MeetingStatusEnum.FINISHED.getCode()));
+        properties.getUpload().setChunkSizeBytes(1);
+        MultipartInitDTO dto = initDTO();
+        // 恰好是允许的最大文件：totalParts = 2GiB 个分片。若先 (int) 强转会溢出成负数绕过上限
+        dto.setFileSize(properties.getUpload().getMaxFileSizeBytes());
+
+        assertThatThrownBy(() -> service.init(dto, USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(MultipartUploadServiceTest::codeOf)
+                .isEqualTo(ErrorCode.PARAM_ERROR.getCode());
+        verify(storage, never()).initMultipart(anyString(), anyString());
+    }
+
+    @Test
     void initShouldAbortStorageWhenSessionInsertFails() {
         when(permissionService.requireMeeting(MEETING_ID))
                 .thenReturn(meeting(MeetingStatusEnum.FINISHED.getCode()));
@@ -521,6 +569,27 @@ class MultipartUploadServiceTest {
     }
 
     @Test
+    void completeShouldRecoverWhenListPartsReportsConcurrentCompletion() {
+        FileUploadSession inProgress = session(UploadSessionStatus.IN_PROGRESS,
+                LocalDateTime.now().plusHours(1), 2, null);
+        FileUploadSession completed = session(UploadSessionStatus.COMPLETED,
+                LocalDateTime.now().plusHours(1), 2, 9L);
+        inProgress.setSizeBytes(11L);
+        completed.setSizeBytes(11L);
+        // requireSession 读进行中；listParts 抛 70006 后重读为已完成
+        when(sessionMapper.selectByUploadId(UPLOAD_ID)).thenReturn(inProgress, completed);
+        when(storage.listParts(OBJECT_KEY, UPLOAD_ID))
+                .thenThrow(new BusinessException(ErrorCode.UPLOAD_SESSION_NOT_FOUND));
+        when(fileObjectMapper.selectById(9L)).thenReturn(fileObject(9L));
+
+        FileCompleteVO result = service.complete(UPLOAD_ID, completeDTO(1, 2), USER_ID);
+
+        assertThat(result.getFileId()).isEqualTo(9L);
+        verify(storage, never()).completeMultipart(anyString(), anyString(), any());
+        verify(fileObjectMapper, never()).insert(any(FileObject.class));
+    }
+
+    @Test
     void completeShouldCreateFileObject() {
         FileUploadSession session = session(UploadSessionStatus.IN_PROGRESS,
                 LocalDateTime.now().plusHours(1), 2, null);
@@ -592,6 +661,79 @@ class MultipartUploadServiceTest {
         // 合并已经发生但没有 DB 记录指向它：best-effort 删除，避免泄漏
         verify(storage).delete(OBJECT_KEY);
         verify(fileObjectMapper).insert(any(FileObject.class));
+    }
+
+    @Test
+    void completeShouldNotDeleteWhenTransactionFailureTurnsOutCommitted() {
+        FileUploadSession inProgress = session(UploadSessionStatus.IN_PROGRESS,
+                LocalDateTime.now().plusHours(1), 2, null);
+        FileUploadSession completed = session(UploadSessionStatus.COMPLETED,
+                LocalDateTime.now().plusHours(1), 2, 9L);
+        inProgress.setSizeBytes(11L);
+        completed.setSizeBytes(11L);
+        // 事务抛"提交结果未知"后重读：其实已经提交成功
+        when(sessionMapper.selectByUploadId(UPLOAD_ID)).thenReturn(inProgress, completed);
+        stubMatchingParts();
+        when(storage.completeMultipart(eq(OBJECT_KEY), eq(UPLOAD_ID), any()))
+                .thenReturn(new ObjectStorage.StoredObject(OBJECT_KEY, 11L, "audio/mp4"));
+        when(sessionMapper.selectByUploadIdForUpdate(UPLOAD_ID))
+                .thenThrow(new RuntimeException("commit unknown"));
+        when(fileObjectMapper.selectById(9L)).thenReturn(fileObject(9L));
+
+        FileCompleteVO result = service.complete(UPLOAD_ID, completeDTO(1, 2), USER_ID);
+
+        assertThat(result.getFileId()).isEqualTo(9L);
+        // 已提交的对象绝不能删
+        verify(storage, never()).delete(anyString());
+        verify(sessionMapper, never()).markStatus(anyString(), anyInt());
+    }
+
+    @Test
+    void completeShouldDeleteAndAbortWhenTransactionFailureNotCompleted() {
+        FileUploadSession inProgress = session(UploadSessionStatus.IN_PROGRESS,
+                LocalDateTime.now().plusHours(1), 2, null);
+        inProgress.setSizeBytes(11L);
+        when(sessionMapper.selectByUploadId(UPLOAD_ID)).thenReturn(inProgress);
+        stubMatchingParts();
+        when(storage.completeMultipart(eq(OBJECT_KEY), eq(UPLOAD_ID), any()))
+                .thenReturn(new ObjectStorage.StoredObject(OBJECT_KEY, 11L, "audio/mp4"));
+        when(sessionMapper.selectByUploadIdForUpdate(UPLOAD_ID))
+                .thenThrow(new RuntimeException("commit unknown"));
+
+        assertThatThrownBy(() -> service.complete(UPLOAD_ID, completeDTO(1, 2), USER_ID))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("commit unknown");
+
+        // 确认未完成：删对象 + CAS 置中止，避免泄漏或永久 IN_PROGRESS
+        verify(storage).delete(OBJECT_KEY);
+        verify(sessionMapper).markStatus(UPLOAD_ID, UploadSessionStatus.ABORTED);
+        verify(fileObjectMapper, never()).insert(any(FileObject.class));
+    }
+
+    @Test
+    void completeShouldCleanupWhenLockedSessionIsNoLongerInProgress() {
+        FileUploadSession inProgress = session(UploadSessionStatus.IN_PROGRESS,
+                LocalDateTime.now().plusHours(1), 2, null);
+        inProgress.setSizeBytes(11L);
+        when(sessionMapper.selectByUploadId(UPLOAD_ID)).thenReturn(inProgress);
+        stubMatchingParts();
+        when(storage.completeMultipart(eq(OBJECT_KEY), eq(UPLOAD_ID), any()))
+                .thenReturn(new ObjectStorage.StoredObject(OBJECT_KEY, 11L, "audio/mp4"));
+        // 合并完成后、行锁复查时发现会话已被用户中止/清理任务置过期
+        when(sessionMapper.selectByUploadIdForUpdate(UPLOAD_ID)).thenReturn(
+                session(UploadSessionStatus.ABORTED, LocalDateTime.now().plusHours(1), 2, null),
+                session(UploadSessionStatus.EXPIRED, LocalDateTime.now().minusHours(1), 2, null));
+
+        for (int i = 0; i < 2; i++) {
+            assertThatThrownBy(() -> service.complete(UPLOAD_ID, completeDTO(1, 2), USER_ID))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(MultipartUploadServiceTest::codeOf)
+                    .isEqualTo(ErrorCode.UPLOAD_SESSION_NOT_FOUND.getCode());
+        }
+
+        verify(storage, times(2)).delete(OBJECT_KEY);
+        verify(sessionMapper, times(2)).markStatus(UPLOAD_ID, UploadSessionStatus.ABORTED);
+        verify(fileObjectMapper, never()).insert(any(FileObject.class));
     }
 
     @Test

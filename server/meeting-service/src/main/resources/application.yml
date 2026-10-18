@@ -93,8 +93,6 @@ cos:
   secret-key: ${COS_SECRET_KEY:}
   region: ${COS_REGION:}
   bucket: ${COS_BUCKET:}
-  part-url-ttl-minutes: 60
-  download-url-ttl-minutes: 60
 
 minutes:
   upload:
