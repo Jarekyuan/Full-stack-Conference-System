@@ -115,6 +115,53 @@
   `e2e-calendar-enhanced.cjs` **25/25**（含“不再逐房间请求”）、`e2e-theme.cjs` **13/13 连跑两次**、
   `e2e-meeting-list.cjs` **21/21**、`npm run check` **53 例**、`npm run build` 通过。
 
+**M5/T6 评审修复第一批（2026-10-17，记录见 `docs/review-M5-T6.md`）**：
+- **周期会议**：系列取消按 `start_time` 三分类（未来/进行中/历史）并在锁内重读；时间已过的待审批(10)
+  计入 skipped；补 R-6 取消截止；创建时长改完整日期时间展开 + DTO 上限 1439；系列创建发**一条汇总
+  CREATED 事件**（审批人因此收到 APPROVAL_TODO）；日历缓存逐周失效并移到事务提交后。
+- **前端**：`datePickerLimits` 不再返回 `disabledSeconds`——此前它让“今天”所有时刻被 rc-picker 判为
+  invalid，改时间静默回退、提交仍是旧时段（预约/编辑两个 Drawer 已共用）；暗色过去遮罩改 `slate-950/80`；
+  部门选人切部门前取消防抖。
+- **脚本**：4 个脚本先装 `cleanup` trap 再关限流、结束显式 `ratelimit_restore`；公共库对恢复也做
+  **读回确认**，并拒绝把“已经是 0”当基线——修复“跑完把 Nacos 限流永久留在 0”（评审时实测为 0，
+  已恢复为 10）。
+- 验证：后端 **110 例**；`verify-m5-recurring` **41/41（两次）**、`verify-m5-recurring-cancel` **36/36（两次）**、
+  `verify-calendar-optimize` **24/24**、`verify-m5-stats` **23/23**、`verify-m4-notify-api` **43/43**；
+  `e2e-theme` **15/15（两次）**、`e2e-calendar-enhanced` **26/26（两次）**、`e2e-booking` **19/19**、
+  `e2e-booking-today` **4/4（两次）**、`e2e-meeting-list` **21/21**；`npm run check` **59 例**。
+
+**M5/T6 评审修复第二批（2026-10-17，记录见 `docs/review-M5-T6.md`）**：
+- **R6 参会人校验**：`MeetingCreateDTO.Participants.userIds` 上限 100、元素非空/正数；Service 查
+  `sys_user` 校验**存在且启用**，停用/不存在 → 10001（不再只靠前端选人列表隐藏）；
+  通知收件人 SQL 也只取启用账号——停用参会人保留历史，但不再收变更/取消/提醒。
+- **R7 最后管理员**：新增 `20007`；降权/停用最后一名启用 ADMIN 时拒绝；先 `SELECT ... FOR UPDATE`
+  锁 ADMIN 角色行再 count，覆盖两个管理员并发互降权与已降权用户的旧 token。
+- **R8 统计口径**：H-1 从 `meeting` LEFT JOIN room，已删除会议室的历史以 `已删除会议室#id` 保留在 items。
+- **R9 提前结束颜色**：status=40 即使 `endTime` 在未来也按“已过期”灰色（不再显示成我预订/邀请我的）。
+- **R10 编辑 Drawer**：打开时清空旧 detail + `detail.id === meetingId` 守卫，加载失败显示重试，
+  不会拿上一场的 id/version 提交。
+- **R11 日历批量分片**：前端按 50 分片并发，超过 50 间会议室不再整页失败。
+- 验证：后端 **114 例**；`verify-state-consequences` **34/34**、`verify-m5-stats` **27/27**、
+  `e2e-calendar-enhanced` **28/28**、`e2e-meeting-list` **22/22**、`npm run check` **65 例**。
+
+**M5/T6 评审修复第三批（2026-10-17，记录见 `docs/review-M5-T6.md`）**：
+- **R12**：`MaintenanceRecheckTest` 3 例，精确覆盖创建/改期/周期创建的**锁内维护复查**。
+- **R13/R14**：验证体系补强——批量删除混入别人的 id；delete-all 改用一次性用户（不再清空 user1）；
+  stats 改增量；周期间隔 `0,7,14`；dashboard 真 UI 区间切换；缓存命中前置；通知角标“先未读再删除”；
+  批量 >50/空/非正/与单房间一致；主题防闪烁阻断主包；详情 status=20 权限；组织页自锁/子部门删除；
+  搜索唯一关键字；新增 `AvailabilityServiceTest` 覆盖单房间失败隔离。
+- **Optional/Nit**：批量参数校验、选人/周期文案、重复结束日期上限、详情闪屏、列表页码回退、
+  编辑自己禁摘 ADMIN、通知中心 WS 列表刷新、错误态+重试、OrgUsers 拆成
+  `DeptFormModal`/`UserFormModal`（847→约 480 行）、房间删除锁内 30001、aria-label 等。
+- **明确不改（记录在评审文档）**：停用用户未来会议无代取消入口、用户更新 last-write-wins、
+  维护中会议可延长、08–20 外会议日历不可见（产品口径）。
+- 验证：后端 **118 例**；`verify-state-consequences` **39/39**、`verify-m5-stats` **28/28**、
+  `verify-calendar-optimize` **30/30**、`verify-m5-recurring` **41/41**、
+  `verify-m5-recurring-cancel` **36/36**、`verify-m4-notify-api` **46/46**；
+  `e2e-theme` **16/16**、`e2e-dashboard` **12/12**、`e2e-notify-center` **14/14**、
+  `e2e-org-users` **22/22**、`e2e-calendar-enhanced` **28/28**、`e2e-meeting-list` **22/22**、
+  `e2e-booking` **19/19**；`npm run check` **65 例**、`npm run build` 通过。
+
 **M4 演示脚本（可照做）**：user1 登录前端（:5173）→ 另开一个浏览器/接口以 approver1 身份审批 →
 user1 端**铃铛角标秒级 +1**（WS）→ 打开通知中心看到"审批通过"→ 点掉角标归零。
 `web/e2e/e2e-notify-center.cjs` 就是这条演示的可执行版本。

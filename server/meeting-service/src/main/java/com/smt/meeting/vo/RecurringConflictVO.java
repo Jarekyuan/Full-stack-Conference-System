@@ -9,7 +9,8 @@ import lombok.Data;
  *
  * <p>为什么必须带场次：一次提交 5 场、其中第 3 场有冲突，只回"有冲突"用户没法改——
  * 得让他知道是"10-26 那一场"，才能决定是挪整系列还是单独处理。
- * 场的判定方式：冲突会议的 start_time 落在某场次的时间窗内（同一天的占用才算这一场的冲突）。
+ * 场的判定方式：与单场冲突检测同一套半开区间重叠（`existing.start &lt; occ.end AND existing.end &gt; occ.start`，
+ * 再叠加会议室 buffer）；不是“start_time 落在窗内”，也不以“同一天”为条件。
  */
 @Data
 public class RecurringConflictVO {

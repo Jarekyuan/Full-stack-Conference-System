@@ -56,7 +56,8 @@ public interface MeetingMapper {
 
     /**
      * 某会议室在 [rangeStart, rangeEnd) 内开始的会议（日历视图，T2.3）。
-     * 只取有效状态 10/20/30（40/50/60 为历史态不展示）；按开始时间归属日期。
+     * 取 10/20/30/40（50/60 不展示）；40 由前端按“已过期”置灰（T6.1，含提前结束）。
+     * 按开始时间归属日期。
      */
     List<CalendarMeetingVO> selectByRoomAndRange(@Param("roomId") Long roomId,
                                                  @Param("rangeStart") LocalDateTime rangeStart,

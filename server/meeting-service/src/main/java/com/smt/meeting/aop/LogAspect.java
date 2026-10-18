@@ -94,7 +94,7 @@ public class LogAspect {
         if (result instanceof Long id) {
             return id;
         }
-        for (String accessor : new String[]{"meetingId", "getMeetingId", "getId"}) {
+        for (String accessor : new String[]{"meetingId", "recurringId", "getMeetingId", "getId"}) {
             try {
                 Method m = result.getClass().getMethod(accessor);
                 if (m.getReturnType() == Long.class || m.getReturnType() == long.class) {
