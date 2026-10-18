@@ -153,7 +153,6 @@
 - **Optional/Nit**：批量参数校验、选人/周期文案、重复结束日期上限、详情闪屏、列表页码回退、
   编辑自己禁摘 ADMIN、通知中心 WS 列表刷新、错误态+重试、OrgUsers 拆成
   `DeptFormModal`/`UserFormModal`（847→约 480 行）、房间删除锁内 30001、aria-label 等。
-- **明确不改（记录在评审文档）**：部门并发/树环、用户更新 last-write-wins（低风险）。
 - 验证：后端 **118 例**；`verify-state-consequences` **39/39**、`verify-m5-stats` **28/28**、
   `verify-calendar-optimize` **30/30**、`verify-m5-recurring` **41/41**、
   `verify-m5-recurring-cancel` **36/36**、`verify-m4-notify-api` **46/46**；

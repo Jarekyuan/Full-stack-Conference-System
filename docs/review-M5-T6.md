@@ -99,11 +99,6 @@
   O24（选人部门人数“含停用”说明）、O25（重复结束日期禁同日）。
 - N1~N15 全部处理（N8 为历史快照数字，当前已写成 120 例）。
 
-**明确不改（低风险，已记录）**：
-- **O16** 部门删除与用户绑定是 check-then-act、树环数据会被丢弃：父级不可变，环只可能由手工改库产生；
-  并发窗口影响低，未加锁。
-- **O18** 用户资料/角色更新 last-write-wins：管理端低频；加 version 需要改表/契约，暂不做。
-
 **验证（第三批，汇总）**：后端 **118 例**全绿；`verify-state-consequences` **39/39**、
 `verify-m5-stats` **28/28**、`verify-calendar-optimize` **30/30**、`verify-m5-recurring` **41/41**、
 `verify-m5-recurring-cancel` **36/36**、`verify-m4-notify-api` **46/46**；
@@ -125,8 +120,6 @@
 `e2e-theme` **16/16**、`e2e-dashboard` **12/12**、`e2e-notify-center` **14/14**、
 `e2e-org-users` **22/22**、`e2e-calendar-enhanced` **28/28**、`e2e-meeting-list` **25/25**、
 `e2e-booking` **19/19**；`npm run check` **68 例**、`npm run build` 通过。
-
-**仍未修**：仅 O16/O18 两条低风险项，见上方“明确不改”。
 
 ---
 
@@ -410,9 +403,7 @@
 | O13 | `Dashboard.tsx:193-210`、`NotificationList.tsx:236`、`OrgUsers.tsx:675-695` | 接口失败与“空数据”不可区分：失败只弹 toast，主体仍显示“暂无数据/还没有通知/暂无部门”。读取 `error` 渲染错误态 + 重试。 |
 | O14 | `OrgUsers.tsx`（847 行） | 违反 web/AGENT.md“单文件超 300 行考虑拆分”。拆出 `DeptFormModal`、`UserFormModal`、`DeptTreePanel`/`DropdownActions`，页面只留查询与刷新编排。 |
 | O15 | `UserService.java:138-160`；`MeetingReserveService.java:110-120` | 停用仍组织未来会议的用户后，这些会议继续占房，管理员没有代取消/转交入口。停用前检查并提示，或给 ADMIN 代取消/转交；至少写进 docs/05 T6.2。 |
-| O16 | `DeptService.java:80-93`、`UserService.java:117-136`、`DeptService.java:29-50` | 部门删除与用户绑定是 check-then-act，可能留下悬空 dept_id；`tree()` 对 parent 成环的节点静默丢弃。加部门行锁/`FOR UPDATE`；树组装加 visited + WARN。 |
 | O17 | `UserController.java:36-39`、`UserUpdateDTO.java:32-34`、`StatsService.java:47-59` | keyword 无长度上限、roleIds 无元素上限、统计日期无最大跨度；补 `@Size`/最大天数（如 366）。 |
-| O18 | `UserService.java:117-136` | 用户资料/角色更新是 last-write-wins，无 version/行锁；并发编辑丢更新。沿用会议 version 或 `SELECT ... FOR UPDATE`。 |
 | O19 | `MeetingReserveService.java:258-327` | 延长会扩大占用，但没有维护状态复查；房间在会议进行中被置维护后仍可延长。按产品口径决定是否补 `ensureRoomNotMaintenanceAfterLock` 并写文档。 |
 | O20 | `MeetingReserveService.java:431-436` | 房间在快检后被删除时 `selectIdForUpdate` 返回 null 被忽略，helper 静默放行，随后插入悬空 room_id 的会议。`current == null` 时抛 30001。 |
 | O21 | `MeetingList.tsx:204`、`NotificationList.tsx:252-254`、`OrgUsers.tsx:844`、`MainLayout.tsx:130-136` | 可点击的 Table 行/通知条目只有 onClick，无键盘支持；部门树 MoreHorizontal 与铃铛是纯图标，无可访问名称。补 `role/tabIndex/onKeyDown` 与 `aria-label`。 |
@@ -468,8 +459,7 @@
 
 ## 建议的修复顺序
 
-> 三批（C1-C3、R1-R16、Optional/Nit）已全部处理；剩余仅为“明确不改”的产品口径项与
-> O21 的表格行键盘支持，均在上方记录。
+> 三批（C1-C3、R1-R16、Optional/Nit）已全部处理，明细见上方各批记录。
 
 1. ~~**C3 + C1 + R1 + R4 + R3 + R5**：当天 RangePicker、周期会议的状态/时间/校验/通知。~~ ✅
 2. ~~**C2 + R14.7**：脚本限流恢复与共享账号数据安全；Nacos 阈值已恢复为 10。~~ ✅（C2）/待办（R14.7）
