@@ -41,7 +41,10 @@ public class MinutesProperties {
         private Integer timeoutMs = 120_000;
         private Integer maxAttempts = 3;
         private Integer maxInputChars = 60_000;
-        private Integer scanDelayMs = 5_000;
+        /** 单次生成允许的最大分块数；超过直接 70009，避免把超长转写拆成大量付费调用。 */
+        private Integer maxChunks = 10;
+        /** 成功/失败后再次请求生成的最小间隔（秒）；0 表示不限制。 */
+        private Integer regenerateCooldownSeconds = 60;
         private Integer stuckTimeoutMinutes = 10;
     }
 }

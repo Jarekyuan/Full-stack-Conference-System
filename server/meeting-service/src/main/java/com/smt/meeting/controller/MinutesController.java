@@ -2,6 +2,7 @@ package com.smt.meeting.controller;
 
 import com.smt.common.context.UserContext;
 import com.smt.common.result.Result;
+import com.smt.meeting.aop.RateLimit;
 import com.smt.meeting.dto.MinutesImportDTO;
 import com.smt.meeting.dto.SpeakerUpdateDTO;
 import com.smt.meeting.service.MinutesAiService;
@@ -64,7 +65,13 @@ public class MinutesController {
                 id, speakerKey, dto, UserContext.getUserId()));
     }
 
-    /** 请求异步生成结构化纪要：返回当前 AI 状态（10 待生成 / 20 生成中）。 */
+    /**
+     * 请求异步生成结构化纪要：返回当前 AI 状态（10 待生成 / 20 生成中）。
+     *
+     * <p>限流 + 服务内的按会议冷却共同防连点/脚本刷：前者是用户级滑动窗口，
+     * 后者保证同一份纪要 30/40 之后在冷却期内不会被重复提交付费生成。</p>
+     */
+    @RateLimit("minutes-generate")
     @PostMapping("/{id}/minutes/generate")
     public Result<AiGenerateVO> generate(@PathVariable Long id) {
         return Result.success(minutesAiService.request(id, UserContext.getUserId()));

@@ -96,12 +96,18 @@
         WHERE id = #{id} AND ai_status = 10
     </update>
 
-    <!-- 生成成功：20 → 30 -->
+    <!-- 生成成功：20 → 30。
+         生成令牌 startedAt 必须一并比对：旧 worker 失去条目锁后即使行又回到 20（新一轮），
+         也不能用旧结果覆盖新结果。startedAt 为 NULL 时用 IS NULL（兼容历史/异常数据）。 -->
     <update id="markSuccess">
         UPDATE meeting_minutes
         SET ai_status = 30, summary_json = #{summaryJson}, ai_model = #{model},
             ai_finished_at = #{finishedAt}, ai_error = NULL
         WHERE id = #{id} AND ai_status = 20
+        <choose>
+            <when test="startedAt != null">AND ai_started_at = #{startedAt}</when>
+            <otherwise>AND ai_started_at IS NULL</otherwise>
+        </choose>
     </update>
 
     <!-- 失败待重试：20 → 10（记录错误与已尝试次数；清空开始时间，下次 markRunning 重新计时） -->
@@ -110,6 +116,10 @@
         SET ai_status = 10, ai_error = #{error}, ai_attempts = #{attempts},
             ai_started_at = NULL, ai_finished_at = #{finishedAt}
         WHERE id = #{id} AND ai_status = 20
+        <choose>
+            <when test="startedAt != null">AND ai_started_at = #{startedAt}</when>
+            <otherwise>AND ai_started_at IS NULL</otherwise>
+        </choose>
     </update>
 
     <!-- 失败终止：20 → 40 -->
@@ -118,6 +128,10 @@
         SET ai_status = 40, ai_error = #{error}, ai_attempts = #{attempts},
             ai_finished_at = #{finishedAt}
         WHERE id = #{id} AND ai_status = 20
+        <choose>
+            <when test="startedAt != null">AND ai_started_at = #{startedAt}</when>
+            <otherwise>AND ai_started_at IS NULL</otherwise>
+        </choose>
     </update>
 
     <!-- 待生成队列：命中 idx_ai_status(ai_status, updated_at) -->
@@ -129,11 +143,13 @@
         LIMIT #{limit}
     </select>
 
-    <!-- 生成超时：卡在 20 且开始时间早于阈值（按开始时间升序，先卡住的先处理） -->
+    <!-- 生成超时：卡在 20 且开始时间早于阈值（按开始时间升序，先卡住的先处理）。
+         ai_started_at IS NULL 也必须捞出来：历史/异常数据同样需要恢复，不能永远卡在 20。 -->
     <select id="selectAiStuck" resultMap="BaseResultMap">
         SELECT <include refid="BaseColumns"/>
         FROM meeting_minutes
-        WHERE ai_status = 20 AND ai_started_at &lt; #{before}
+        WHERE ai_status = 20
+          AND (ai_started_at IS NULL OR ai_started_at &lt; #{before})
         ORDER BY ai_started_at
         LIMIT #{limit}
     </select>

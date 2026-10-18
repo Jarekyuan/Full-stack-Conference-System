@@ -113,5 +113,7 @@ minutes:
     timeout-ms: 120000
     max-attempts: 3
     max-input-chars: 60000
+    max-chunks: ${MINUTES_AI_MAX_CHUNKS:10}
+    regenerate-cooldown-seconds: ${MINUTES_AI_REGENERATE_COOLDOWN_SECONDS:60}
     scan-delay-ms: 5000
     stuck-timeout-minutes: 10

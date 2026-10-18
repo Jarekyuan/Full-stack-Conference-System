@@ -3,6 +3,8 @@ package com.smt.meeting.config;
 import com.smt.meeting.service.DeepSeekLlmClient;
 import com.smt.meeting.service.LlmClient;
 import com.smt.meeting.service.MockLlmClient;
+import jakarta.annotation.PostConstruct;
+import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -14,13 +16,29 @@ import org.springframework.web.client.RestClient;
  *
  * <p>provider 缺省视为 deepseek（与 {@link MinutesProperties.Ai} 的默认值一致）。
  * mock 模式不需要任何密钥，用于本地演示与失败注入。</p>
+ *
+ * <p>启动时校验 {@code minutes.ai.timeout-ms >= 1}：0/负数传给
+ * {@link SimpleClientHttpRequestFactory#setReadTimeout(int)} 会退化成"永不超时"，
+ * 一次挂死的供应商调用就会长期占住 worker。</p>
  */
 @Configuration
+@RequiredArgsConstructor
 public class LlmConfig {
+
+    private final MinutesProperties properties;
+
+    @PostConstruct
+    void validateTimeouts() {
+        Integer timeoutMs = properties.getAi().getTimeoutMs();
+        if (timeoutMs == null || timeoutMs < 1) {
+            throw new IllegalStateException(
+                    "minutes.ai.timeout-ms 必须 >= 1（当前: " + timeoutMs + "）");
+        }
+    }
 
     @Bean
     @ConditionalOnProperty(name = "minutes.ai.provider", havingValue = "deepseek", matchIfMissing = true)
-    public RestClient deepSeekRestClient(MinutesProperties properties) {
+    public RestClient deepSeekRestClient() {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(5_000);
         factory.setReadTimeout(properties.getAi().getTimeoutMs());
@@ -32,8 +50,7 @@ public class LlmConfig {
 
     @Bean
     @ConditionalOnProperty(name = "minutes.ai.provider", havingValue = "deepseek", matchIfMissing = true)
-    public LlmClient deepSeekLlmClient(RestClient deepSeekRestClient,
-                                       MinutesProperties properties) {
+    public LlmClient deepSeekLlmClient(RestClient deepSeekRestClient) {
         return new DeepSeekLlmClient(deepSeekRestClient, properties);
     }
 

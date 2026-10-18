@@ -51,23 +51,31 @@ public interface MeetingMinutesMapper {
     /** 开始生成：10 → 20 生成中（清空上一轮结束时间） */
     int markRunning(@Param("id") Long id, @Param("startedAt") LocalDateTime startedAt);
 
-    /** 生成成功：20 → 30 成功 */
+    /**
+     * 生成成功：20 → 30 成功。
+     *
+     * <p>{@code startedAt} 是本次生成的令牌（= markRunning 写入的 ai_started_at）。
+     * CAS 同时比对状态与令牌：旧 worker 即使还停在 20，也无法覆盖新一轮生成的结果。</p>
+     */
     int markSuccess(@Param("id") Long id,
                     @Param("summaryJson") String summaryJson,
                     @Param("model") String model,
-                    @Param("finishedAt") LocalDateTime finishedAt);
+                    @Param("finishedAt") LocalDateTime finishedAt,
+                    @Param("startedAt") LocalDateTime startedAt);
 
     /** 生成失败待重试：20 → 10 待生成（清空开始时间，下次 markRunning 重新计时） */
     int markRetry(@Param("id") Long id,
                   @Param("error") String error,
                   @Param("finishedAt") LocalDateTime finishedAt,
-                  @Param("attempts") int attempts);
+                  @Param("attempts") int attempts,
+                  @Param("startedAt") LocalDateTime startedAt);
 
     /** 生成失败终止：20 → 40 失败 */
     int markFailed(@Param("id") Long id,
                    @Param("error") String error,
                    @Param("finishedAt") LocalDateTime finishedAt,
-                   @Param("attempts") int attempts);
+                   @Param("attempts") int attempts,
+                   @Param("startedAt") LocalDateTime startedAt);
 
     /** 待生成队列（ai_status=10，命中 idx_ai_status） */
     List<MeetingMinutes> selectAiPending(@Param("limit") int limit);
