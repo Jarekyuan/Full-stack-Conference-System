@@ -37,18 +37,11 @@
         WHERE id = #{id}
     </select>
 
-    <!-- 命中 uk_object_key -->
-    <select id="selectByObjectKey" resultMap="BaseResultMap">
-        SELECT <include refid="BaseColumns"/>
-        FROM file_object
-        WHERE object_key = #{objectKey}
-    </select>
-
-    <!-- 软删除：10 = 已删除（XML 无法引用 Java 常量） -->
+    <!-- 软删除 CAS：仅 正常(0) → 已删除(10)，重复调用影响 0 行（幂等）。XML 无法引用 Java 常量 -->
     <update id="markDeleted">
         UPDATE file_object
         SET status = 10
-        WHERE id = #{id}
+        WHERE id = #{id} AND status = 0
     </update>
 
 </mapper>

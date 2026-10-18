@@ -52,11 +52,13 @@
         WHERE upload_id = #{uploadId} AND status = 0
     </update>
 
-    <!-- 中止(20)/过期(30)迁移：CAS 仅允许 进行中(0) 的会话 -->
+    <!-- 中止(20)/过期(30)迁移：CAS 仅允许 进行中(0) 的会话；
+         目标状态限定 20/30，防止误标成已完成(10)或进行中(0) -->
     <update id="markStatus">
         UPDATE file_upload_session
         SET status = #{status}
         WHERE upload_id = #{uploadId} AND status = 0
+          AND #{status} IN (20, 30)
     </update>
 
     <!-- 过期会话扫描：命中 idx_status_expires(status, expires_at) -->

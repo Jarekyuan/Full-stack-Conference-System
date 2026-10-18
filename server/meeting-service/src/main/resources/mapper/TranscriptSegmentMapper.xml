@@ -28,8 +28,9 @@
         WHERE minutes_id = #{minutesId}
     </delete>
 
-    <!-- 批量新增：<foreach> 拼多值 VALUES（uk_minutes_seq 保证 seq 不重复） -->
-    <insert id="batchInsert">
+    <!-- 批量新增：<foreach> 拼多值 VALUES（uk_minutes_seq 保证 seq 不重复）；主键回填。
+         调用方必须传非空 list（空集合会拼出非法 SQL）。 -->
+    <insert id="batchInsert" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO meeting_transcript_segment
             (minutes_id, seq, speaker_key, start_ms, end_ms, text)
         VALUES

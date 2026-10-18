@@ -14,9 +14,6 @@ public interface FileObjectMapper {
     /** 按主键查询 */
     FileObject selectById(@Param("id") Long id);
 
-    /** 按对象存储 key 查询（命中 uk_object_key） */
-    FileObject selectByObjectKey(@Param("objectKey") String objectKey);
-
-    /** 软删除：status 置 10（已删除） */
+    /** 软删除 CAS：仅正常(0) → 已删除(10)，重复调用影响 0 行 */
     int markDeleted(@Param("id") Long id);
 }

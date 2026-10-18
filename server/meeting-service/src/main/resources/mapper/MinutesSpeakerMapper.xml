@@ -27,8 +27,9 @@
         WHERE minutes_id = #{minutesId}
     </delete>
 
-    <!-- 批量新增：<foreach> 拼多值 VALUES，一次往返写完全部发言人 -->
-    <insert id="batchInsert">
+    <!-- 批量新增：<foreach> 拼多值 VALUES，一次往返写完全部发言人；主键回填供调用方引用。
+         调用方必须传非空 list（空集合会拼出非法 SQL）。 -->
+    <insert id="batchInsert" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO meeting_minutes_speaker (minutes_id, speaker_key, display_name, color)
         VALUES
         <foreach collection="list" item="item" separator=",">

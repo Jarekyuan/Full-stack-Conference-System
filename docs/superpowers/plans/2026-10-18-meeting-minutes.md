@@ -3703,6 +3703,12 @@ public class MinutesSummaryParser {
 
 - [ ] **Step 3: 创建 `MinutesService`**
 
+> ⚠️ **首次导入的串行化（Task 5 评审补充）**：`selectByMeetingIdForUpdate` 在纪要行**不存在**时取的是
+> gap lock；两个并发的首次导入可能各自持 gap lock 再同时 INSERT，形成死锁——`FOR UPDATE` 不能替代
+> 首次导入的串行化。Task 8 实现必须按 `meetingId` 加 Redisson 锁（如 `lock:minutes:import:{meetingId}`，
+> **锁包住事务**：锁外开、事务锁内提，与项目既有锁约定一致），或显式处理 duplicate-key/死锁重试。
+> 下面代码块仅为结构示意，不含该锁。
+
 ```java
 package com.smt.meeting.service;
 

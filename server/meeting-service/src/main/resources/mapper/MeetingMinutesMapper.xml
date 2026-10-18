@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<!-- 会议纪要 SQL（手写 XML）：AI 状态迁移均带前态条件（CAS），影响 0 行 = 状态已被并发变更 -->
+<!-- 会议纪要 SQL（手写 XML）：AI 状态迁移通常带前态条件（CAS），影响 0 行 = 状态已被并发变更；
+     唯一例外是 resetAi：重新导入时无条件作废生成结果（见该语句注释） -->
 <mapper namespace="com.smt.meeting.mapper.MeetingMinutesMapper">
 
     <resultMap id="BaseResultMap" type="com.smt.meeting.entity.MeetingMinutes">
@@ -42,7 +43,9 @@
         WHERE meeting_id = #{meetingId}
     </select>
 
-    <!-- 事务内锁住纪要行（导入/生成等"读-判-写"流程用），命中 uk_meeting 的单行记录锁 -->
+    <!-- 事务内锁住纪要行（读-判-写流程用）。⚠️ 行不存在时 SELECT ... FOR UPDATE 取 gap lock：
+         两个并发"首次导入"可能各自持 gap lock 再 INSERT 而死锁。首次导入必须由 Task 8 的
+         per-meeting Redisson 锁（锁包住事务）串行化，或显式处理 duplicate-key/死锁重试。 -->
     <select id="selectByMeetingIdForUpdate" resultMap="BaseResultMap">
         SELECT <include refid="BaseColumns"/>
         FROM meeting_minutes
@@ -69,11 +72,12 @@
         WHERE id = #{id}
     </update>
 
-    <!-- 重置：回到 0 未生成，并清空上一次生成结果与重试计数 -->
+    <!-- 重置：重新导入时无条件作废上一次生成结果（含模型标记），回到 0 未生成。
+         若此时仍有 worker 停在生成中(20)，其 markSuccess 的 CAS（20）会以 0 行收场，结果被有意丢弃。 -->
     <update id="resetAi">
         UPDATE meeting_minutes
-        SET ai_status = 0, summary_json = NULL, ai_error = NULL, ai_attempts = 0,
-            ai_started_at = NULL, ai_finished_at = NULL
+        SET ai_status = 0, summary_json = NULL, ai_model = NULL, ai_error = NULL,
+            ai_attempts = 0, ai_started_at = NULL, ai_finished_at = NULL
         WHERE id = #{id}
     </update>
 
@@ -85,10 +89,10 @@
         WHERE id = #{id} AND ai_status IN (0, 30, 40)
     </update>
 
-    <!-- 开始生成：10 → 20 -->
+    <!-- 开始生成：10 → 20（清空上一轮结束时间） -->
     <update id="markRunning">
         UPDATE meeting_minutes
-        SET ai_status = 20, ai_started_at = #{startedAt}, ai_error = NULL
+        SET ai_status = 20, ai_started_at = #{startedAt}, ai_finished_at = NULL, ai_error = NULL
         WHERE id = #{id} AND ai_status = 10
     </update>
 
@@ -100,11 +104,11 @@
         WHERE id = #{id} AND ai_status = 20
     </update>
 
-    <!-- 失败待重试：20 → 10（记录错误与已尝试次数） -->
+    <!-- 失败待重试：20 → 10（记录错误与已尝试次数；清空开始时间，下次 markRunning 重新计时） -->
     <update id="markRetry">
         UPDATE meeting_minutes
         SET ai_status = 10, ai_error = #{error}, ai_attempts = #{attempts},
-            ai_finished_at = #{finishedAt}
+            ai_started_at = NULL, ai_finished_at = #{finishedAt}
         WHERE id = #{id} AND ai_status = 20
     </update>
 
