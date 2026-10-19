@@ -1,7 +1,10 @@
 /**
  * 会议纪要 UI 的纯逻辑（无 React 依赖）：
  * - `minutesEmptyStateKind`：空态展示什么，权限判断优先于会议状态；
- * - `describeMinutesError`：后端错误码 → 用户可操作文案（70003 定位到行、70006 重新上传等）。
+ * - `describeMinutesError`：后端错误码 → 用户可操作文案（70003 定位到行、70006 重新上传等）；
+ * - `MINUTES_AI_STATUS_META`：AI 状态 → 文案/颜色/按钮文案的唯一映射（头部与 AI 状态条共用）；
+ * - `escapeHtml`：ECharts HTML tooltip 的转义（displayName 是用户输入，直接拼 HTML 会 XSS）；
+ * - `formatDuration` / `compactList` / `minutesActionItemKey`：洞察时长与摘要表格的纯函数。
  * 抽成纯函数是为了 Vitest 能直接覆盖全部分支；组件渲染行为仍交给 Task 18 的 e2e。
  */
 import { ApiError } from '@/api/types'
@@ -90,4 +93,77 @@ export function describeMinutesError(
     return { kind: 'abort', message: '' }
   }
   return { kind: 'unknown', message: fallback }
+}
+
+export interface MinutesAiStatusMeta {
+  /** 状态文案（不含 "AI " 前缀） */
+  text: string
+  /** antd Tag 的颜色 */
+  color: string
+  /** 生成按钮文案：0/10/20 生成，30 重新生成，40 重试 */
+  actionLabel: string
+}
+
+/**
+ * AI 生成状态（docs/04 §10.2：0 未生成 / 10 待生成 / 20 生成中 / 30 已生成 / 40 失败）。
+ * 头部状态标签与 MinutesAiBar 共用这一份映射，避免两处文案/颜色漂移。
+ */
+export const MINUTES_AI_STATUS_META: Record<number, MinutesAiStatusMeta> = {
+  0: { text: '未生成', color: 'default', actionLabel: '生成纪要' },
+  10: { text: '待生成', color: 'blue', actionLabel: '生成纪要' },
+  20: { text: '生成中', color: 'processing', actionLabel: '生成纪要' },
+  30: { text: '已生成', color: 'green', actionLabel: '重新生成' },
+  40: { text: '生成失败', color: 'red', actionLabel: '重试生成' },
+}
+
+/** 未知状态保留原始数字，颜色与按钮文案回退到安全默认值 */
+export function minutesAiStatusMeta(aiStatus: number): MinutesAiStatusMeta {
+  return (
+    MINUTES_AI_STATUS_META[aiStatus] ?? {
+      text: String(aiStatus),
+      color: 'default',
+      actionLabel: '生成纪要',
+    }
+  )
+}
+
+/**
+ * 转义 ECharts HTML tooltip 中插入的动态文本。
+ * ECharts 的 formatter 返回值会写进 innerHTML；发言人名称由用户重命名，直接拼接可执行脚本。
+ */
+export function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+/** 毫秒 → “X 分 YY 秒” / “X 小时 YY 分 ZZ 秒”；非法值与负数按 0 处理 */
+export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '0 分 00 秒'
+  const total = Math.floor(ms / 1000)
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const seconds = total % 60
+  if (hours > 0) {
+    return `${hours} 小时 ${String(minutes).padStart(2, '0')} 分 ${String(seconds).padStart(2, '0')} 秒`
+  }
+  return `${minutes} 分 ${String(seconds).padStart(2, '0')} 秒`
+}
+
+/** 过滤历史脏数据里的 null/undefined 元素（后端 VO 类型上不可空，但旧数据可能越界） */
+export function compactList<T>(
+  items: readonly (T | null | undefined)[] | null | undefined,
+): T[] {
+  return (items ?? []).filter((item): item is T => item !== null && item !== undefined)
+}
+
+/** 待办行 key：任务/负责人/截止时间可能重复，带上索引保证唯一 */
+export function minutesActionItemKey(
+  row: { task?: string | null; owner?: string | null; dueDate?: string | null },
+  index?: number,
+): string {
+  return `${index ?? 0}:${row.task ?? ''}:${row.owner ?? ''}:${row.dueDate ?? ''}`
 }

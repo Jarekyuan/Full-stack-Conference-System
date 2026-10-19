@@ -95,9 +95,15 @@ export default function TranscriptList({
   onRename,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
+  // 轮询每 3s 返回全新的 speakers 数组；按内容签名缓存 Map，
+  // 才能让 memo 行在轮询期间保持 props 引用稳定（播放高亮时只重渲染两行）。
+  const speakerSignature = speakers
+    .map((speaker) => `${speaker.speakerKey}\u0000${speaker.displayName}\u0000${speaker.color}`)
+    .join('\u0001')
   const speakerMap = useMemo(
     () => new Map(speakers.map((speaker) => [speaker.speakerKey, speaker])),
-    [speakers],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 按内容签名而不是数组引用缓存
+    [speakerSignature],
   )
 
   useEffect(() => {

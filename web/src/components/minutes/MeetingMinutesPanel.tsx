@@ -62,6 +62,9 @@ export default function MeetingMinutesPanel({ meeting }: Props) {
     })
   }
 
+  /** 工作台需要等待刷新真正结束（生成后保持 busy 到新状态返回），失败交给调用方处理 */
+  const reloadAsync = () => refreshAsync().then(() => undefined)
+
   const canManage =
     minutes?.permissions?.canManage ?? (meeting.organiserId === currentUser?.id || isAdmin)
   const errorInfo = error ? describeMinutesError(error, '会议纪要加载失败') : null
@@ -104,7 +107,7 @@ export default function MeetingMinutesPanel({ meeting }: Props) {
         meeting={meeting}
         minutes={minutes}
         canManage={canManage}
-        onRefresh={reload}
+        onRefresh={reloadAsync}
       />
     </>
   )

@@ -1,11 +1,22 @@
 /**
  * 纪要 UI 纯逻辑单测：
  * - 空态决策覆盖 40/50/60/10 × canManage true/false，并守住"权限优先于状态"的顺序；
- * - 错误映射覆盖 70003（带/不带行号）、70005、70006、10005、10003、AbortError 与兜底。
+ * - 错误映射覆盖 70003（带/不带行号）、70005、70006、10005、10003、AbortError 与兜底；
+ * - AI 状态映射覆盖 0/10/20/30/40 + 未知值；tooltip 转义覆盖标签/引号/实体；
+ * - 洞察时长、脏数据过滤与待办 rowKey 的边界。
  */
 import { describe, expect, it } from 'vitest'
 import { ApiError } from '@/api/types'
-import { describeMinutesError, minutesEmptyStateKind } from './minutesUi'
+import {
+  MINUTES_AI_STATUS_META,
+  compactList,
+  describeMinutesError,
+  escapeHtml,
+  formatDuration,
+  minutesActionItemKey,
+  minutesAiStatusMeta,
+  minutesEmptyStateKind,
+} from './minutesUi'
 
 describe('minutesEmptyStateKind', () => {
   it('无管理权限时一律"暂无会议纪要"，优先于会议状态', () => {
@@ -77,5 +88,70 @@ describe('describeMinutesError', () => {
     expect(describeMinutesError('boom', '导入失败，请稍后重试').message).toBe(
       '导入失败，请稍后重试',
     )
+  })
+})
+
+describe('MINUTES_AI_STATUS_META', () => {
+  it('五个状态各有文案、颜色与按钮文案', () => {
+    expect(MINUTES_AI_STATUS_META).toEqual({
+      0: { text: '未生成', color: 'default', actionLabel: '生成纪要' },
+      10: { text: '待生成', color: 'blue', actionLabel: '生成纪要' },
+      20: { text: '生成中', color: 'processing', actionLabel: '生成纪要' },
+      30: { text: '已生成', color: 'green', actionLabel: '重新生成' },
+      40: { text: '生成失败', color: 'red', actionLabel: '重试生成' },
+    })
+  })
+
+  it('未知状态保留原始数字并回退默认色/按钮文案', () => {
+    expect(minutesAiStatusMeta(99)).toEqual({
+      text: '99',
+      color: 'default',
+      actionLabel: '生成纪要',
+    })
+  })
+})
+
+describe('escapeHtml', () => {
+  it('转义标签，阻断 <img onerror> 之类的注入', () => {
+    expect(escapeHtml('<img src=x onerror="alert(1)">')).toBe(
+      '&lt;img src=x onerror=&quot;alert(1)&quot;&gt;',
+    )
+  })
+
+  it('同时转义单引号与 &，且 & 先处理避免二次实体', () => {
+    expect(escapeHtml(`& < > " '`)).toBe('&amp; &lt; &gt; &quot; &#39;')
+    expect(escapeHtml('&lt;')).toBe('&amp;lt;')
+  })
+})
+
+describe('formatDuration', () => {
+  it('非法值与负数按 0 处理', () => {
+    expect(formatDuration(Number.NaN)).toBe('0 分 00 秒')
+    expect(formatDuration(Number.POSITIVE_INFINITY)).toBe('0 分 00 秒')
+    expect(formatDuration(-5000)).toBe('0 分 00 秒')
+  })
+
+  it('不足 1 小时只显示分秒', () => {
+    expect(formatDuration(0)).toBe('0 分 00 秒')
+    expect(formatDuration(90_000)).toBe('1 分 30 秒')
+  })
+
+  it('超过 1 小时显示小时', () => {
+    expect(formatDuration(3_661_000)).toBe('1 小时 01 分 01 秒')
+  })
+})
+
+describe('compactList / minutesActionItemKey', () => {
+  it('过滤 null/undefined 的脏数据，空输入返回空数组', () => {
+    expect(compactList([null, 'a', undefined, 'b'])).toEqual(['a', 'b'])
+    expect(compactList(null)).toEqual([])
+    expect(compactList(undefined)).toEqual([])
+  })
+
+  it('rowKey 带索引，完全相同的待办也不会撞 key', () => {
+    const row = { task: '同步排期', owner: null, dueDate: null }
+    expect(minutesActionItemKey(row, 0)).toBe('0:同步排期::')
+    expect(minutesActionItemKey(row, 1)).not.toBe(minutesActionItemKey(row, 0))
+    expect(minutesActionItemKey({}, 2)).toBe('2:::')
   })
 })

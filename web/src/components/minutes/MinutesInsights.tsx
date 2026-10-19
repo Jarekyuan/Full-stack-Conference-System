@@ -1,9 +1,10 @@
 /**
  * 会议洞察：时长/覆盖率/发言人数指标卡 + 各发言人时长横向柱状图 + 发言人明细卡。
  * - ECharts 按需引入（core + Bar/Grid/Tooltip/Canvas），与 Dashboard 同一套做法；
+ * - tooltip 走 HTML 渲染，displayName 是用户可编辑内容 → 必须 escapeHtml 防 XSS；
  * - 不引 ECharts 主题包，坐标轴/悬浮框颜色按 useResolvedTheme 显式切换，背景透明；
- * - 图表实例负责 init/resize/dispose，组件卸载不 dispose 会泄漏 canvas；
- * - 无发言人数据时只显示空态（hooks 必须在提前 return 前全部调用）。
+ * - 图表实例负责 init/dispose，并用 ResizeObserver 跟随容器尺寸（切侧栏/缩放窗口）；
+ * - speakers 每次轮询都是新数组，按内容签名缓存排序结果，避免图表反复 setOption。
  */
 import { useEffect, useMemo, useRef } from 'react'
 import { Card, Col, Empty, Row, Statistic, Typography } from 'antd'
@@ -14,19 +15,27 @@ import { CanvasRenderer } from 'echarts/renderers'
 import type { EChartsCoreOption } from 'echarts/core'
 import type { MinutesInsights as Insights } from '@/api/minutes'
 import { useResolvedTheme } from '@/stores/themeStore'
+import { compactList, escapeHtml, formatDuration } from './minutesUi'
 
 echarts.use([BarChart, GridComponent, TooltipComponent, CanvasRenderer])
 
-function Chart({ option }: { option: EChartsCoreOption }) {
+function Chart({
+  option,
+  height = 320,
+}: {
+  option: EChartsCoreOption
+  height?: number
+}) {
   const ref = useRef<HTMLDivElement>(null)
   const instance = useRef<echarts.ECharts | null>(null)
   useEffect(() => {
-    if (!ref.current) return
-    instance.current = echarts.init(ref.current)
-    const onResize = () => instance.current?.resize()
-    window.addEventListener('resize', onResize)
+    const element = ref.current
+    if (!element) return
+    instance.current = echarts.init(element)
+    const observer = new ResizeObserver(() => instance.current?.resize())
+    observer.observe(element)
     return () => {
-      window.removeEventListener('resize', onResize)
+      observer.disconnect()
       instance.current?.dispose()
       instance.current = null
     }
@@ -34,12 +43,7 @@ function Chart({ option }: { option: EChartsCoreOption }) {
   useEffect(() => {
     instance.current?.setOption(option, true)
   }, [option])
-  return <div ref={ref} style={{ width: '100%', height: 320 }} />
-}
-
-function formatDuration(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000))
-  return `${Math.floor(total / 60)} 分 ${String(total % 60).padStart(2, '0')} 秒`
+  return <div ref={ref} style={{ width: '100%', height }} />
 }
 
 export default function MinutesInsights({ insights }: { insights: Insights }) {
@@ -54,9 +58,17 @@ export default function MinutesInsights({ insights }: { insights: Insights }) {
     }),
     [dark],
   )
+  const speakerSignature = insights.speakers
+    .map((s) =>
+      [s.speakerKey, s.displayName, s.color, s.speakingMs, s.talkRatio, s.segmentCount].join(
+        '\u0000',
+      ),
+    )
+    .join('\u0001')
   const sorted = useMemo(
-    () => [...insights.speakers].sort((a, b) => b.speakingMs - a.speakingMs),
-    [insights.speakers],
+    () => compactList(insights.speakers).sort((a, b) => b.speakingMs - a.speakingMs),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 轮询每次返回新数组，按内容签名缓存
+    [speakerSignature],
   )
   const option = useMemo<EChartsCoreOption>(
     () => ({
@@ -70,11 +82,11 @@ export default function MinutesInsights({ insights }: { insights: Insights }) {
           const item = (params as { dataIndex: number }[])[0]
           const speaker = sorted[item.dataIndex]
           return speaker
-            ? `${speaker.displayName}<br/>发言 ${formatDuration(speaker.speakingMs)}<br/>占比 ${(speaker.talkRatio * 100).toFixed(1)}%`
+            ? `${escapeHtml(speaker.displayName)}<br/>发言 ${formatDuration(speaker.speakingMs)}<br/>占比 ${(speaker.talkRatio * 100).toFixed(1)}%`
             : ''
         },
       },
-      grid: { left: 80, right: 24, top: 16, bottom: 32 },
+      grid: { left: 12, right: 24, top: 16, bottom: 32, containLabel: true },
       xAxis: {
         type: 'value',
         axisLabel: {
@@ -99,21 +111,21 @@ export default function MinutesInsights({ insights }: { insights: Insights }) {
     }),
     [colors, sorted],
   )
-  if (insights.speakers.length === 0) return <Empty description="暂无洞察数据" />
+  if (sorted.length === 0) return <Empty description="暂无洞察数据" />
   return (
     <div className="space-y-4">
       <Row gutter={16}>
-        <Col span={6}>
+        <Col xs={12} md={6}>
           <Card size="small">
             <Statistic title="录音时长" value={formatDuration(insights.durationMs)} />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col xs={12} md={6}>
           <Card size="small">
             <Statistic title="总发言时长" value={formatDuration(insights.speakingMs)} />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col xs={12} md={6}>
           <Card size="small">
             <Statistic
               title="发言覆盖率"
@@ -122,14 +134,14 @@ export default function MinutesInsights({ insights }: { insights: Insights }) {
             />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col xs={12} md={6}>
           <Card size="small">
-            <Statistic title="发言人数" value={insights.speakers.length} />
+            <Statistic title="发言人数" value={sorted.length} />
           </Card>
         </Col>
       </Row>
       <Card size="small" title="各发言人时长">
-        <Chart option={option} />
+        <Chart option={option} height={Math.max(320, sorted.length * 36)} />
       </Card>
       <Row gutter={[12, 12]}>
         {sorted.map((speaker) => (

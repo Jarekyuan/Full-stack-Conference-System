@@ -15,9 +15,17 @@ interface Props {
   audioRef: RefObject<HTMLAudioElement>
   onTimeUpdate: (ms: number) => void
   onError: () => void
+  /** 元数据就绪后回调（父组件用于换源后恢复播放位置；初次加载时也可能触发） */
+  onLoadedMetadata?: (audio: HTMLAudioElement) => void
 }
 
-export default function AudioPlayer({ url, audioRef, onTimeUpdate, onError }: Props) {
+export default function AudioPlayer({
+  url,
+  audioRef,
+  onTimeUpdate,
+  onError,
+  onLoadedMetadata,
+}: Props) {
   const [playing, setPlaying] = useState(false)
   const [current, setCurrent] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -80,7 +88,10 @@ export default function AudioPlayer({ url, audioRef, onTimeUpdate, onError }: Pr
           setCurrent(ms / 1000)
           onTimeUpdate(ms)
         }}
-        onLoadedMetadata={(e) => syncDuration(e.currentTarget)}
+        onLoadedMetadata={(e) => {
+          syncDuration(e.currentTarget)
+          onLoadedMetadata?.(e.currentTarget)
+        }}
         onDurationChange={(e) => syncDuration(e.currentTarget)}
         onEmptied={() => {
           setPlaying(false)

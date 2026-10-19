@@ -1,10 +1,12 @@
 /**
  * AI 纪要状态条：展示生成状态（0/10/20/30/40）+ 触发/重试按钮 + 内联提示。
+ * - 状态文案/颜色/按钮文案统一来自 minutesUi.MINUTES_AI_STATUS_META，避免与头部标签漂移；
  * - 10/20 为队列中/生成中，按钮禁用避免重复提交（面板本身还在轮询刷新）；
  * - 40 时展示后端 aiError；只有 canManage 才渲染生成按钮。
  */
 import { Alert, Button, Space, Tag } from 'antd'
 import { Sparkles } from 'lucide-react'
+import { minutesAiStatusMeta } from './minutesUi'
 
 interface Props {
   aiStatus: number
@@ -14,14 +16,6 @@ interface Props {
   onGenerate: () => void
 }
 
-const STATUS: Record<number, { text: string; color: string }> = {
-  0: { text: '未生成', color: 'default' },
-  10: { text: '待生成', color: 'blue' },
-  20: { text: '生成中', color: 'processing' },
-  30: { text: '已生成', color: 'green' },
-  40: { text: '生成失败', color: 'red' },
-}
-
 export default function MinutesAiBar({
   aiStatus,
   aiError,
@@ -29,7 +23,7 @@ export default function MinutesAiBar({
   loading,
   onGenerate,
 }: Props) {
-  const status = STATUS[aiStatus] ?? { text: String(aiStatus), color: 'default' }
+  const status = minutesAiStatusMeta(aiStatus)
   const busy = aiStatus === 10 || aiStatus === 20
   return (
     <Space direction="vertical" className="w-full">
@@ -41,10 +35,10 @@ export default function MinutesAiBar({
             type="primary"
             icon={<Sparkles size={14} />}
             loading={loading}
-            disabled={busy}
+            disabled={busy || loading}
             onClick={onGenerate}
           >
-            {aiStatus === 40 ? '重试生成' : aiStatus === 30 ? '重新生成' : '生成纪要'}
+            {status.actionLabel}
           </Button>
         )}
       </Space>
