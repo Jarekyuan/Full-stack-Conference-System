@@ -113,7 +113,7 @@ export default function AudioPlayer({ url, audioRef, onTimeUpdate, onError }: Pr
         />
         <Typography.Text type="secondary">{formatOffset(current * 1000)}</Typography.Text>
         <Slider
-          aria-label="播放进度"
+          ariaLabelForHandle="播放进度"
           className="min-w-[220px]"
           min={0}
           max={duration || 1}
@@ -139,7 +139,7 @@ export default function AudioPlayer({ url, audioRef, onTimeUpdate, onError }: Pr
           style={{ width: 80 }}
         />
         <Slider
-          aria-label="音量"
+          ariaLabelForHandle="音量"
           className="w-24"
           min={0}
           max={1}
