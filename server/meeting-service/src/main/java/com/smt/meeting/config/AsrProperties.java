@@ -29,8 +29,8 @@ public class AsrProperties {
     /** 会议场景默认 16k_zh；电话录音用 8k_zh */
     private String engineModelType = "16k_zh";
     private Integer channelNum = 1;
-    /** 3 = 按标点分段 + 词级时间戳 */
-    private Integer resTextFormat = 3;
+    /** 0 = 旧版 [开始,结束,说话人] 行（与体验页一致）；3 = 按标点分段 + 词级时间戳 */
+    private Integer resTextFormat = 0;
     private Integer speakerDiarization = 1;
     private Integer speakerNumber = 0;
     private Integer pollIntervalMs = 5000;

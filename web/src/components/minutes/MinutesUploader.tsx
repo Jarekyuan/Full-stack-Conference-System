@@ -18,6 +18,32 @@ interface UploadedAudio {
   fileId: number
 }
 
+
+/** 浏览器能否解码该文件：Chrome 不支持 ALAC，上传前拦截，避免 ASR 成功但播放失败。 */
+async function browserCanPlay(file: File): Promise<boolean> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file)
+    const audio = new Audio()
+    let settled = false
+    const finish = (ok: boolean) => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timer)
+      audio.onloadedmetadata = null
+      audio.onerror = null
+      audio.removeAttribute('src')
+      audio.load()
+      URL.revokeObjectURL(url)
+      resolve(ok)
+    }
+    const timer = window.setTimeout(() => finish(false), 5000)
+    audio.onloadedmetadata = () => finish(Number.isFinite(audio.duration) && audio.duration > 0)
+    audio.onerror = () => finish(false)
+    audio.preload = 'metadata'
+    audio.src = url
+  })
+}
+
 function audioFileKey(file: File): string {
   return `${file.name}:${file.size}:${file.lastModified}`
 }
@@ -32,13 +58,15 @@ export default function MinutesUploader({ meetingId, onImported }: Props) {
   const { message } = App.useApp()
   const audioInput = useRef<HTMLInputElement>(null)
   const [audioFile, setAudioFile] = useState<File | null>(null)
+  const [checkingAudio, setCheckingAudio] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   // ref 给异步流程读最新值，state 只负责渲染"已上传/待转写"标签
   const uploadedRef = useRef<UploadedAudio | null>(null)
   const [uploaded, setUploaded] = useState<UploadedAudio | null>(null)
   const { upload, pause, resume, reset, progress, status, error } = useMultipartUpload(meetingId)
 
-  const selectionLocked = submitting || status === 'uploading' || status === 'paused'
+  const selectionLocked =
+    submitting || checkingAudio || status === 'uploading' || status === 'paused'
   const uploadedForCurrentFile =
     uploaded != null && audioFile != null && uploaded.key === audioFileKey(audioFile)
   const uploadStatusText =
@@ -59,10 +87,25 @@ export default function MinutesUploader({ meetingId, onImported }: Props) {
     setUploaded(value)
   }
 
-  const handleAudioChange = (file: File | null) => {
-    setAudioFile(file)
+  const handleAudioChange = async (file: File | null) => {
     // 换文件后旧 fileId 不可复用；key 已含 size/lastModified，这里仍显式清缓存
     rememberUploaded(null)
+    if (!file) {
+      setAudioFile(null)
+      return
+    }
+    setCheckingAudio(true)
+    try {
+      const playable = await browserCanPlay(file)
+      if (!playable) {
+        setAudioFile(null)
+        message.error('浏览器无法解码该音频（例如 ALAC），请转成 AAC/M4A 或 MP3 后再上传')
+        return
+      }
+      setAudioFile(file)
+    } finally {
+      setCheckingAudio(false)
+    }
   }
 
   const finishTranscription = async (fileId: number) => {
@@ -149,7 +192,7 @@ export default function MinutesUploader({ meetingId, onImported }: Props) {
           hidden
           disabled={selectionLocked}
           onChange={(e) => {
-            handleAudioChange(e.target.files?.[0] ?? null)
+            void handleAudioChange(e.target.files?.[0] ?? null)
             e.target.value = ''
           }}
         />
@@ -202,7 +245,8 @@ export default function MinutesUploader({ meetingId, onImported }: Props) {
 
       <Button
         type="primary"
-        loading={submitting || status === 'uploading'}
+        loading={submitting || checkingAudio || status === 'uploading'}
+        disabled={checkingAudio}
         onClick={() => void handleSubmit()}
       >
         上传并开始转写

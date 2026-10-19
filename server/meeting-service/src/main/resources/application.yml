@@ -117,7 +117,7 @@ minutes:
     endpoint: ${TENCENT_ASR_ENDPOINT:asr.tencentcloudapi.com}
     engine-model-type: ${TENCENT_ASR_ENGINE:16k_zh}
     channel-num: 1
-    res-text-format: 3
+    res-text-format: 0
     speaker-diarization: 1
     speaker-number: 0
     poll-interval-ms: 5000

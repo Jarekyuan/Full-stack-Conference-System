@@ -32,7 +32,7 @@ public class TencentAsrClient implements AsrClient {
         CreateRecTaskRequest request = new CreateRecTaskRequest();
         request.setEngineModelType(properties.getEngineModelType());
         request.setChannelNum(longValue(properties.getChannelNum(), 1L));
-        request.setResTextFormat(longValue(properties.getResTextFormat(), 3L));
+        request.setResTextFormat(longValue(properties.getResTextFormat(), 0L));
         request.setSourceType(0L);
         request.setUrl(audioUrl);
         request.setSpeakerDiarization(longValue(properties.getSpeakerDiarization(), 1L));
@@ -78,7 +78,12 @@ public class TencentAsrClient implements AsrClient {
             if (status != 2L) {
                 return AsrQueryResult.processing();
             }
-            List<Sentence> sentences = mapSentences(data.getResultDetail());
+            // ResTextFormat=0 的 Result 是旧版体验页的 [开始,结束,说话人] 行，
+            // 比 ResultDetail 的逐句切分更接近用户习惯；为空时再回退到 structured detail。
+            List<Sentence> sentences = AsrResultParser.parse(data.getResult());
+            if (sentences.isEmpty()) {
+                sentences = mapSentences(data.getResultDetail());
+            }
             long durationMs = data.getAudioDuration() == null
                     ? 0L : Math.round(data.getAudioDuration() * 1000);
             return new AsrQueryResult(Status.SUCCESS, sentences, durationMs, null);
