@@ -381,3 +381,12 @@ CREATE TABLE IF NOT EXISTS meeting_transcript_segment (
   UNIQUE KEY uk_minutes_seq (minutes_id, seq),
   KEY idx_minutes_start (minutes_id, start_ms)
 ) ENGINE = InnoDB COMMENT = '转写分段';
+
+-- ----------------------------------------------------------------------------
+-- 21. 应用账号（最小权限：业务服务不使用 root）
+-- ⚠️ 这是开发默认口令；deploy/.env 可通过 DB_USER/DB_PASSWORD 覆盖，
+--    compose 的 mysql-init 会在每次启动时同步密码。
+-- ----------------------------------------------------------------------------
+CREATE USER IF NOT EXISTS 'smt_app'@'%' IDENTIFIED BY 'smt_app123';
+GRANT SELECT, INSERT, UPDATE, DELETE ON smt_meeting.* TO 'smt_app'@'%';
+FLUSH PRIVILEGES;

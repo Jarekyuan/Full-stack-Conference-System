@@ -11,13 +11,17 @@
 cd deploy
 cp .env.example .env          # 可选：默认零依赖，不填也能跑
 docker compose up -d --build
-docker compose ps             # 期望 9 个容器 Up（infra 4 + 服务 4 + web 1）
+docker compose ps             # 期望 9 个常驻容器 Up + mysql-init 一次性任务退出 0
 ```
 
 浏览器打开 **http://localhost:8000**，用 `admin / admin123` 登录。
 
 > 若本机 IDE 已启动 8080~8083 的 Java 进程，先停掉再跑 compose；compose 只映射
 > gateway 8080 与 web 8000。已有 infra 容器会被 compose 接管，命名卷与数据保留。
+>
+> 默认只绑 `127.0.0.1`，适合本机演示。要局域网访问：在 `deploy/.env` 设
+> `BIND_ADDR=0.0.0.0`，**同时**换掉 `JWT_SECRET`（`openssl rand -base64 32`）
+> 并修改种子 `admin` 密码；不要把默认口令暴露到公网。
 
 - 默认 `STORAGE_PROVIDER=local` + `MINUTES_ASR_PROVIDER=mock` + `MINUTES_AI_PROVIDER=mock`：
   不配置任何云密钥即可完整体验预约、审批、通知、会议纪要上传与 AI 生成。
@@ -57,10 +61,10 @@ mysql -h127.0.0.1 -uroot -p < db/02-seed.sql
 
 # 3. 后端（4 个服务各开一个终端；meeting-service 的 COS/DeepSeek 环境变量见 CLAUDE.md §7）
 cd server && mvn -q -DskipTests clean install
-java -jar gateway/target/gateway-1.0.0-SNAPSHOT.jar                    # :8080
-java -jar auth-service/target/auth-service-1.0.0-SNAPSHOT.jar          # :8081
-java -jar meeting-service/target/meeting-service-1.0.0-SNAPSHOT.jar    # :8082
-java -jar notification-service/target/notification-service-1.0.0-SNAPSHOT.jar  # :8083
+env -u SERVER__PORT java -jar gateway/target/gateway-1.0.0-SNAPSHOT.jar                    # :8080
+env -u SERVER__PORT java -jar auth-service/target/auth-service-1.0.0-SNAPSHOT.jar          # :8081
+env -u SERVER__PORT java -jar meeting-service/target/meeting-service-1.0.0-SNAPSHOT.jar    # :8082
+env -u SERVER__PORT java -jar notification-service/target/notification-service-1.0.0-SNAPSHOT.jar  # :8083
 
 # 4. 前端
 cd web && npm ci && npm run dev                      # :5173（代理 /api、/ws → :8080）
@@ -137,8 +141,9 @@ cd server && mvn test                             # 全量 318 例
 cd web && npm run check                           # 157 例
 cd web && npm run build
 
-# 部署验收（compose 栈或本地服务均可，经 Nginx/网关入口）
-BASE=http://localhost:8000 NACOS=http://localhost:8848 bash scripts/verify-deploy.sh   # 13/13
+# 部署验收（需要 Nginx 入口；纯本地 8080/5173 模式请把 BASE 指向实际入口）
+BASE=http://localhost:8000 NACOS=http://localhost:8848 bash scripts/verify-deploy.sh   # 15/15
+# COS 存储时跳过 /files/local 检查：CHECK_LOCAL_FILES=0 ...
 
 # 纪要链路（需服务已启动）
 bash scripts/verify-minutes.sh                    # 23/23
@@ -153,11 +158,12 @@ node web/e2e/e2e-multi-tab-auth.cjs               # 3/3
 ## 🔁 CI（GitHub Actions）
 
 - [.github/workflows/ci.yml](.github/workflows/ci.yml)
-  - `backend`：MySQL/Redis/RabbitMQ service containers + `mvn test`（排除依赖真实 auth-service 的双态 Feign 测试）
+  - `backend`：MySQL/Redis/RabbitMQ service containers + `mvn test`（业务连接使用最小权限 `smt_app`；排除依赖真实 auth-service 的双态 Feign 测试）
   - `frontend`：Node 20 + `npm ci` + `npm run check` + `npm run build`
   - `compose-config`：`docker compose config --quiet`
-  - `compose-smoke`（手动触发）：起 9 容器 + `scripts/verify-deploy.sh`
-- 本地等价门禁：`bash scripts/ci.sh`（需本地 infra 已启动；已跑通：后端 317、前端 157、build、compose config）
+  - `docker-build`：构建全部镜像 + `nginx -t` + 校验 jar 内无 `application-local.yml`
+  - `compose-smoke`（手动触发）：起全栈 + `scripts/verify-deploy.sh`
+- 本地等价门禁：`bash scripts/ci.sh`（需本地 infra 已启动；已跑通：后端 317、前端 157、build、compose config、Nginx `-t`）
 
 > `AuthFeignClientTest` 的“auth 在线/离线”两个断言互斥，默认套件排除；
 > 需要时按 `docs/05` 的命令单独执行。
@@ -183,7 +189,7 @@ bash scripts/concurrent-modify.sh 10
 | 现象 | 处理 |
 |------|------|
 | 首次 `docker compose up --build` 很慢 | 首次要下 Maven/npm 依赖；Maven 已配阿里云镜像（`server/.maven/settings.xml`） |
-| `docker compose ps` 有容器 unhealthy | 看 `docker compose logs <service>`；Nacos 启动最慢，等健康检查通过 |
+| `docker compose ps` 有 infra 容器 unhealthy | 看 `docker compose logs <service>`；Nacos 启动最慢，等健康检查通过 |
 | 8080 / 8000 被占用 | 在 `deploy/.env` 改 `GATEWAY_PORT` / `WEB_PORT` |
 | 3306 / 6379 被本机服务占用 | 停掉本机服务，或覆盖 `MYSQL_PORT` / `REDIS_PORT` 等映射 |
 | Nacos 反复重启 | Docker Desktop 内存调到 ≥ 6GB |
@@ -191,8 +197,11 @@ bash scripts/concurrent-modify.sh 10
 | 想清空演示数据 | `docker compose down -v` 后重新 `up`（会重跑 01+02） |
 | 会议纪要上传/播放失败 | 默认 local 存储请从 :8000 访问；真实 ASR 必须配 COS，不能只用 local |
 | 用 compose 打开已有真实会议，音频提示不存在 | 默认 local 与已有 COS 对象不匹配；在 `deploy/.env` 设 `STORAGE_PROVIDER=cos` 并填 `COS_*` |
+| 改了 `MYSQL_ROOT_PASSWORD` 后 MySQL 一直 unhealthy | 该变量只在首次初始化数据卷时生效；已有卷需 `ALTER USER` 或 `down -v`（清数据） |
+| 改了 `RABBITMQ_USER/PASSWORD` 后应用连不上 MQ | 同上，broker 用户只在首次初始化卷时创建；已有卷用 `rabbitmqctl` 改 |
 | 本地开发时服务注册到错误 IP | 本地 profile 用 `127.0.0.1`；compose 内通过 `SPRING_CLOUD_NACOS_DISCOVERY_IP=""` 自动探测容器 IP |
 | 用 `-p` 做隔离验证后 `down` 找错网络 | `down` 必须传与 `up` 相同的 `SMT_NETWORK` / `*_CONTAINER_NAME` 变量 |
+| `verify-deploy.sh` 的 `/files/local` 检查失败 | 该检查只适用于 `STORAGE_PROVIDER=local`；COS 部署用 `CHECK_LOCAL_FILES=0` |
 
 ---
 

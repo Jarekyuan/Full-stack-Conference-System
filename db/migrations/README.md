@@ -14,6 +14,7 @@
 | 脚本 | 适用场景 | 说明 |
 |------|----------|------|
 | `03-asr-task.sql` | M6.7 之前创建的库 | 给 `meeting_minutes` 补 `asr_*` 字段与 `idx_asr_status` |
+| `04-app-user.sql` | 已有库启用最小权限账号 | 创建 `smt_app`，仅授予 DML；同步 `DB_USER`/`DB_PASSWORD` |
 
 执行示例：
 

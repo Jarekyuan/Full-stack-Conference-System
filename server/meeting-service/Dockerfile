@@ -15,6 +15,12 @@ COPY meeting-common/src meeting-common/src
 COPY meeting-service/src meeting-service/src
 COPY .maven/settings.xml .maven/settings.xml
 
+# 防御：即使 .dockerignore 被改坏，本地密钥配置也不许进镜像
+RUN if find . -type f \( -name 'application-local.yml' -o -name 'application-local.yaml' \
+        -o -name '*.local.yml' -o -name '*.local.yaml' \) | grep -q .; then \
+        echo 'ERROR: local secret config found in build context' >&2; exit 1; \
+    fi
+
 RUN --mount=type=cache,target=/root/.m2 \
     mvn -B -ntp -s .maven/settings.xml -pl meeting-service -am -Dmaven.test.skip=true package
 

@@ -10,7 +10,7 @@
 # 说明：
 #   - 基础设施与 docker-compose.infra.yml 使用同一个 project name（smt-infra）
 #     和同一组命名卷，已有数据不会因为切换文件而丢失。
-#   - 只有 gateway 和 web 映射宿主端口；4 个 Java 服务只在 smt-net 内可达。
+#   - 只有 gateway 和 web 映射宿主端口；其余 3 个 Java 服务只在 smt-net 内可达。
 #   - 默认 local 存储 + mock ASR/AI，无需任何云密钥即可冷启动。
 #     真实 COS / 腾讯 ASR / DeepSeek 通过 deploy/.env 覆盖（见 .env.example）。
 #   - 若要与本机 docker-compose.infra.yml 并行做隔离验证，可覆盖
@@ -29,6 +29,12 @@ x-app-env: &app-env
   # application.yml 里的 127.0.0.1 只在本地开发时使用
   SPRING_CLOUD_NACOS_DISCOVERY_IP: ""
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   # --------------------------------------------------------------------------
   # 基础设施（与 docker-compose.infra.yml 保持一致，端口只绑回环）
@@ -37,6 +43,7 @@ services:
     image: mysql:8.0
     container_name: ${MYSQL_CONTAINER_NAME:-smt-mysql}
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
     environment:
@@ -60,10 +67,35 @@ services:
       start_period: 30s
     networks: [smt-net]
 
+  # 一次性任务：确保最小权限账号存在，并同步 .env 中的 DB_PASSWORD。
+  # 每次 up 都跑；CREATE/ALTER/GRANT 幂等，完成后退出 0。
+  mysql-init:
+    image: mysql:8.0
+    restart: "no"
+    logging: *default-logging
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
+      DB_USER: ${DB_USER:-smt_app}
+      DB_PASSWORD: ${DB_PASSWORD:-smt_app123}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mysql -h mysql -uroot -p"$$MYSQL_ROOT_PASSWORD" -e "
+        CREATE USER IF NOT EXISTS '$$DB_USER'@'%' IDENTIFIED BY '$$DB_PASSWORD';
+        ALTER USER '$$DB_USER'@'%' IDENTIFIED BY '$$DB_PASSWORD';
+        GRANT SELECT, INSERT, UPDATE, DELETE ON smt_meeting.* TO '$$DB_USER'@'%';
+        FLUSH PRIVILEGES;"
+    networks: [smt-net]
+
   redis:
     image: redis:7-alpine
     container_name: ${REDIS_CONTAINER_NAME:-smt-redis}
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis123}
@@ -82,12 +114,13 @@ services:
     image: rabbitmq:3.13-management
     container_name: ${RABBITMQ_CONTAINER_NAME:-smt-rabbitmq}
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "127.0.0.1:${RABBITMQ_PORT:-5672}:5672"
       - "127.0.0.1:${RABBITMQ_MGMT_PORT:-15672}:15672"
     environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
       TZ: Asia/Shanghai
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
@@ -103,6 +136,7 @@ services:
     image: nacos/nacos-server:v2.4.2
     container_name: ${NACOS_CONTAINER_NAME:-smt-nacos}
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "127.0.0.1:${NACOS_PORT:-8848}:8848"
       - "127.0.0.1:${NACOS_GRPC_PORT:-9848}:9848"
@@ -128,11 +162,12 @@ services:
       context: ../server
       dockerfile: auth-service/Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     environment:
       <<: *app-env
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/smt_meeting?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
-      SPRING_DATASOURCE_USERNAME: root
-      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
+      SPRING_DATASOURCE_USERNAME: ${DB_USER:-smt_app}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-smt_app123}
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
@@ -140,6 +175,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      mysql-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       nacos:
@@ -152,18 +189,19 @@ services:
       context: ../server
       dockerfile: meeting-service/Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     environment:
       <<: *app-env
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/smt_meeting?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
-      SPRING_DATASOURCE_USERNAME: root
-      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
+      SPRING_DATASOURCE_USERNAME: ${DB_USER:-smt_app}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-smt_app123}
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
       SPRING_RABBITMQ_HOST: rabbitmq
       SPRING_RABBITMQ_PORT: 5672
-      RABBITMQ_USER: guest
-      RABBITMQ_PASSWORD: guest
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
       # 会议纪要：默认零依赖的本地存储 + mock；真实云服务见 .env.example
       STORAGE_PROVIDER: ${STORAGE_PROVIDER:-local}
       MINUTES_LOCAL_DIR: /app/data/minutes
@@ -183,6 +221,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      mysql-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       rabbitmq:
@@ -202,21 +242,24 @@ services:
       context: ../server
       dockerfile: notification-service/Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     environment:
       <<: *app-env
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/smt_meeting?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
-      SPRING_DATASOURCE_USERNAME: root
-      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
+      SPRING_DATASOURCE_USERNAME: ${DB_USER:-smt_app}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-smt_app123}
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
       SPRING_RABBITMQ_HOST: rabbitmq
       SPRING_RABBITMQ_PORT: 5672
-      RABBITMQ_USER: guest
-      RABBITMQ_PASSWORD: guest
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
     depends_on:
       mysql:
         condition: service_healthy
+      mysql-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       rabbitmq:
@@ -231,8 +274,10 @@ services:
       context: ../server
       dockerfile: gateway/Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     ports:
-      - "${GATEWAY_PORT:-8080}:8080"
+      # 默认只绑回环；局域网演示显式设置 BIND_ADDR=0.0.0.0
+      - "${BIND_ADDR:-127.0.0.1}:${GATEWAY_PORT:-8080}:8080"
     environment:
       <<: *app-env
       JWT_SECRET: ${JWT_SECRET:-smt-dev-secret-0123456789-abcdefghijklmnopqrstuv}
@@ -247,8 +292,9 @@ services:
       context: ..
       dockerfile: web/Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     ports:
-      - "${WEB_PORT:-8000}:80"
+      - "${BIND_ADDR:-127.0.0.1}:${WEB_PORT:-8000}:80"
     depends_on:
       - gateway
       - meeting-service

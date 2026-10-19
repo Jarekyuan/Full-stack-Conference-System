@@ -13,6 +13,12 @@ docs
 scripts
 db
 web/e2e
-*.local.md
-.env
-.env.*
+**/*.local.md
+# Docker 的 .env 模式只匹配上下文根目录，嵌套目录必须用 **/
+**/.env
+**/.env.*
+# 本地密钥配置（后端构建同样有 server/.dockerignore 兜底）
+**/application-local.yml
+**/application-local.yaml
+**/*.local.yml
+**/*.local.yaml

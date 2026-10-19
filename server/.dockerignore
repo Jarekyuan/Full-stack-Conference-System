@@ -1,6 +1,14 @@
 # 构建上下文只保留源码与 POM；target/logs 由镜像内 Maven 重新生成
 **/target
 **/logs
-*.log
+**/*.log
 .idea
 .DS_Store
+
+# 本地密钥配置绝不进镜像（项目约定：真实密钥放 application-local.yml）
+**/application-local.yml
+**/application-local.yaml
+**/*.local.yml
+**/*.local.yaml
+**/.env
+**/.env.*

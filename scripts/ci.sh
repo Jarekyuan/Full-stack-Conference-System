@@ -6,6 +6,7 @@
 # 默认排除；需要时按 docs/05 的命令单独跑。
 set -euo pipefail
 cd "$(dirname "$0")/.."
+export TZ=Asia/Shanghai
 
 echo "==> 后端单测（排除 AuthFeignClientTest）"
 (
@@ -25,6 +26,19 @@ echo "==> 前端类型检查 / lint / 单测 / 构建"
 
 echo "==> compose 配置校验"
 docker compose -f deploy/docker-compose.yml config --quiet
+
+echo "==> Nginx 配置校验"
+docker run --rm \
+  --add-host gateway:127.0.0.1 \
+  --add-host meeting-service:127.0.0.1 \
+  -v "$PWD/deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro" \
+  nginx:1.27-alpine nginx -t
+
+# 本地默认不重复构建镜像（慢）；需要时 CI_BUILD_IMAGES=1 bash scripts/ci.sh
+if [ "${CI_BUILD_IMAGES:-0}" = "1" ]; then
+  echo "==> Docker 镜像构建"
+  docker compose -f deploy/docker-compose.yml build
+fi
 
 echo
 echo "CI checks passed"

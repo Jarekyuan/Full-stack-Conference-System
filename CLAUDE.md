@@ -59,8 +59,8 @@
 
 **M4 已全部完成（2026-10-16，12/12）**；**M5 已全部完成（2026-10-19，7/7）**：
 T5.5~T5.7 已落地为 4 个 Dockerfile + `deploy/docker-compose.yml` + `web/Dockerfile` /
-`deploy/nginx.conf`，默认 local + mock 零依赖冷启动；隔离栈验收 9 容器、
-`scripts/verify-deploy.sh` 13/13、compose 纪要 E2E 11/11。真实云服务在 `deploy/.env` 切换。
+`deploy/nginx.conf`，默认 local + mock 零依赖冷启动；隔离栈验收 9 个常驻容器 + `mysql-init`、
+`scripts/verify-deploy.sh` 15/15、compose 纪要 E2E 11/11。真实云服务在 `deploy/.env` 切换。
 
 **T1.20 组织与用户（2026-10-17，v1.3 遗留项补齐）**：`/admin/users` 从 Placeholder 换成
 「组织与用户」单页（左部门树 + 右成员表）。后端补了 `PUT /users/{id}`（改姓名/邮箱/部门/角色）、
@@ -484,7 +484,7 @@ user1 端**铃铛角标秒级 +1**（WS）→ 打开通知中心看到"审批通
 
 ## 7. 怎么跑起来
 
-### 方式 A：一键全栈（Docker Compose，9 容器）
+### 方式 A：一键全栈（Docker Compose，9 个常驻容器 + mysql-init）
 
 ```bash
 cd deploy && cp .env.example .env      # 可选；默认 local + mock，零云密钥
