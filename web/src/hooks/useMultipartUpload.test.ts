@@ -51,6 +51,7 @@ function remoteSession(overrides: Partial<MultipartSession> = {}): MultipartSess
     chunkSize: 5,
     totalParts: 3,
     status: 0,
+    fileId: null,
     uploadedParts: [],
     missingPartNumbers: [1, 2, 3],
     expiresAt: '2026-10-20T00:00:00Z',
@@ -245,7 +246,13 @@ describe('resolveResumeSession', () => {
     ])
   })
 
-  it('后端会话已完成/已中止时重新开始', () => {
+  it('后端会话已完成且有 fileId 时直接复用，不再重传', () => {
+    expect(
+      resolveResumeSession(storedSession(), remoteSession({ status: 10, fileId: 99 })),
+    ).toEqual({ action: 'completed', fileId: 99 })
+  })
+
+  it('后端会话已中止时重新开始', () => {
     expect(resolveResumeSession(storedSession(), remoteSession({ status: 20 }))).toEqual({
       action: 'restart',
     })

@@ -7,8 +7,8 @@
  * - seek / 重命名回调保持引用稳定，避免破坏 TranscriptRow 的 memo。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Alert, App, Button, Card, Space, Spin, Tabs, Tag, Typography } from 'antd'
-import { Download, RefreshCw } from 'lucide-react'
+import { Alert, App, Button, Card, Modal, Space, Spin, Tabs, Tag, Typography } from 'antd'
+import { Download, RefreshCw, Upload } from 'lucide-react'
 import type { MeetingDetail } from '@/api/meeting'
 import {
   exportMinutes,
@@ -26,6 +26,7 @@ import AudioPlayer from './AudioPlayer'
 import MinutesAiBar from './MinutesAiBar'
 import MinutesInsights from './MinutesInsights'
 import MinutesSummary from './MinutesSummary'
+import MinutesUploader from './MinutesUploader'
 import SpeakerRenameModal from './SpeakerRenameModal'
 import TranscriptList from './TranscriptList'
 import { describeMinutesError, minutesAiStatusMeta } from './minutesUi'
@@ -71,6 +72,7 @@ export default function AudioTranscriptWorkspace({
   const [generating, setGenerating] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [reimportOpen, setReimportOpen] = useState(false)
 
   // 生成接口返回的 aiStatus：父级刷新失败时仍能保持“生成中”，避免旧状态误放开按钮
   const [pendingAiStatus, setPendingAiStatus] = useState<number | null>(null)
@@ -193,8 +195,8 @@ export default function AudioTranscriptWorkspace({
   }, [capturePendingSeek, hasAudio, loadAudioUrl])
 
   const handleAudioLoadedMetadata = useCallback((audio: HTMLAudioElement) => {
-    // 源可正常解码：清除旧源错误，并重新武装下一次自动重签
-    audioResignedRef.current = 0
+    // 只清除旧源错误；不再在这里重置自动重签计数——损坏源可能在 loadedmetadata 之后才解码失败，
+    // 重置会重新武装自动重签并形成 audio-url 循环。重新武装只在手动 retry 时发生。
     if (audioErrorRef.current !== null) {
       audioErrorRef.current = null
       setAudioError(null)
@@ -310,6 +312,16 @@ export default function AudioTranscriptWorkspace({
     void loadTranscript()
   }, [loadTranscript])
 
+  const handleReimport = useCallback(() => {
+    modal.confirm({
+      title: '重新导入会议纪要？',
+      content: '将覆盖当前音频、转写与发言人，并重置 AI 纪要与会议洞察。',
+      okText: '继续导入',
+      cancelText: '取消',
+      onOk: () => setReimportOpen(true),
+    })
+  }, [modal])
+
   // 头部刷新：纪要 + 转写必刷；音频只在没有地址或处于错误态时重取，
   // 健康播放中的源保持 src 不动，避免进度被重置到 0。
   const handleRefresh = useCallback(async () => {
@@ -356,6 +368,11 @@ export default function AudioTranscriptWorkspace({
           <Button icon={<Download size={15} />} loading={exporting} onClick={handleExport}>
             导出 Word
           </Button>
+          {canManage && (
+            <Button icon={<Upload size={15} />} onClick={handleReimport}>
+              重新导入
+            </Button>
+          )}
         </Space>
       }
     >
@@ -482,6 +499,27 @@ export default function AudioTranscriptWorkspace({
         onClose={() => setRenaming(null)}
         onSubmit={handleRename}
       />
+      <Modal
+        title="重新导入会议纪要"
+        open={reimportOpen}
+        footer={null}
+        width={720}
+        destroyOnClose
+        onCancel={() => setReimportOpen(false)}
+      >
+        <MinutesUploader
+          meetingId={meeting.id}
+          onImported={() => {
+            setReimportOpen(false)
+            // 重导入会替换 segments/speakers；父级刷新只更新 minutes 概要，
+            // 转写列表必须显式重取，否则工作台仍显示旧分段。
+            void loadTranscript()
+            void onRefresh().catch(() => {
+              // 刷新失败由面板的错误态呈现
+            })
+          }}
+        />
+      </Modal>
     </Card>
   )
 }

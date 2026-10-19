@@ -84,11 +84,16 @@ COMPLETE=$(curl -s -X POST "$BASE/files/multipart/${UPLOAD_ID}/complete" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$BODY")
 FILE_ID=$(echo "$COMPLETE" | jget data.fileId)
 check "complete 返回 fileId" "$([ -n "$FILE_ID" ] && [ "$FILE_ID" != "None" ] && echo 1 || echo 0)" "1"
+SESSION=$(curl -s "$BASE/files/multipart/${UPLOAD_ID}" -H "Authorization: Bearer $TOKEN")
+check "已完成会话返回 fileId" "$(echo "$SESSION" | jget data.fileId)" "$FILE_ID"
+check "已完成会话 status 10" "$(echo "$SESSION" | jget data.status)" "10"
 
 # 6) 导入转写
-IMPORT_BODY=$(FILE_ID="$FILE_ID" python3 - <<'PY'
+PRIVACY_MARKER="私有正文${TS}"
+IMPORT_BODY=$(FILE_ID="$FILE_ID" PRIVACY_MARKER="$PRIVACY_MARKER" python3 - <<'PY'
 import json, os
-text = "[0:0.100,0:0.500,0]  你好\n[0:0.600,0:0.900,1]  世界"
+text = ("[0:0.100,0:0.500,0]  你好\n[0:0.600,0:0.900,1]  世界 "
+        + os.environ["PRIVACY_MARKER"])
 print(json.dumps({
     "fileId": int(os.environ["FILE_ID"]),
     "transcriptText": text,
@@ -108,6 +113,10 @@ check "发言时长 700ms" "$(echo "$DETAIL" | jget data.insights.speakingMs)" "
 check "分段数 2" "$(echo "$DETAIL" | jget data.insights.totalSegments)" "2"
 TRANSCRIPT=$(curl -s "$BASE/meetings/${MEETING_ID}/minutes/transcript" -H "Authorization: Bearer $TOKEN")
 check "转写第 1 段文本" "$(echo "$TRANSCRIPT" | jget data.segments.0.text)" "你好"
+LOG_FILE="${MEETING_LOG:-server/logs/meeting-service.log}"
+if [ -f "$LOG_FILE" ]; then
+  check "服务日志不含转写正文" "$(grep -c "$PRIVACY_MARKER" "$LOG_FILE" || true)" "0"
+fi
 
 # 8) 发言人重命名
 RENAME=$(curl -s -X PUT "$BASE/meetings/${MEETING_ID}/minutes/speakers/0" \

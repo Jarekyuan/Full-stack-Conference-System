@@ -52,6 +52,7 @@ export interface StoredSession {
 
 export type ResumeDecision =
   | { action: 'resume'; session: ActiveSession; completed: Map<number, string> }
+  | { action: 'completed'; fileId: number }
   | { action: 'restart' }
 
 export function buildResumeKey(meetingId: number, file: File): string {
@@ -121,6 +122,9 @@ export function resolveResumeSession(
   stored: StoredSession,
   remote: MultipartSession,
 ): ResumeDecision {
+  if (remote.status === 10 && remote.fileId != null) {
+    return { action: 'completed', fileId: remote.fileId }
+  }
   if (
     remote.status !== 0 ||
     remote.totalParts !== stored.totalParts ||
@@ -387,6 +391,15 @@ export function useMultipartUpload(meetingId: number) {
 
           if (remote) {
             const decision = resolveResumeSession(stored, remote)
+            if (decision.action === 'completed') {
+              // 服务端已完成但客户端没收到结果（超时/刷新）：直接复用 fileId，不再整文件重传
+              clearStored(key)
+              if (isCurrent()) {
+                setProgress(100)
+                setStatus('done')
+              }
+              return decision.fileId
+            }
             if (decision.action === 'resume') {
               session = decision.session
               completed = decision.completed

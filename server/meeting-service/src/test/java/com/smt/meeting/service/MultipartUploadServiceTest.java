@@ -381,6 +381,7 @@ class MultipartUploadServiceTest {
         MultipartSessionVO result = service.session(UPLOAD_ID, USER_ID);
 
         assertThat(result.getStatus()).isEqualTo(UploadSessionStatus.COMPLETED);
+        assertThat(result.getFileId()).isEqualTo(9L);
         assertThat(result.getUploadedParts()).isEmpty();
         assertThat(result.getMissingPartNumbers()).isEmpty();
         // 存储层对已完成会话的 listParts 抛 70006——业务层必须先短路
@@ -410,6 +411,7 @@ class MultipartUploadServiceTest {
 
         // 完成是终态：expires_at 已过不影响幂等查询
         assertThat(result.getStatus()).isEqualTo(UploadSessionStatus.COMPLETED);
+        assertThat(result.getFileId()).isEqualTo(9L);
         assertThat(result.getUploadedParts()).isEmpty();
         assertThat(result.getMissingPartNumbers()).isEmpty();
         verify(storage, never()).listParts(anyString(), anyString());

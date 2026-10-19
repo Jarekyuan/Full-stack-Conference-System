@@ -75,6 +75,11 @@ check "正常生成到 30" "$STATUS" "30"
 check "正常生成有摘要" \
   "$(curl -s "$BASE/meetings/${MEETING_ID}/minutes" -H "Authorization: Bearer $TOKEN" \
     | jget data.summary.summary | awk '{print (length($0)>0)?1:0}')" "1"
+LOG_FILE="${MEETING_LOG:-server/logs/meeting-service.log}"
+if [ -f "$LOG_FILE" ]; then
+  check "服务日志不含 AI 摘要" \
+    "$(grep -c '本次会议围绕产品排期与压测计划展开' "$LOG_FILE" || true)" "0"
+fi
 
 # 造失败：文本含 MOCK_FAIL，重置 AI 后再触发
 $MYSQL "USE smt_meeting; UPDATE meeting_transcript_segment s

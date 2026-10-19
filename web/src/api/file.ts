@@ -39,6 +39,8 @@ export interface MultipartSession {
   chunkSize: number
   totalParts: number
   status: number
+  /** 已完成会话的 file_object.id；进行中为 null */
+  fileId: number | null
   uploadedParts: UploadedPart[]
   missingPartNumbers: number[]
   expiresAt: string
@@ -64,7 +66,9 @@ export function getPartUrls(uploadId: string, partNumbers: number[]): Promise<Mu
 }
 
 export function getUploadSession(uploadId: string): Promise<MultipartSession> {
-  return http.get<MultipartSession>(`/files/multipart/${encodeURIComponent(uploadId)}`)
+  return http.get<MultipartSession>(`/files/multipart/${encodeURIComponent(uploadId)}`, {
+    timeout: 30_000,
+  })
 }
 
 export function completeMultipart(
@@ -74,6 +78,7 @@ export function completeMultipart(
   return http.post<FileComplete>(
     `/files/multipart/${encodeURIComponent(uploadId)}/complete`,
     { parts },
+    { timeout: 120_000 },
   )
 }
 

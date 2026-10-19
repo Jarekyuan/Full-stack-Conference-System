@@ -81,6 +81,12 @@ logging:
   # 而一旦有了 logback-spring.xml，yml 的 `logging.pattern.*` 就不再生效——traceId 的格式在 XML 里。
   level:
     com.smt: debug
+    # 隐私：转写正文/发言人/AI 摘要会作为 MyBatis 参数被 DEBUG 打印，单独压到 info。
+    # 其余 mapper 保持 debug，verify-m4-cache.sh 依赖 MeetingMapper/RoomMapper 的 SQL 日志。
+    com.smt.meeting.mapper.TranscriptSegmentMapper: info
+    com.smt.meeting.mapper.MeetingMinutesMapper: info
+    com.smt.meeting.mapper.MinutesSpeakerMapper: info
+    com.smt.meeting.mapper.FileObjectMapper: info
 
 storage:
   provider: ${STORAGE_PROVIDER:cos}   # cos | local

@@ -110,6 +110,16 @@ function writeWav(file) {
       download.suggestedFilename());
     const downloadPath = await download.path();
     check('导出文件非空', !!downloadPath && fs.statSync(downloadPath).size > 0);
+
+    // 重新导入：覆盖转写并刷新工作台（R-17 覆盖规则的 UI 入口）
+    await page.getByRole('button', { name: /重新导入/ }).click();
+    await page.getByRole('button', { name: /继续导入/ }).click();
+    const modal = page.locator('.ant-modal').last();
+    await modal.locator('input[type=file]').nth(0).setInputFiles(WAV);
+    await modal.getByPlaceholder(/恩格斯论述/).fill('[0:0.100,0:0.500,0]  重新导入成功');
+    await modal.getByRole('button', { name: /开始解析/ }).click();
+    await page.getByText('重新导入成功', { exact: false }).first().waitFor({ timeout: 30000 });
+    check('重新导入覆盖转写', true);
   } catch (e) {
     check('脚本执行', false, e.message);
   } finally {

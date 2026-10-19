@@ -180,8 +180,8 @@
 - 新增 5 张表与 7xxxx 错误码；AI 状态机 `0→10→20→30/40`，失败自动重试 3 次；
   `ai_started_at` 作为 run token 参与 CAS，`minutesTaskScheduler` 独立于会议状态/提醒任务；
   生成接口限流 + 同会议 60 秒冷却 + max-chunks 10。
-- 验证：后端 **296 例**（排除需 auth 停机的用例）、`npm run check` **151 例**、
-  `verify-minutes` **19/19**、`verify-minutes-ai` **7/7**、`e2e-meeting-minutes` **7/7**，
+- 验证：后端 **296 例**（排除需 auth 停机的用例）、`npm run check` **152 例**、
+  `verify-minutes` **22/22**、`verify-minutes-ai` **8/8**、`e2e-meeting-minutes` **8/8**，
   其余脚本/e2e 全绿。集成验证时 `admin` 曾被 R7 用例停用：脚本已改为环境已有第二管理员时跳过，
   并在 cleanup 无条件恢复 `admin` 启用。
 
@@ -533,10 +533,10 @@ cd server && mvn -q clean test -Dtest='!AuthFeignClientTest#batchUsersShouldDegr
 #      会以 "No tests matching pattern" 判定失败——看着像构建挂了，其实只是过滤器没匹配到任何用例
 
 # 前端
-cd web && npm run check     # = tsc --noEmit + eslint + vitest（151 例）
+cd web && npm run check     # = tsc --noEmit + eslint + vitest（152 例）
 node e2e/e2e-calendar.cjs   # playwright E2E（需先 npm i --no-save playwright + dev server；详见 web/e2e/README.md）
 node e2e/e2e-notify-ws.cjs  # T4.6：真浏览器验 WS 推送（连接/鉴权拒连/隔离/多标签页/秒级推送/会话注销）
-node e2e/e2e-meeting-minutes.cjs # M6：上传/转写 seek/洞察/AI/Word 导出（需 local provider + mock AI）
+node e2e/e2e-meeting-minutes.cjs # M6：上传/转写 seek/洞察/AI/Word 导出/重新导入（需 local provider + mock AI）
 ```
 
 **演示账号**（密码均为 `admin123`/`user123`）：

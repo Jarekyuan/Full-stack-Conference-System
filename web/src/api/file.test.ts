@@ -47,7 +47,9 @@ describe('file api', () => {
   it('getUploadSession 编码 uploadId', async () => {
     await getUploadSession('upload/1')
 
-    expect(http.get).toHaveBeenCalledWith('/files/multipart/upload%2F1')
+    expect(http.get).toHaveBeenCalledWith('/files/multipart/upload%2F1', {
+      timeout: 30_000,
+    })
   })
 
   it('completeMultipart 编码 uploadId 并把 parts 包成请求体', async () => {
@@ -55,9 +57,11 @@ describe('file api', () => {
 
     await completeMultipart('upload/1', parts)
 
-    expect(http.post).toHaveBeenCalledWith('/files/multipart/upload%2F1/complete', {
-      parts,
-    })
+    expect(http.post).toHaveBeenCalledWith(
+      '/files/multipart/upload%2F1/complete',
+      { parts },
+      { timeout: 120_000 },
+    )
   })
 
   it('abortMultipart 编码 uploadId', async () => {

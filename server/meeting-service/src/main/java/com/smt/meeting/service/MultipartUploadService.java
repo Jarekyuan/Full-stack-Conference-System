@@ -183,6 +183,7 @@ public class MultipartUploadService {
         vo.setStatus(session.getStatus());
         vo.setExpiresAt(session.getExpiresAt());
         if (session.getStatus() == UploadSessionStatus.COMPLETED) {
+            vo.setFileId(session.getFileId());
             vo.setUploadedParts(List.of());
             vo.setMissingPartNumbers(List.of());
             return vo;

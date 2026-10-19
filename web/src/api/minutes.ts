@@ -101,7 +101,9 @@ export function importMinutes(
   meetingId: number,
   input: MinutesImportInput,
 ): Promise<MinutesDetail> {
-  return http.post<MinutesDetail>(`/meetings/${meetingId}/minutes/import`, input)
+  return http.post<MinutesDetail>(`/meetings/${meetingId}/minutes/import`, input, {
+    timeout: 60_000,
+  })
 }
 
 export function renameSpeaker(
