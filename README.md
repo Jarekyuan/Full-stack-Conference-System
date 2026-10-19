@@ -1,5 +1,7 @@
 # 会议室预约系统（new-meeting-systems）
 
+[![CI](https://github.com/Jarekyuan/Full-stack-Conference-System/actions/workflows/ci.yml/badge.svg)](https://github.com/Jarekyuan/Full-stack-Conference-System/actions/workflows/ci.yml)
+
 > **全栈实践项目**：Spring Cloud 微服务（Java 17）+ React 18，从真实企业会议室系统提炼核心业务链路重构。
 > **核心解决两个工程问题**：① 并发预约下的时段冲突控制（分布式锁 + 区间判重）② 会议状态生命周期的一致性（状态机 + 定时补偿 + 事件驱动）。
 
