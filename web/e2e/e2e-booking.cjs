@@ -50,7 +50,7 @@ const hourRatio = (hour) => (hour * 60 - DAY_START_MIN) / DAY_TOTAL_MIN;
   const api = async (path, init = {}) =>
     page.evaluate(
       async ([p, i]) => {
-        const token = localStorage.getItem('meeting.accessToken') || ''; // key 见 web/src/api/token.ts
+        const token = sessionStorage.getItem('meeting.accessToken') || ''; // key 见 web/src/api/token.ts
         const res = await fetch(`/api${p}`, {
           ...i,
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(i.headers || {}) },

@@ -42,7 +42,7 @@ const dayAfter = (n) => new Date(Date.now() + n * 86400000);
   const api = async (p, path, init = {}) =>
     p.evaluate(
       async ([pa, i]) => {
-        const token = localStorage.getItem('meeting.accessToken') || '';
+        const token = sessionStorage.getItem('meeting.accessToken') || '';
         const res = await fetch(`/api${pa}`, {
           ...i,
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(i.headers || {}) },

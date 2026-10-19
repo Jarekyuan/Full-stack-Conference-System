@@ -1,50 +1,116 @@
 /**
  * src/api/token.ts
- * 双 token 的本地存取，独立成模块、不依赖 zustand。
- * 原因：request.ts 是模块级代码（拦截器在组件外运行），若它依赖 React 状态会形成循环依赖；
- * 而 token 又是"认证凭证"这一独立关注点，单独用 localStorage 管理最干净。
- * T1.F3 的 userStore 只存用户信息，登录/登出动作调用这里完成 token 的写入与清除。
+ * 双 token 与会话快照的本地存取，独立成模块、不依赖 zustand。
+ *
+ * **为什么用 sessionStorage 而不是 localStorage**：
+ * 同一个浏览器可以开多个 tab 分别登录不同用户（例如一个管理员、一个审批人）。
+ * localStorage 是同一 origin 全 tab 共享的：后登录的 tab 会覆盖前一个 tab 的 token，
+ * 前一个 tab 下一次请求就变成了"另一个用户"，看起来像被挤掉。
+ * sessionStorage 按 tab 隔离，正好对应"每个 tab 一个登录会话"。
+ *
+ * 兼容升级：旧版本把 token/用户快照放在 localStorage；首次加载时迁移到当前 tab 的
+ * sessionStorage，并清掉共享的 localStorage 副本（新 tab 不会再继承旧登录）。
  */
-
 const ACCESS_TOKEN_KEY = 'meeting.accessToken'
 const REFRESH_TOKEN_KEY = 'meeting.refreshToken'
 
 /**
  * 用户快照的持久化键——zustand persist 的 `name`（见 stores/userStore.ts，从本模块导入，避免键写两处）。
- * 放在这里是因为它和两个 token 同属"**会话**在 localStorage 里的落脚点"：
- * 任何一个"退出"路径都必须把它们一起清掉（评审 P1-14）。
+ * 和两个 token 同属"当前 tab 的会话"，退出时必须一起清掉。
  */
 export const USER_STORAGE_KEY = 'meeting.user'
 
+const memoryValues = new Map<string, string>()
+const memoryStorage: Storage = {
+  get length() {
+    return memoryValues.size
+  },
+  clear: () => memoryValues.clear(),
+  getItem: (key) => memoryValues.get(key) ?? null,
+  key: (index) => Array.from(memoryValues.keys())[index] ?? null,
+  removeItem: (key) => {
+    memoryValues.delete(key)
+  },
+  setItem: (key, value) => {
+    memoryValues.set(key, value)
+  },
+}
+
+/** 当前 tab 的会话存储；隐私模式/测试环境下退回进程内 Map，避免整个应用起不来 */
+export function authStorage(): Storage {
+  if (typeof window !== 'undefined') {
+    try {
+      return window.sessionStorage
+    } catch {
+      // 某些隐私策略会禁用 sessionStorage
+    }
+  }
+  return memoryStorage
+}
+
+function migrateLegacyLocalSession(): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+  try {
+    const tab = authStorage()
+    const legacyKeys = [ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY, USER_STORAGE_KEY]
+    for (const key of legacyKeys) {
+      const oldValue = window.localStorage.getItem(key)
+      if (oldValue != null && tab.getItem(key) == null) {
+        tab.setItem(key, oldValue)
+      }
+      // 清掉共享副本：否则以后新开的 tab 会继承第一位用户的登录态
+      window.localStorage.removeItem(key)
+    }
+  } catch {
+    // localStorage/sessionStorage 不可用时静默降级
+  }
+}
+
+migrateLegacyLocalSession()
+
 export function getAccessToken(): string | null {
-  return localStorage.getItem(ACCESS_TOKEN_KEY)
+  return authStorage().getItem(ACCESS_TOKEN_KEY)
 }
 
 export function getRefreshToken(): string | null {
-  return localStorage.getItem(REFRESH_TOKEN_KEY)
+  return authStorage().getItem(REFRESH_TOKEN_KEY)
 }
 
 export function setTokens(accessToken: string, refreshToken: string): void {
-  localStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
-  localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
+  const storage = authStorage()
+  storage.setItem(ACCESS_TOKEN_KEY, accessToken)
+  storage.setItem(REFRESH_TOKEN_KEY, refreshToken)
 }
 
 export function clearTokens(): void {
-  localStorage.removeItem(ACCESS_TOKEN_KEY)
-  localStorage.removeItem(REFRESH_TOKEN_KEY)
+  const storage = authStorage()
+  storage.removeItem(ACCESS_TOKEN_KEY)
+  storage.removeItem(REFRESH_TOKEN_KEY)
+  // 旧版本共享副本也一并清掉
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.removeItem(ACCESS_TOKEN_KEY)
+      window.localStorage.removeItem(REFRESH_TOKEN_KEY)
+    } catch {
+      // ignore
+    }
+  }
 }
 
 /**
  * 清空整个会话：token **和**用户快照。
- *
- * 评审 P1-14：此前"刷新失败 → 跳登录"只清了 token，`meeting.user` 原样留在 localStorage 里——
- * 上一登录者的姓名/部门/角色在登录页按 F12 就能看到（共用电脑时是实打实的 PII 残留）。
- * token 与用户信息是同一个会话的两个碎片，"清会话"必须是**一个**动作，故出口收敛到本函数。
- *
- * 注：这里只清持久化层。内存里的 zustand store 由调用方所在的整页跳转
- * （`window.location.replace`）重建，不留旧值。
+ * token 与用户信息是同一个会话的两个碎片，"清会话"必须是一个动作。
  */
 export function clearSession(): void {
   clearTokens()
-  localStorage.removeItem(USER_STORAGE_KEY)
+  authStorage().removeItem(USER_STORAGE_KEY)
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.removeItem(USER_STORAGE_KEY)
+    } catch {
+      // ignore
+    }
+  }
 }

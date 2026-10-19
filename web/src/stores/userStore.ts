@@ -6,15 +6,15 @@
  * persist 让刷新页面后用户信息仍在（验收③"登录态保持"）。
  */
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { createJSONStorage, persist } from 'zustand/middleware'
 import { immer } from 'zustand/middleware/immer'
 import type { LoginUser, TokenResult } from '@/api/types'
-import { clearSession, setTokens, USER_STORAGE_KEY } from '@/api/token'
+import { authStorage, clearSession, setTokens, USER_STORAGE_KEY } from '@/api/token'
 import { useNotificationStore } from '@/stores/notificationStore'
 
 interface UserState {
   user: LoginUser | null
-  /** 登录成功：写 token（localStorage）+ 记录用户 */
+  /** 登录成功：写 token（当前 tab 的 sessionStorage）+ 记录用户 */
   login: (token: TokenResult) => void
   /** 登出：清 token + 清用户（后端 logout 由调用方单独触发） */
   logout: () => void
@@ -43,6 +43,8 @@ export const useUserStore = create<UserState>()(
     {
       // 键从 api/token.ts 导入：它同时也是"清会话"要清的键，写两处就会漏一处（评审 P1-14）
       name: USER_STORAGE_KEY,
+      // sessionStorage：每个 tab 独立登录，互不覆盖；刷新当前 tab 仍保留用户信息
+      storage: createJSONStorage(() => authStorage()),
       // 只持久化 user，函数不序列化
       partialize: (state) => ({ user: state.user }),
     },

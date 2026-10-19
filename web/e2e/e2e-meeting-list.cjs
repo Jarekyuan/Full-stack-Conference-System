@@ -58,7 +58,7 @@ const sql = (q) =>
     await page.getByPlaceholder('请输入密码').fill('user123');
     await page.locator('button[type="submit"]').click();
     await page.waitForURL('**/calendar', { timeout: 10000 });
-    const token = await page.evaluate(() => localStorage.getItem('meeting.accessToken'));
+    const token = await page.evaluate(() => sessionStorage.getItem('meeting.accessToken'));
 
     const api = async (path, init = {}) => {
       const res = await fetch(`${API}${path}`, {

@@ -134,7 +134,7 @@ async function waitBadge(page, predicate, timeoutMs = 15000, label = '') {
     await page.getByPlaceholder('请输入密码').fill('user123');
     await page.locator('button[type="submit"]').click();
     await page.waitForURL('**/calendar', { timeout: 10000 });
-    const token = await page.evaluate(() => localStorage.getItem('meeting.accessToken'));
+    const token = await page.evaluate(() => sessionStorage.getItem('meeting.accessToken'));
 
     // ---------- ① 首屏角标 = 库里真实的未读数 ----------
     await sleep(1500); // 等 REST 拉未读数

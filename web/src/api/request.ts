@@ -66,7 +66,7 @@ async function doRefresh(): Promise<string> {
 
 // ———————————————————— 跳登录（登录态彻底失效）————————————————————
 function redirectToLogin(): void {
-  // clearSession（而非 clearTokens）：token 与持久化的用户快照一起清，避免上一用户的资料留在 localStorage（评审 P1-14）
+  // clearSession（而非 clearTokens）：token 与持久化的用户快照一起清，避免上一用户的资料留在当前 tab 的 sessionStorage（评审 P1-14）
   clearSession()
   // T1.F3 接入 react-router 后可改为 navigate；当前用硬跳转兜底，并带上原路径供登录后跳回
   if (window.location.pathname !== '/login') {

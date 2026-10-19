@@ -21,6 +21,7 @@ node e2e/e2e-calendar.cjs       # T2.F1：切周加载 / 会议落格 / 点空�
 node e2e/e2e-booking.cjs        # T2.F2：创建+刷新日历 / 冲突提示与弹窗 / 幂等只落一场
 node e2e/e2e-meeting-list.cjs   # T2.F3：筛选分页 / 状态时间线 / 取消 → 50 / 取消按钮仅组织人
 node e2e/e2e-approval.cjs       # T3.F1+F2：审批中心（待办→通过→已办）+ 详情页延长/提前结束
+node e2e/e2e-multi-tab-auth.cjs # 同一浏览器两个 tab 登录不同用户，会话互不覆盖
 node e2e/e2e-meeting-minutes.cjs # M6：上传音频 → ASR 转写 → 联动 seek → 洞察 → AI → Word 下载 → 重新上传
 ```
 
@@ -53,8 +54,8 @@ node e2e/e2e-meeting-minutes.cjs # M6：上传音频 → ASR 转写 → 联动 s
   抽屉不会开。要点格子里的**空白高度**。
 - **断言尽量用角色/结构定位，别用整页文本包含**：详情页时间线里就有"取消会议"这几个字，
   用 `!body.includes('取消会议')` 断言"看不到取消按钮"必然误伤。
-- 登录态由页面自己走登录流程建立；需要直连接口做机制级断言时，token 的 localStorage key 是
-  `meeting.accessToken`（见 `src/api/token.ts`）。
+- 登录态由页面自己走登录流程建立；需要直连接口做机制级断言时，token 的 **sessionStorage** key 是
+  `meeting.accessToken`（每个 tab 独立会话，见 `src/api/token.ts`）。
 
 > 另有若干更早的本地脚本（登录/守卫/刷新 single-flight/会议室管理，对应 T1.F3~T1.F4）只在开发机上，
 > 未入库；若要纳入 CI，按上面同样约定补进来即可。

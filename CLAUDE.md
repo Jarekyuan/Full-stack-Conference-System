@@ -552,6 +552,7 @@ cd web && npm run check     # = tsc --noEmit + eslint + vitest（157 例）
 node e2e/e2e-calendar.cjs   # playwright E2E（需先 npm i --no-save playwright + dev server；详见 web/e2e/README.md）
 node e2e/e2e-notify-ws.cjs  # T4.6：真浏览器验 WS 推送（连接/鉴权拒连/隔离/多标签页/秒级推送/会话注销）
 node e2e/e2e-meeting-minutes.cjs # M6：上传/ASR 转写/seek/洞察/AI/Word 导出/重新上传（local 或 COS；ASR 建议 mock）
+node e2e/e2e-multi-tab-auth.cjs # 同浏览器两个 tab 分别登录 user1/admin，验证 sessionStorage 会话隔离
 ```
 
 **演示账号**（密码均为 `admin123`/`user123`）：
