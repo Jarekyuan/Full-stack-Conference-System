@@ -11,6 +11,8 @@ import { minutesAiStatusMeta } from './minutesUi'
 interface Props {
   aiStatus: number
   aiError: string | null
+  /** mock provider：未调用真实大模型，明确提示避免把演示数据当成生成异常 */
+  demoMode: boolean
   canManage: boolean
   loading: boolean
   onGenerate: () => void
@@ -19,6 +21,7 @@ interface Props {
 export default function MinutesAiBar({
   aiStatus,
   aiError,
+  demoMode,
   canManage,
   loading,
   onGenerate,
@@ -42,6 +45,14 @@ export default function MinutesAiBar({
           </Button>
         )}
       </Space>
+      {demoMode && (
+        <Alert
+          type="warning"
+          showIcon
+          message="当前为本地演示模式（mock）"
+          description="未调用真实大模型，纪要按照语音转写做抽取式生成；配置 DEEPSEEK_API_KEY 并切换 MINUTES_AI_PROVIDER=deepseek 后即可生成真实 AI 纪要。"
+        />
+      )}
       {aiStatus === 40 && aiError && <Alert type="error" showIcon message={aiError} />}
       {busy && (
         <Alert type="info" showIcon message="AI 正在生成，通常需要几十秒；失败会自动重试。" />

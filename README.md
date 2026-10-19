@@ -11,9 +11,9 @@
 |------|------|------|
 | 01 | [需求文档](docs/01-需求文档.md) | 原系统梳理 + 筛选决策 + 需求定义 + 面试叙事 |
 | 02 | [技术架构方案](docs/02-技术架构方案.md) | 架构对比 + 技术-业务映射 + 技术链路 + 决策记录 |
-| 03 | [数据库设计](docs/03-数据库设计.md) | 10 张表 + 索引论证 + 面试深挖点 |
-| 04 | [接口设计](docs/04-接口设计.md) | 40 接口 + 30 错误码 + WebSocket 协议 |
-| 05 | [开发计划](docs/05-开发计划.md) | 66 个微任务（五要素）+ 演示脚本 + 风险预案 |
+| 03 | [数据库设计](docs/03-数据库设计.md) | 20 张表 + 索引论证 + 面试深挖点 |
+| 04 | [接口设计](docs/04-接口设计.md) | 62 个接口 + 45 个错误码 + WebSocket 协议 |
+| 05 | [开发计划](docs/05-开发计划.md) | 66 个微任务 + M6 会议纪要 + 演示脚本 |
 | 06 | [环境准备与配置清单](docs/06-环境准备与配置清单.md) | 环境检测 + 配置填写（真实密钥见 gitignore 的 .local 版） |
 
 ## 🚀 快速启动
@@ -27,11 +27,15 @@ docker compose -f docker-compose.infra.yml ps        # 4 容器全 Up 即就绪
 mysql -h127.0.0.1 -uroot -p < db/01-schema.sql
 mysql -h127.0.0.1 -uroot -p < db/02-seed.sql
 
-# 3. 后端（M1 起逐步补齐）
-cd server && mvn spring-boot:run -pl gateway         # :8080
+# 3. 后端（4 个服务各开一个终端；meeting-service 的 COS/DeepSeek 环境变量见 CLAUDE.md §7）
+cd server && mvn -q -DskipTests clean install
+java -jar gateway/target/gateway-1.0.0-SNAPSHOT.jar                    # :8080
+java -jar auth-service/target/auth-service-1.0.0-SNAPSHOT.jar          # :8081
+java -jar meeting-service/target/meeting-service-1.0.0-SNAPSHOT.jar    # :8082
+java -jar notification-service/target/notification-service-1.0.0-SNAPSHOT.jar  # :8083
 
-# 4. 前端（M1 起逐步补齐）
-cd web && pnpm install && pnpm dev                   # :5173（代理 /api → :8080）
+# 4. 前端
+cd web && npm ci && npm run dev                      # :5173（代理 /api → :8080）
 ```
 
 ## 🏗️ 目录结构
@@ -99,4 +103,4 @@ bash scripts/concurrent-modify.sh 10
 
 ---
 
-*开发按 `docs/05-开发计划.md` 的微任务顺序推进；当前进度：M0 ✅ / M1 ✅（23/23）/ M2 后端 ✅（10/10，含并发竞态修复）/ M2 前端进行中。*
+*开发按 `docs/05-开发计划.md` 的微任务顺序推进；当前进度：M0~M4 ✅，M5 **4/7**（周期/统计/看板完成，容器化与部署 T5.5~T5.7 暂缓），M6 会议纪要 ✅（COS 分片 + 腾讯 ASR 导入 + 逐句联动 + DeepSeek 纪要 + Word 导出）。*

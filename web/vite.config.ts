@@ -45,7 +45,10 @@ export default defineConfig({
         manualChunks: {
           'vendor-react': ['react', 'react-dom', 'react-router-dom'],
           'vendor-antd': ['antd'],
-          'vendor-utils': ['axios', 'dayjs', 'zod', 'zustand', 'immer', 'ahooks', 'react-hook-form'],
+          'vendor-utils': [
+            'axios', 'dayjs', 'zod', 'zustand', 'immer', 'ahooks',
+            'react-hook-form', '@tanstack/react-virtual',
+          ],
         },
       },
     },

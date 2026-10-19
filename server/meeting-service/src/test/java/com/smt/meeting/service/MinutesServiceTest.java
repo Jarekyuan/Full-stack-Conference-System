@@ -105,7 +105,7 @@ class MinutesServiceTest {
         return new MinutesService(minutesMapper, speakerMapper, segmentMapper,
                 fileObjectMapper, permissionService, insightsService,
                 MinutesSummaryParser.withObjectMapper(new ObjectMapper()),
-                new TranscriptParser(properties), storage, template, redisson);
+                new TranscriptParser(properties), properties, storage, template, redisson);
     }
 
     // ---------- 夹具 ----------

@@ -5,6 +5,7 @@ import com.smt.meeting.service.LlmClient;
 import com.smt.meeting.service.MockLlmClient;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -21,6 +22,7 @@ import org.springframework.web.client.RestClient;
  * {@link SimpleClientHttpRequestFactory#setReadTimeout(int)} 会退化成"永不超时"，
  * 一次挂死的供应商调用就会长期占住 worker。</p>
  */
+@Slf4j
 @Configuration
 @RequiredArgsConstructor
 public class LlmConfig {
@@ -33,6 +35,18 @@ public class LlmConfig {
         if (timeoutMs == null || timeoutMs < 1) {
             throw new IllegalStateException(
                     "minutes.ai.timeout-ms 必须 >= 1（当前: " + timeoutMs + "）");
+        }
+    }
+
+    @PostConstruct
+    void warnMissingKey() {
+        MinutesProperties.Ai ai = properties.getAi();
+        if ("mock".equalsIgnoreCase(ai.getProvider())) {
+            return;
+        }
+        if (ai.getApiKey() == null || ai.getApiKey().isBlank()) {
+            log.warn("minutes.ai.provider={} 但未配置 DEEPSEEK_API_KEY；"
+                    + "触发 AI 纪要将返回 70008", ai.getProvider());
         }
     }
 
@@ -57,6 +71,8 @@ public class LlmConfig {
     @Bean
     @ConditionalOnProperty(name = "minutes.ai.provider", havingValue = "mock")
     public LlmClient mockLlmClient() {
+        // 启动日志明确提示：避免把本地抽取式演示误认为 DeepSeek 生成异常。
+        log.warn("minutes.ai.provider=mock：AI 纪要为本地抽取式演示，未调用真实大模型");
         return new MockLlmClient();
     }
 }

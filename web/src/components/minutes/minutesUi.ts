@@ -77,7 +77,7 @@ export function describeMinutesError(
       case 70005:
         return {
           kind: 'file-too-large',
-          message: '文件或转写文本超出大小上限（音频 2GiB / 文本 5MiB）',
+          message: '文件或语音转写超出大小上限（音频 2GiB / 文本 5MiB）',
         }
       case 70006:
         return { kind: 'upload-session-expired', message: '上传会话已过期，请重新上传' }

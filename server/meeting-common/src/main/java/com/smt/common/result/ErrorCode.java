@@ -61,14 +61,14 @@ public enum ErrorCode {
     // ---- 7xxxx 会议纪要与文件 ----
     MINUTES_NOT_FOUND(70001, "会议纪要不存在"),
     MINUTES_STATUS_NOT_ALLOWED(70002, "当前会议状态不能上传纪要"),
-    TRANSCRIPT_FORMAT_INVALID(70003, "转写文本格式错误"),
+    TRANSCRIPT_FORMAT_INVALID(70003, "语音转写格式错误"),
     FILE_TYPE_NOT_ALLOWED(70004, "文件类型不支持"),
-    FILE_TOO_LARGE(70005, "文件或转写文本超出大小上限"),
+    FILE_TOO_LARGE(70005, "文件或语音转写超出大小上限"),
     UPLOAD_SESSION_NOT_FOUND(70006, "上传会话不存在或已过期"),
     UPLOAD_INCOMPLETE(70007, "分片不完整或大小不一致"),
     AI_NOT_CONFIGURED(70008, "AI 服务未配置"),
     AI_GENERATION_FAILED(70009, "纪要生成失败"),
-    TRANSCRIPT_EMPTY(70010, "转写内容无有效分段");
+    TRANSCRIPT_EMPTY(70010, "语音转写内容无有效分段");
 
     private final int code;
     private final String msg;

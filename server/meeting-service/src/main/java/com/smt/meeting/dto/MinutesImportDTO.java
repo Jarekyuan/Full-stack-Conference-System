@@ -15,7 +15,7 @@ public class MinutesImportDTO {
     @Positive(message = "文件ID必须为正数")
     private Long fileId;
 
-    @NotBlank(message = "转写文本不能为空")
+    @NotBlank(message = "语音转写不能为空")
     private String transcriptText;
 
     /** 录音时长允许 0–24 小时；0 合法（缺省时服务端改用最后分段 end_ms） */

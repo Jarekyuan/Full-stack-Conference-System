@@ -44,7 +44,7 @@ describe('minutesEmptyStateKind', () => {
 describe('describeMinutesError', () => {
   it('70003 使用 data.line/reason 定位到行', () => {
     const info = describeMinutesError(
-      new ApiError(70003, '转写文本格式错误', { line: 3, reason: '缺少说话人' }),
+      new ApiError(70003, '语音转写格式错误', { line: 3, reason: '缺少说话人' }),
     )
     expect(info.kind).toBe('transcript-format')
     expect(info.line).toBe(3)
@@ -53,9 +53,9 @@ describe('describeMinutesError', () => {
   })
 
   it('70003 缺 data 时降级为未知行号并回落到后端 message', () => {
-    const info = describeMinutesError(new ApiError(70003, '转写文本格式错误', null))
+    const info = describeMinutesError(new ApiError(70003, '语音转写格式错误', null))
     expect(info.line).toBeUndefined()
-    expect(info.message).toBe('第 ? 行：转写文本格式错误')
+    expect(info.message).toBe('第 ? 行：语音转写格式错误')
   })
 
   it('70005/70006/10005 映射为固定可操作文案', () => {

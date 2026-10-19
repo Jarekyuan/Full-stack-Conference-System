@@ -95,10 +95,11 @@ storage:
     base-url: ${MINUTES_LOCAL_BASE_URL:http://127.0.0.1:8082}
 
 cos:
-  secret-id: ${COS_SECRET_ID:}
-  secret-key: ${COS_SECRET_KEY:}
-  region: ${COS_REGION:}
-  bucket: ${COS_BUCKET:}
+  # 兼容两种命名：项目原有 COS_*，以及部署侧常用的 STORAGE_*（后者作为兜底）
+  secret-id: ${COS_SECRET_ID:${STORAGE_SECRET_ID:}}
+  secret-key: ${COS_SECRET_KEY:${STORAGE_SECRET_KEY:}}
+  region: ${COS_REGION:${STORAGE_REGION:}}
+  bucket: ${COS_BUCKET:${STORAGE_BUCKET:}}
 
 minutes:
   upload:

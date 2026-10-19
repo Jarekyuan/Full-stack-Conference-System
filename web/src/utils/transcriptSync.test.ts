@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { findActiveSegment, formatOffset } from './transcriptSync'
+import {
+  findActiveSegment,
+  findActiveSentence,
+  formatOffset,
+  splitSegmentIntoSentences,
+  splitSentences,
+} from './transcriptSync'
 
 const segments = [
   { id: 1, startMs: 0, endMs: 1000 },
@@ -81,6 +87,79 @@ describe('findActiveSegment', () => {
     ]
     // 二分前提不成立：首段起点被当成最小起点，更早的时间直接判空
     expect(findActiveSegment(unsorted, 500)).toBeNull()
+  })
+})
+
+describe('splitSentences', () => {
+  it('按逗号/句号/问号/叹号切分，标点保留在前一子句', () => {
+    expect(splitSentences('你好，世界。真的吗？好！')).toEqual([
+      '你好，',
+      '世界。',
+      '真的吗？',
+      '好！',
+    ])
+  })
+
+  it('连续标点、英文标点和省略号都不会丢字', () => {
+    expect(splitSentences('第一句……第二句,第三句;')).toEqual([
+      '第一句……',
+      '第二句,',
+      '第三句;',
+    ])
+  })
+
+  it('空文本返回空数组', () => {
+    expect(splitSentences('')).toEqual([])
+    expect(splitSentences('   ')).toEqual([])
+  })
+})
+
+describe('splitSegmentIntoSentences', () => {
+  it('按字符数比例分配时间，首尾覆盖整段', () => {
+    const result = splitSegmentIntoSentences({
+      id: 1,
+      startMs: 1000,
+      endMs: 4000,
+      text: '第一句，第二句。',
+    })
+    expect(result.map((item) => item.text)).toEqual(['第一句，', '第二句。'])
+    expect(result[0].startMs).toBe(1000)
+    expect(result[1].startMs).toBeGreaterThan(result[0].startMs)
+    expect(result[1].endMs).toBe(4000)
+  })
+
+  it('没有标点时保持整段为一个子句', () => {
+    const result = splitSegmentIntoSentences({
+      id: 1,
+      startMs: 0,
+      endMs: 1000,
+      text: '没有标点的一段话',
+    })
+    expect(result).toEqual([
+      { text: '没有标点的一段话', startMs: 0, endMs: 1000 },
+    ])
+  })
+})
+
+describe('findActiveSentence', () => {
+  const withText = [
+    { id: 1, startMs: 0, endMs: 3000, text: '第一句，第二句。' },
+  ]
+
+  it('段内按估算时间返回对应子句', () => {
+    expect(findActiveSentence(withText, 0)).toMatchObject({
+      segmentId: 1,
+      sentenceIndex: 0,
+    })
+    expect(findActiveSentence(withText, 2000)).toMatchObject({
+      segmentId: 1,
+      sentenceIndex: 1,
+    })
+  })
+
+  it('段落外返回 null', () => {
+    expect(findActiveSentence(withText, -1)).toBeNull()
+    expect(findActiveSentence(withText, 3000)).toBeNull()
   })
 })
 

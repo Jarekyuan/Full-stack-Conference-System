@@ -42,23 +42,43 @@ class CosObjectStorageSmokeTest {
         CosObjectStorage storage = new CosObjectStorage(client, properties);
         String key = "smoke/minutes-" + System.currentTimeMillis() + ".txt";
         ObjectStorage.MultipartInit init = storage.initMultipart(key, "text/plain");
+        boolean completed = false;
         try {
-            byte[] body = "hello cos".getBytes(StandardCharsets.UTF_8);
-            String url = storage.presignPart(key, init.uploadId(), 1, Duration.ofMinutes(10));
-            HttpResponse<String> put = HttpClient.newHttpClient().send(
-                    HttpRequest.newBuilder(URI.create(url))
-                            .PUT(HttpRequest.BodyPublishers.ofByteArray(body))
+            // 两个分片：5MiB + 尾片，覆盖真实 COS 的多分片 complete（不只是单分片分支）
+            byte[] first = new byte[5 * 1024 * 1024];
+            byte[] second = "hello cos".getBytes(StandardCharsets.UTF_8);
+            String firstUrl = storage.presignPart(
+                    key, init.uploadId(), 1, Duration.ofMinutes(10));
+            String secondUrl = storage.presignPart(
+                    key, init.uploadId(), 2, Duration.ofMinutes(10));
+            HttpResponse<String> firstPut = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(URI.create(firstUrl))
+                            .PUT(HttpRequest.BodyPublishers.ofByteArray(first))
                             .build(),
                     HttpResponse.BodyHandlers.ofString());
-            assertThat(put.statusCode()).isEqualTo(200);
-            String etag = put.headers().firstValue("ETag").orElseThrow();
+            HttpResponse<String> secondPut = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(URI.create(secondUrl))
+                            .PUT(HttpRequest.BodyPublishers.ofByteArray(second))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertThat(firstPut.statusCode()).isEqualTo(200);
+            assertThat(secondPut.statusCode()).isEqualTo(200);
+            String firstEtag = firstPut.headers().firstValue("ETag").orElseThrow();
+            String secondEtag = secondPut.headers().firstValue("ETag").orElseThrow();
 
             ObjectStorage.StoredObject object = storage.completeMultipart(
                     key, init.uploadId(),
-                    List.of(new ObjectStorage.PartETag(1, etag)));
-            assertThat(object.size()).isEqualTo(body.length);
-            assertThat(storage.head(key).size()).isEqualTo(body.length);
+                    List.of(new ObjectStorage.PartETag(1, firstEtag),
+                            new ObjectStorage.PartETag(2, secondEtag)));
+            completed = true;
+            long expected = (long) first.length + second.length;
+            assertThat(object.size()).isEqualTo(expected);
+            assertThat(storage.head(key).size()).isEqualTo(expected);
         } finally {
+            // 测试失败时 uploadId 仍存在，必须 abort，避免 COS 上留下未完成分片计费
+            if (!completed) {
+                storage.abortMultipart(key, init.uploadId());
+            }
             storage.delete(key);
             client.shutdown();
         }

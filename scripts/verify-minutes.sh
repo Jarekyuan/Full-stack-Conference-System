@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 会议纪要主链路验证：分片上传 → 导入 → 详情/转写/洞察 → 重命名 → AI → 导出 → 权限负例 → 重导入
-# 前置：services 已启动；meeting-service 使用 STORAGE_PROVIDER=local + MINUTES_AI_PROVIDER=mock
+# 前置：services 已启动；storage 可为 local 或 cos，AI 可为 mock 或 deepseek。
+# COS 模式只清理 MySQL/本地目录，不删除桶内 minutes/{meetingId}/ 测试对象。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

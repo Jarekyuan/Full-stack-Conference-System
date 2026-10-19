@@ -21,11 +21,16 @@ node e2e/e2e-calendar.cjs       # T2.F1：切周加载 / 会议落格 / 点空�
 node e2e/e2e-booking.cjs        # T2.F2：创建+刷新日历 / 冲突提示与弹窗 / 幂等只落一场
 node e2e/e2e-meeting-list.cjs   # T2.F3：筛选分页 / 状态时间线 / 取消 → 50 / 取消按钮仅组织人
 node e2e/e2e-approval.cjs       # T3.F1+F2：审批中心（待办→通过→已办）+ 详情页延长/提前结束
-node e2e/e2e-meeting-minutes.cjs # M6：上传音频+转写 → 联动 seek → 洞察 → mock AI → Word 下载
+node e2e/e2e-meeting-minutes.cjs # M6：上传音频+转写 → 联动 seek → 洞察 → AI → Word 下载 → 300 段虚拟滚动
 ```
 
-> ⚠️ `e2e-meeting-minutes.cjs` 额外要求 meeting-service 以
-> `STORAGE_PROVIDER=local MINUTES_AI_PROVIDER=mock MINUTES_LOCAL_DIR=/tmp/smt-minutes-test` 启动。
+> ⚠️ `e2e-meeting-minutes.cjs` 要求 meeting-service 已启动：CI 可用
+> `STORAGE_PROVIDER=local MINUTES_LOCAL_DIR=/tmp/smt-minutes-test`，真实桶用
+> `STORAGE_PROVIDER=cos` + `COS_*`（桶需允许前端 origin 的 PUT/GET/HEAD 并暴露 ETag）。
+> 音频需为浏览器支持的编码（AAC/M4A、MP3、WAV）；ALAC 会报 `MEDIA_ERR_SRC_NOT_SUPPORTED`。
+> AI 可用 `MINUTES_AI_PROVIDER=mock`（断言摘要来自转写）或 `deepseek`（断言行文非空）；
+> `verify-minutes-ai.sh` 的失败注入仍要求 mock。
+> COS 模式下脚本只清理 MySQL/本地目录，不会删除桶里的测试对象，需按 `minutes/{meetingId}/` 手工清理。
 >
 > ⚠️ `e2e-approval.cjs` 比前三个慢（约 4 分钟）：它的后半段要等一场会议**真的到点**，
 > 由定时任务推进到"进行中"，才能验证延长/提前结束——所以跑它时**定时任务必须开着**

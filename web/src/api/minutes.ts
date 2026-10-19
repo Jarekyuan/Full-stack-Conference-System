@@ -67,6 +67,8 @@ export interface MinutesDetail {
   transcriptSource: string
   aiStatus: number
   aiError: string | null
+  /** 当前 AI 供应商：deepseek / mock */
+  aiProvider: string
   aiModel: string | null
   summary: MinutesSummary | null
   speakers: MinutesSpeaker[]

@@ -65,8 +65,18 @@ function writeWav(file) {
     await page.getByPlaceholder('请输入密码').fill('user123');
     await page.locator('button[type="submit"]').click();
     await page.waitForURL('**/calendar', { timeout: 10000 });
+    // 等日历页的在途请求结束（含 focus 触发的刷新），避免把 /calendar 的
+    // /rooms?status=0 算到详情页头上。
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(1000);
 
+    // 详情页的编辑抽屉常驻挂载，但会议室列表只应在打开抽屉时才请求。
+    const roomRequests = [];
+    page.on('request', (request) => {
+      if (/\/api\/rooms(\?|$)/.test(request.url())) roomRequests.push(request.url());
+    });
     await page.goto(`${BASE}/meetings/${meetingId}`, { waitUntil: 'networkidle' });
+    check('详情页不预加载会议室', roomRequests.length === 0, `rooms=${roomRequests.length}`);
     await page.getByRole('tab', { name: '会议纪要' }).click();
 
     // 上传音频 + 转写
@@ -95,12 +105,22 @@ function writeWav(file) {
     await page.getByText('发言覆盖率', { exact: false }).waitFor({ timeout: 5000 });
     check('会议洞察可见', true);
 
-    // AI 纪要（mock worker 每 5s 扫描）
+    // AI 纪要：mock 模式断言内容来自本次转写；真实 DeepSeek 只断言生成成功。
     await page.getByRole('tab', { name: 'AI 纪要' }).click();
     await page.getByRole('button', { name: /生成纪要/ }).click();
-    await page.getByText('本次会议围绕产品排期与压测计划展开', { exact: false })
-      .waitFor({ timeout: 40000 });
-    check('AI 摘要可见', true);
+    const summaryNode = page.getByTestId('minutes-summary');
+    await summaryNode.waitFor({ timeout: 120000 });
+    const summaryText = (await summaryNode.innerText()).trim();
+    check('AI 摘要非空', summaryText.length > 0, summaryText.slice(0, 80));
+    const demoMode =
+      (await page.getByText('当前为本地演示模式（mock）', { exact: false }).count()) > 0;
+    if (demoMode) {
+      check('Mock 摘要与转写内容一致', summaryText.includes('你好'));
+      check('Mock 模式有明确提示', true);
+    } else {
+      check('真实 AI 摘要已生成', summaryText.length > 10);
+      check('真实 AI 模式无 mock 提示', true);
+    }
 
     // 导出 Word：下载事件 + 文件名
     const downloadPromise = page.waitForEvent('download', { timeout: 15000 });
@@ -111,15 +131,46 @@ function writeWav(file) {
     const downloadPath = await download.path();
     check('导出文件非空', !!downloadPath && fs.statSync(downloadPath).size > 0);
 
-    // 重新导入：覆盖转写并刷新工作台（R-17 覆盖规则的 UI 入口）
+    // 重新导入：覆盖转写并刷新工作台（R-17 覆盖规则的 UI 入口）。
+    // 同时导入 300 段，验证虚拟滚动只挂载可视区附近的行。
+    const stamp = (seconds) => {
+      const minutes = Math.floor(seconds / 60);
+      const rest = seconds % 60;
+      const whole = Math.floor(rest);
+      const millis = Math.round((rest - whole) * 1000);
+      return `${minutes}:${String(whole).padStart(2, '0')}.${String(millis).padStart(3, '0')}`;
+    };
+    const manySegments = Array.from({ length: 300 }, (_, i) =>
+      `[0:${stamp(i)},0:${stamp(i + 0.9)},0]  第 ${i + 1} 段`,
+    ).join('\n');
     await page.getByRole('button', { name: /重新导入/ }).click();
     await page.getByRole('button', { name: /继续导入/ }).click();
     const modal = page.locator('.ant-modal').last();
     await modal.locator('input[type=file]').nth(0).setInputFiles(WAV);
-    await modal.getByPlaceholder(/恩格斯论述/).fill('[0:0.100,0:0.500,0]  重新导入成功');
+    await modal.getByPlaceholder(/恩格斯论述/).fill(manySegments);
     await modal.getByRole('button', { name: /开始解析/ }).click();
-    await page.getByText('重新导入成功', { exact: false }).first().waitFor({ timeout: 30000 });
+    // AI 纪要 Tab 仍是激活态；先切回语音转写，虚拟列表才有可视高度。
+    await page.getByRole('tab', { name: '语音转写' }).click();
+    await page.getByRole('button', { name: '第 1 段', exact: true })
+      .waitFor({ timeout: 30000 });
     check('重新导入覆盖转写', true);
+
+    const renderedRows = await page.locator('[data-segment-id]').count();
+    check(
+      '虚拟滚动只渲染可视行',
+      renderedRows > 0 && renderedRows < 100,
+      `rendered=${renderedRows}/300`,
+    );
+    check(
+      '未滚动时末段未挂载',
+      (await page.getByRole('button', { name: '第 300 段', exact: true }).count()) === 0,
+    );
+    await page.getByTestId('transcript-scroll').evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await page.getByRole('button', { name: '第 300 段', exact: true })
+      .waitFor({ timeout: 5000 });
+    check('滚动到底部渲染末段', true);
   } catch (e) {
     check('脚本执行', false, e.message);
   } finally {

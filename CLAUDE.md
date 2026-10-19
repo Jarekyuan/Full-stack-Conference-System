@@ -43,7 +43,7 @@
 
 ---
 
-## 3. 当前进度（2026-10-17 快照）
+## 3. 当前进度（2026-10-19 快照）
 
 | 里程碑 | 状态 | 内容 |
 |--------|------|------|
@@ -54,7 +54,7 @@
 | M3 审批+生命周期 | ✅ **8/8** | ✅ T3.1 待办/已办列表｜✅ T3.2 审批通过（复检+行锁）｜✅ T3.3 拒绝｜✅ T3.4 延长 + 提前结束｜✅ T3.5 定时流转｜✅ T3.6 对账补偿｜✅ T3.F1 审批中心（前端）｜✅ T3.F2 详情页延长/结束（前端） |
 | M4 通知+MQ+打磨 | ✅ **12/12**（评审见 `docs/review-M4.md`） | ✅ T4.1 事件发布（`meeting.events` topic + 事务提交后投递）｜✅ T4.2 notification-service 骨架（:8083）｜✅ T4.3 消费落库站内信（幂等 + 手动 ACK + 死信）｜✅ T4.4 通知 REST（列表/未读/已读，契约补登 docs/04 3.3）｜✅ T4.5 会议提醒（扫描 + 幂等 key）｜✅ T4.6 WebSocket 推送（网关 `?token=` + 提交后推）｜✅ T4.7 Redis 缓存（会议室注解式 + 日历手写式）｜✅ T4.8 预约限流（ZSET+Lua + Nacos 动态阈值）｜✅ T4.9 traceId 服务侧（MDC + 网关访问日志）｜✅ T4.10 测试盘点（单测 52→80 例）｜✅ T4.11 审计切面（@Log + 独立 audit.log）｜✅ T4.F1 通知中心（铃铛角标 + 列表 + WS 实时更新） |
 | M5 进阶+部署 | 🟡 **4/7** | ✅ T5.1 周期创建｜✅ T5.2 系列取消｜✅ T5.3 统计接口｜✅ T5.4 前端看板+周期入口；⏸ **T5.5~T5.7 容器化/部署按用户要求暂缓** |
-| M6 会议纪要 | ✅ **6/6** | ✅ 5 张表 + ObjectStorage/COS 分片｜✅ 腾讯 ASR 导入/详情/洞察｜✅ 语音文本联动｜✅ DeepSeek 异步纪要｜✅ Word 导出｜✅ 脚本/E2E/文档收口 |
+| M6 会议纪要 | ✅ **6/6** | ✅ 5 张表 + ObjectStorage/COS 分片｜✅ 腾讯 ASR 转写导入/详情/洞察｜✅ 逐句语音文本联动｜✅ DeepSeek 异步纪要｜✅ Word 导出｜✅ 脚本/E2E/文档收口 |
 
 **M4 已全部完成（2026-10-16，12/12）**；**M5 做到 4/7**（周期会议 + 统计 + 看板），
 **剩下的 T5.5~T5.7（Dockerfile×4 + compose + Nginx）按用户要求暂缓**——用户要先自行验证一些东西。
@@ -173,16 +173,29 @@
   `e2e-meeting-list` **25/25**、其余 e2e 全绿；`npm run check` **68 例**、`npm run build` 通过。
 
 **M6 会议纪要（2026-10-19，记录见 `docs/05` 七·附四 / `docs/review-M5-T6.md`）**：
-- 会议详情新增「会议纪要」Tab：m4a 音频 + 腾讯 ASR 转写 → 播放高亮/点击 seek →
+- 会议详情新增「会议纪要」Tab：m4a 音频 + 腾讯 ASR 转写 → 逐句高亮/点击子句 seek →
   会议洞察（发言时长/占比/覆盖率）→ DeepSeek 结构化纪要 → Word 导出。
 - COS 分片上传（5MiB/并发 3/断点续传，预签名直传）；本地/CI 用 `LocalObjectStorage`，
   真实 COS 走 `scripts/verify-cos-upload.sh`（缺 env 自动跳过）。
+- 真实 COS 已验证（`jonas-cos-1442883247` / `ap-chengdu`）：2 分片预签名 PUT → complete → head
+  → delete；浏览器 CORS 直传与预签名 GET 由 E2E 实测。修复 COS SDK 对不可变分片列表原地排序
+  导致的 `UnsupportedOperationException`。
+- **浏览器音频编码**：Chrome 不支持 ALAC（Apple Lossless）；m4a 若为 ALAC，`<audio>` 报
+  `MEDIA_ERR_SRC_NOT_SUPPORTED`。上传前需转 AAC/M4A 或 MP3。实测 COS 默认域名的
+  `Content-Disposition: attachment` 不影响 AAC 音频元数据加载，不是该错误的原因。
 - 新增 5 张表与 7xxxx 错误码；AI 状态机 `0→10→20→30/40`，失败自动重试 3 次；
   `ai_started_at` 作为 run token 参与 CAS，`minutesTaskScheduler` 独立于会议状态/提醒任务；
   生成接口限流 + 同会议 60 秒冷却 + max-chunks 10。
-- 验证：后端 **296 例**（排除需 auth 停机的用例）、`npm run check` **152 例**、
-  `verify-minutes` **22/22**、`verify-minutes-ai` **8/8**、`e2e-meeting-minutes` **8/8**，
-  其余脚本/e2e 全绿。集成验证时 `admin` 曾被 R7 用例停用：脚本已改为环境已有第二管理员时跳过，
+- 转写列表使用 `@tanstack/react-virtual` 动态测高，只挂载可视区 + overscan（300 段 E2E 实测 17 行）；
+  mock provider 在接口 `aiProvider` 与页面「本地演示」标签中明确标识，并按转写做抽取式摘要，
+  真实 DeepSeek 生成需 `DEEPSEEK_API_KEY` + `MINUTES_AI_PROVIDER=deepseek`。
+- 真实 DeepSeek（`deepseek-chat`）已验证：3 段产品排期转写生成摘要/决策/待办/风险，
+  `aiModel=deepseek-chat`；密钥只从环境变量读取，不落库、不写日志、不写仓库。
+- 验证：后端 meeting-service **300 例**（1 skipped；全量 356 例，排除需 auth 停机的用例）、
+  `npm run check` **159 例**、`verify-minutes` **22/22**、`verify-minutes-ai` **8/8**、
+  `e2e-meeting-minutes` **14/14**、`verify-cos-upload` **1/1**（真实 COS 2 分片），
+  其余脚本/e2e 全绿。集成验证时 `admin` 曾被 R7 用例停用：
+  脚本已改为环境已有第二管理员时跳过，
   并在 cleanup 无条件恢复 `admin` 启用。
 
 **M4 演示脚本（可照做）**：user1 登录前端（:5173）→ 另开一个浏览器/接口以 approver1 身份审批 →
@@ -507,9 +520,11 @@ bash scripts/verify-m4-audit.sh                    # T4.11：审计留痕（成�
 bash scripts/verify-m5-recurring.sh                # T5.1：周期创建（展开/N 场共享 recurring_id/冲突清单/40007/幂等）
 bash scripts/verify-m5-recurring-cancel.sh         # T5.2：系列取消（未来场次/历史不受影响/进行中拦截，约 2 分钟）
 bash scripts/verify-m5-stats.sh                    # T5.3：统计（接口 vs 独立 SQL 对账/裁剪/口径/权限）
-bash scripts/verify-minutes.sh                     # M6：分片上传/导入/联动/洞察/AI/导出（需 local provider + mock AI）
+bash scripts/verify-minutes.sh                     # M6：分片上传/导入/联动/洞察/AI/导出（storage 任意；AI mock/deepseek 均可；COS 模式会留下测试对象）
 bash scripts/verify-minutes-ai.sh                  # M6：AI 状态机 10→20→30、MOCK_FAIL→40→重试→30
 bash scripts/verify-cos-upload.sh                  # M6：真实 COS 冒烟（缺 COS_* env 自动跳过）
+#   COS 配置兼容 COS_* 与 STORAGE_* 两套命名；当前开发环境用
+#   STORAGE_PROVIDER=cos + COS_BUCKET/REGION/SECRET_ID/SECRET_KEY（或 STORAGE_*）启动。
 #   ⚠️ **凡是会连续造会的脚本，开头都要装限流开关**（T4.8 之后预约有用户级限流 10 次/分钟）：
 #      `source "$(dirname "$0")/lib/ratelimit.sh"` + `ratelimit_disable_for_script`
 #      （e2e 用 `web/e2e/lib/ratelimit.cjs` 的 `disableRateLimit()`）。
@@ -533,10 +548,10 @@ cd server && mvn -q clean test -Dtest='!AuthFeignClientTest#batchUsersShouldDegr
 #      会以 "No tests matching pattern" 判定失败——看着像构建挂了，其实只是过滤器没匹配到任何用例
 
 # 前端
-cd web && npm run check     # = tsc --noEmit + eslint + vitest（152 例）
+cd web && npm run check     # = tsc --noEmit + eslint + vitest（159 例）
 node e2e/e2e-calendar.cjs   # playwright E2E（需先 npm i --no-save playwright + dev server；详见 web/e2e/README.md）
 node e2e/e2e-notify-ws.cjs  # T4.6：真浏览器验 WS 推送（连接/鉴权拒连/隔离/多标签页/秒级推送/会话注销）
-node e2e/e2e-meeting-minutes.cjs # M6：上传/转写 seek/洞察/AI/Word 导出/重新导入（需 local provider + mock AI）
+node e2e/e2e-meeting-minutes.cjs # M6：上传/转写 seek/洞察/AI/Word 导出/重新导入/虚拟滚动（local 或 COS；AI 可用 mock 或 deepseek）
 ```
 
 **演示账号**（密码均为 `admin123`/`user123`）：

@@ -1,9 +1,9 @@
 /**
- * 纪要上传器：音频（m4a 为主）+ 腾讯 ASR 转写文本。
+ * 纪要上传器：音频（m4a 为主）+ 腾讯 ASR 语音转写。
  * - 音频走 useMultipartUpload，支持暂停/续传；
  * - 上传成功即缓存 fileId：导入失败（如 70003 行格式错误）重试时只重导、不重传；
  * - 暂停后「继续上传并导入」在分片续传完成后直接导入；
- * - 转写文本以 ref 为准，上传期间继续编辑的内容会用于最终导入。
+ * - 语音转写以 ref 为准，上传期间继续编辑的内容会用于最终导入。
  */
 import { useRef, useState } from 'react'
 import { Alert, App, Button, Card, Input, Progress, Space, Tag, Typography } from 'antd'
@@ -103,13 +103,13 @@ export default function MinutesUploader({ meetingId, onImported }: Props) {
 
   const handleTranscriptFile = async (file: File) => {
     if (file.size > TRANSCRIPT_MAX_BYTES) {
-      message.error('转写文本不能超过 5MiB')
+      message.error('语音转写不能超过 5MiB')
       return
     }
     try {
       setTranscriptValue(await file.text())
     } catch {
-      message.error('无法读取转写文本文件，请重试或直接粘贴')
+      message.error('无法读取语音转写文件，请重试或直接粘贴')
     }
   }
 
@@ -145,7 +145,7 @@ export default function MinutesUploader({ meetingId, onImported }: Props) {
       return
     }
     if (!transcriptRef.current.trim()) {
-      message.warning('请粘贴或上传转写文本')
+      message.warning('请粘贴或上传语音转写')
       return
     }
 
@@ -182,7 +182,7 @@ export default function MinutesUploader({ meetingId, onImported }: Props) {
   const handleResume = async () => {
     if (importing || !audioFile) return
     if (!transcriptRef.current.trim()) {
-      message.warning('请粘贴或上传转写文本')
+      message.warning('请粘贴或上传语音转写')
       return
     }
 
@@ -211,8 +211,8 @@ export default function MinutesUploader({ meetingId, onImported }: Props) {
       <Alert
         type="info"
         showIcon
-        message="上传会议录音与腾讯云 ASR 转写文本"
-        description="音频仅支持 m4a/mp3/wav/aac/ogg，单文件不超过 2GiB；转写格式：[开始,结束,说话人] 文本。"
+        message="上传会议录音与腾讯云 ASR 语音转写"
+        description="音频仅支持 m4a/mp3/wav/aac/ogg，单文件不超过 2GiB；m4a 请使用 AAC 编码（ALAC 浏览器无法播放）。语音转写格式：[开始,结束,说话人] 文本。"
       />
 
       <Card size="small" title="1. 音频文件">
@@ -274,7 +274,7 @@ export default function MinutesUploader({ meetingId, onImported }: Props) {
         )}
       </Card>
 
-      <Card size="small" title="2. 转写文本">
+      <Card size="small" title="2. 语音转写">
         <input
           ref={transcriptInput}
           type="file"
@@ -291,7 +291,7 @@ export default function MinutesUploader({ meetingId, onImported }: Props) {
           <Typography.Text type="secondary">或直接粘贴下面的文本</Typography.Text>
         </Space>
         <Input.TextArea
-          aria-label="转写文本"
+          aria-label="语音转写"
           rows={8}
           value={transcript}
           onChange={(e) => setTranscriptValue(e.target.value)}

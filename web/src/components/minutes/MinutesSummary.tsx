@@ -40,7 +40,9 @@ export default function MinutesSummary({ summary, aiStatus }: Props) {
   const risks = compactList(summary.risks)
   return (
     <div className="space-y-4">
-      <Typography.Paragraph>{summary.summary?.trim() || '-'}</Typography.Paragraph>
+      <Typography.Paragraph data-testid="minutes-summary">
+        {summary.summary?.trim() || '-'}
+      </Typography.Paragraph>
       <section>
         <Typography.Title level={5}>关键结论</Typography.Title>
         {keyPoints.length === 0 ? (

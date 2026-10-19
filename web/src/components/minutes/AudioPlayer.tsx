@@ -14,7 +14,7 @@ interface Props {
   url: string
   audioRef: RefObject<HTMLAudioElement>
   onTimeUpdate: (ms: number) => void
-  onError: () => void
+  onError: (error: MediaError | null) => void
   /** 元数据就绪后回调（父组件用于换源后恢复播放位置；初次加载时也可能触发） */
   onLoadedMetadata?: (audio: HTMLAudioElement) => void
 }
@@ -61,7 +61,7 @@ export default function AudioPlayer({
     const audio = audioRef.current
     if (!audio) return
     if (audio.paused) {
-      audio.play().catch(() => onError())
+      audio.play().catch(() => onError(audio.error))
     } else {
       audio.pause()
     }
@@ -101,7 +101,7 @@ export default function AudioPlayer({
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
         onEnded={() => setPlaying(false)}
-        onError={onError}
+        onError={(e) => onError(e.currentTarget.error)}
         className="hidden"
       />
       <Space wrap size="middle">

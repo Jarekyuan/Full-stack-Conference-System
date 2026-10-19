@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # AI 纪要状态机验证：10→20→30；MOCK_FAIL → 40 → 手动重试 → 30；重复触发幂等
+# 前置：meeting-service 必须以 MINUTES_AI_PROVIDER=mock 启动（失败注入依赖 mock）
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -9,6 +10,7 @@ TS="$(date +%s)"
 MEETING_ID=""
 PASS=0
 FAIL=0
+SEGMENT_TEXT="正常内容${TS}"
 
 check() {
   local name="$1" actual="$2" expected="$3"
@@ -57,7 +59,7 @@ $MYSQL "USE smt_meeting;
   INSERT INTO meeting_minutes_speaker (minutes_id, speaker_key, display_name, color)
   VALUES (@mid, '0', '说话人 1', '#7D8CFF');
   INSERT INTO meeting_transcript_segment (minutes_id, seq, speaker_key, start_ms, end_ms, text)
-  VALUES (@mid, 0, '0', 0, 1000, '正常内容');"
+  VALUES (@mid, 0, '0', 0, 1000, '${SEGMENT_TEXT}');"
 
 # 正常生成
 curl -s -X POST "$BASE/meetings/${MEETING_ID}/minutes/generate" \
@@ -77,8 +79,8 @@ check "正常生成有摘要" \
     | jget data.summary.summary | awk '{print (length($0)>0)?1:0}')" "1"
 LOG_FILE="${MEETING_LOG:-server/logs/meeting-service.log}"
 if [ -f "$LOG_FILE" ]; then
-  check "服务日志不含 AI 摘要" \
-    "$(grep -c '本次会议围绕产品排期与压测计划展开' "$LOG_FILE" || true)" "0"
+  check "服务日志不含语音转写正文/AI 摘要" \
+    "$(grep -c "$SEGMENT_TEXT" "$LOG_FILE" || true)" "0"
 fi
 
 # 造失败：文本含 MOCK_FAIL，重置 AI 后再触发

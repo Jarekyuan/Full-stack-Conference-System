@@ -3,6 +3,7 @@ package com.smt.meeting.service;
 import com.smt.common.exception.BusinessException;
 import com.smt.common.result.ErrorCode;
 import com.smt.meeting.aop.Log;
+import com.smt.meeting.config.MinutesProperties;
 import com.smt.meeting.dto.MinutesImportDTO;
 import com.smt.meeting.dto.SpeakerUpdateDTO;
 import com.smt.meeting.entity.FileObject;
@@ -70,6 +71,7 @@ public class MinutesService {
     private final MinutesInsightsService insightsService;
     private final MinutesSummaryParser summaryParser;
     private final TranscriptParser transcriptParser;
+    private final MinutesProperties properties;
     private final ObjectStorage storage;
     private final TransactionTemplate transactionTemplate;
     private final RedissonClient redisson;
@@ -94,6 +96,7 @@ public class MinutesService {
         vo.setTranscriptSource(minutes.getTranscriptSource());
         vo.setAiStatus(minutes.getAiStatus());
         vo.setAiError(minutes.getAiError());
+        vo.setAiProvider(properties.getAi().getProvider());
         vo.setAiModel(minutes.getAiModel());
         vo.setSummary(summaryParser.parseOrNull(minutes.getSummaryJson()));
         vo.setSpeakers(speakers.stream()

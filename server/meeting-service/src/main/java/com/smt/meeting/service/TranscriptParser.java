@@ -38,7 +38,7 @@ public class TranscriptParser {
         }
         if (text.getBytes(StandardCharsets.UTF_8).length > properties.getTranscript().getMaxBytes()) {
             throw new BusinessException(ErrorCode.FILE_TOO_LARGE.getCode(),
-                    "转写文本超过 " + properties.getTranscript().getMaxBytes() + " 字节");
+                    "语音转写超过 " + properties.getTranscript().getMaxBytes() + " 字节");
         }
 
         List<ParsedSegment> segments = new ArrayList<>();

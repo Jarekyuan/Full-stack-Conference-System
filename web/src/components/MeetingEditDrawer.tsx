@@ -66,7 +66,9 @@ export default function MeetingEditDrawer({
     run: loadDetail,
     mutate: mutateDetail,
   } = useAppRequest(getMeeting)
-  const { data: rooms } = useAppRequest(() => listRooms(), { manual: false })
+  // 抽屉常驻挂载（列表页/详情页都会渲染），但会议室列表只在真正打开时才需要：
+  // 否则每次进入详情页都会多发一次 /rooms，列表页还会和筛选器的 /rooms 重复。
+  const { data: rooms, run: loadRooms } = useAppRequest(() => listRooms(), { manual: true })
   const { runAsync: doUpdate, loading: saving } = useAppRequest(updateMeeting, { toastError: false })
 
   /**
@@ -90,8 +92,9 @@ export default function MeetingEditDrawer({
     if (open && meetingId != null) {
       mutateDetail(undefined) // 清掉上一场的缓存，避免请求失败时回落到旧表单
       loadDetail(meetingId)
+      loadRooms()
     }
-  }, [open, meetingId, loadDetail, mutateDetail])
+  }, [open, meetingId, loadDetail, loadRooms, mutateDetail])
 
   useEffect(() => {
     if (!open || !currentDetail) return

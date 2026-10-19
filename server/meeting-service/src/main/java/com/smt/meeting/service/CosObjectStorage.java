@@ -18,6 +18,7 @@ import lombok.RequiredArgsConstructor;
 
 import java.net.URL;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 
@@ -92,10 +93,13 @@ public class CosObjectStorage implements ObjectStorage {
         if (parts == null || parts.isEmpty()) {
             throw new BusinessException(ErrorCode.UPLOAD_INCOMPLETE);
         }
-        List<com.qcloud.cos.model.PartETag> cosParts = parts.stream()
+        // COS SDK 的 RequestXmlFactory 会对该列表原地排序；Stream.toList() 返回不可变列表，
+        // 真实调用会抛 UnsupportedOperationException，因此必须传可变的 ArrayList。
+        List<com.qcloud.cos.model.PartETag> cosParts = new ArrayList<>(parts.size());
+        parts.stream()
                 .sorted((a, b) -> Integer.compare(a.partNumber(), b.partNumber()))
                 .map(part -> new com.qcloud.cos.model.PartETag(part.partNumber(), part.etag()))
-                .toList();
+                .forEach(cosParts::add);
         CompleteMultipartUploadRequest request = new CompleteMultipartUploadRequest(
                 properties.getBucket(), objectKey, uploadId, cosParts);
         try {

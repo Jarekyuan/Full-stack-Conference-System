@@ -21,7 +21,7 @@ import {
   type TranscriptSegment,
 } from '@/api/minutes'
 import { ApiError } from '@/api/types'
-import { findActiveSegment } from '@/utils/transcriptSync'
+import { findActiveSentence } from '@/utils/transcriptSync'
 import AudioPlayer from './AudioPlayer'
 import MinutesAiBar from './MinutesAiBar'
 import MinutesInsights from './MinutesInsights'
@@ -68,6 +68,7 @@ export default function AudioTranscriptWorkspace({
   const pendingSeekRef = useRef<{ position: number; wasPlaying: boolean } | null>(null)
 
   const [activeId, setActiveId] = useState<number | null>(null)
+  const [activeSentenceIndex, setActiveSentenceIndex] = useState<number | null>(null)
   const [renaming, setRenaming] = useState<MinutesSpeaker | null>(null)
   const [generating, setGenerating] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -80,6 +81,7 @@ export default function AudioTranscriptWorkspace({
   const sawPendingAiRef = useRef(false)
   const effectiveAiStatus = pendingAiStatus ?? minutes.aiStatus
   const aiMeta = minutesAiStatusMeta(effectiveAiStatus)
+  const demoMode = minutes.aiProvider === 'mock'
 
   const loadTranscript = useCallback(async () => {
     const token = ++transcriptRequestRef.current
@@ -87,7 +89,11 @@ export default function AudioTranscriptWorkspace({
     setTranscriptError(null)
     try {
       const result = await getTranscript(meeting.id)
-      if (transcriptRequestRef.current === token) setSegments(result.segments)
+      if (transcriptRequestRef.current === token) {
+        setSegments(result.segments)
+        setActiveId(null)
+        setActiveSentenceIndex(null)
+      }
     } catch (e) {
       if (transcriptRequestRef.current === token) setTranscriptError(e)
     } finally {
@@ -99,6 +105,7 @@ export default function AudioTranscriptWorkspace({
   useEffect(() => {
     setSegments([])
     setActiveId(null)
+    setActiveSentenceIndex(null)
     void loadTranscript()
     return () => {
       transcriptRequestRef.current += 1
@@ -179,13 +186,17 @@ export default function AudioTranscriptWorkspace({
     void loadAudioUrl(true)
   }, [capturePendingSeek, loadAudioUrl])
 
-  const handleAudioError = useCallback(() => {
+  const handleAudioError = useCallback((error: MediaError | null) => {
     if (!hasAudio) return
-    if (audioResignedRef.current >= 1) {
+    // MEDIA_ERR_SRC_NOT_SUPPORTED：源被拒绝（典型是 COS 默认域名强制下载 attachment）
+    // 或编码不支持。重签 URL 不会变好，直接给可操作的提示，避免多打一次 audio-url。
+    if (error?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
+        || audioResignedRef.current >= 1) {
       // 自动重签后仍失败：停在错误态，位置留给手动重试
       capturePendingSeek(false)
-      audioErrorRef.current = '音频地址已过期，请点击重试'
-      setAudioError('音频地址已过期，请点击重试')
+      const message = '音频无法播放，请重试；若持续失败，请确认音频为 AAC/M4A、MP3 等浏览器支持的格式'
+      audioErrorRef.current = message
+      setAudioError(message)
       return
     }
     // 每个源只自动重签一次；再失败就停下来等用户操作，避免无限请求 audio-url
@@ -217,11 +228,12 @@ export default function AudioTranscriptWorkspace({
   }, [])
 
   // 引用稳定：TranscriptRow 是 memo 的，播放推进时不应因回调换引用而全列表重渲染
-  const seek = useCallback((segment: TranscriptSegment) => {
+  const seek = useCallback((segment: TranscriptSegment, sentenceIndex: number, startMs: number) => {
     const audio = audioRef.current
     if (!audio) return
-    audio.currentTime = segment.startMs / 1000
+    audio.currentTime = startMs / 1000
     setActiveId(segment.id)
+    setActiveSentenceIndex(sentenceIndex)
   }, [])
 
   // 父级刷新出新的终态后清除本地 pending；刷新失败/旧状态不满足条件时保持 busy
@@ -315,7 +327,7 @@ export default function AudioTranscriptWorkspace({
   const handleReimport = useCallback(() => {
     modal.confirm({
       title: '重新导入会议纪要？',
-      content: '将覆盖当前音频、转写与发言人，并重置 AI 纪要与会议洞察。',
+      content: '将覆盖当前音频、语音转写与发言人，并重置 AI 纪要与会议洞察。',
       okText: '继续导入',
       cancelText: '取消',
       onOk: () => setReimportOpen(true),
@@ -342,9 +354,9 @@ export default function AudioTranscriptWorkspace({
   }, [capturePendingSeek, hasAudio, loadAudioUrl, loadTranscript, onRefresh])
 
   const transcriptErrorInfo = transcriptError
-    ? describeMinutesError(transcriptError, '转写加载失败')
+    ? describeMinutesError(transcriptError, '语音转写加载失败')
     : null
-  const transcriptErrorText = transcriptErrorInfo?.message || '转写加载失败'
+  const transcriptErrorText = transcriptErrorInfo?.message || '语音转写加载失败'
 
   return (
     <Card
@@ -352,6 +364,7 @@ export default function AudioTranscriptWorkspace({
         <Space>
           <span>会议纪要</span>
           <Tag color={aiMeta.color}>AI {aiMeta.text}</Tag>
+          {demoMode && <Tag color="orange">本地演示</Tag>}
         </Space>
       }
       extra={
@@ -377,7 +390,7 @@ export default function AudioTranscriptWorkspace({
       }
     >
       {!hasAudio ? (
-        <Alert type="warning" showIcon message="音频暂不可用，转写与 AI 纪要仍可查看" />
+        <Alert type="warning" showIcon message="音频暂不可用，语音转写与 AI 纪要仍可查看" />
       ) : (
         <>
           {audioError && (
@@ -403,7 +416,11 @@ export default function AudioTranscriptWorkspace({
             <AudioPlayer
               url={audioUrl}
               audioRef={audioRef}
-              onTimeUpdate={(ms) => setActiveId(findActiveSegment(segments, ms))}
+              onTimeUpdate={(ms) => {
+                const position = findActiveSentence(segments, ms)
+                setActiveId(position?.segmentId ?? null)
+                setActiveSentenceIndex(position?.sentenceIndex ?? null)
+              }}
               onError={handleAudioError}
               onLoadedMetadata={handleAudioLoadedMetadata}
             />
@@ -419,7 +436,7 @@ export default function AudioTranscriptWorkspace({
         items={[
           {
             key: 'transcript',
-            label: '转写',
+            label: '语音转写',
             children: (
               <div>
                 {transcriptErrorInfo ? (
@@ -433,7 +450,7 @@ export default function AudioTranscriptWorkspace({
                         <Button
                           size="small"
                           onClick={retryTranscript}
-                          aria-label="重试加载转写"
+                          aria-label="重试加载语音转写"
                         >
                           重试
                         </Button>
@@ -444,6 +461,7 @@ export default function AudioTranscriptWorkspace({
                         segments={segments}
                         speakers={minutes.speakers}
                         activeId={activeId}
+                        activeSentenceIndex={activeSentenceIndex}
                         canManage={canManage}
                         onSelect={seek}
                         onRename={setRenaming}
@@ -459,13 +477,14 @@ export default function AudioTranscriptWorkspace({
                     segments={segments}
                     speakers={minutes.speakers}
                     activeId={activeId}
+                    activeSentenceIndex={activeSentenceIndex}
                     canManage={canManage}
                     onSelect={seek}
                     onRename={setRenaming}
                   />
                 )}
                 <Typography.Text type="secondary" className="mt-2 block text-xs">
-                  播放时高亮当前段落；点击转写文本可跳转到对应录音位置。
+                  播放时按句子高亮当前子句；点击任意子句可跳转到对应录音位置。
                 </Typography.Text>
               </div>
             ),
@@ -478,6 +497,7 @@ export default function AudioTranscriptWorkspace({
                 <MinutesAiBar
                   aiStatus={effectiveAiStatus}
                   aiError={minutes.aiError}
+                  demoMode={demoMode}
                   canManage={canManage}
                   loading={generating}
                   onGenerate={handleGenerate}
