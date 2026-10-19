@@ -18,7 +18,7 @@ import {
   partRange,
   resolveResumeSession,
   type StoredSession,
-} from './useMultipartUpload'
+} from '@/hooks/useMultipartUpload'
 
 /** 测试里用不到真实的 Blob 行为，只需 File 元数据字段。 */
 function fileLike(

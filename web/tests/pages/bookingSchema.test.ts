@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import dayjs from 'dayjs'
-import { bookingSchema } from './bookingSchema'
+import { bookingSchema } from '@/pages/bookingSchema'
 
 /** 一份合法基线，各用例只覆盖关心的字段 */
 const validInput = {

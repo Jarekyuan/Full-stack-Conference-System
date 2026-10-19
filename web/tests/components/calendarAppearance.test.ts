@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import dayjs from 'dayjs'
 import type { CalendarMeeting } from '@/api/meeting'
-import { calendarCategory } from './calendarAppearance'
+import { calendarCategory } from '@/components/calendarAppearance'
 
 const NOW = dayjs('2026-10-17 12:00:00')
 const ME = 4

@@ -57,6 +57,6 @@ export default defineConfig({
     // 单测只覆盖**纯逻辑**（校验规则、几何换算、状态映射），不引 jsdom/测试库：
     // 组件行为交给 web/e2e 的 playwright 脚本（真浏览器、真接口），两者不重复投入
     environment: 'node',
-    include: ['src/**/*.test.{ts,tsx}'],
+    include: ['tests/**/*.test.{ts,tsx}'],
   },
 })

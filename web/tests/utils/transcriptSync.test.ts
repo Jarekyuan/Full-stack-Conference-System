@@ -5,7 +5,7 @@ import {
   formatOffset,
   splitSegmentIntoSentences,
   splitSentences,
-} from './transcriptSync'
+} from '@/utils/transcriptSync'
 
 const segments = [
   { id: 1, startMs: 0, endMs: 1000 },

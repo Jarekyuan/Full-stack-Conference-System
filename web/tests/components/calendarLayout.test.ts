@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { CalendarMeeting } from '@/api/meeting'
-import { layoutMeetings } from './calendarLayout'
+import { layoutMeetings } from '@/components/calendarLayout'
 
 let nextId = 1
 function meeting(start: string, end: string, id = nextId++): CalendarMeeting {

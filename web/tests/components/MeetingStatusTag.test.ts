@@ -4,7 +4,7 @@
  * 所以这里除了逐个状态断言，还专门守住"元数据是唯一来源"这件事：六态齐全、字段都不空、未知态有兜底。
  */
 import { describe, expect, it } from 'vitest'
-import { MEETING_STATUS_META, meetingEventText, meetingStatusText, statusBlockClass } from './MeetingStatusTag'
+import { MEETING_STATUS_META, meetingEventText, meetingStatusText, statusBlockClass } from '@/components/MeetingStatusTag'
 
 /** 后端 MeetingStatusEnum 的全部取值（docs/04 5.1） */
 const ALL_STATUSES = [10, 20, 30, 40, 50, 60]

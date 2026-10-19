@@ -3,7 +3,7 @@
  * 这是“跟随系统”能否正确覆盖/被覆盖的核心规则，抽成纯函数后不需要 DOM。
  */
 import { describe, expect, it } from 'vitest'
-import { resolveTheme } from './themeStore'
+import { resolveTheme } from '@/stores/themeStore'
 
 describe('resolveTheme', () => {
   it('手动亮色：无论系统偏好都返回 light', () => {

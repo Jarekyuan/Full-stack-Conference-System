@@ -31,13 +31,10 @@
 ## 三、目录与工程纪律
 
 ```
-web/src/
-├── api/          # 请求层：request.ts（axios 实例）+ 按业务分文件的接口封装（room.ts/meeting.ts...）
-├── stores/       # Zustand：userStore / notificationStore 等（仅客户端状态）
-├── hooks/        # useAppRequest / useWebSocket / usePermission / useDebounce...
-├── pages/        # 路由页面（Calendar / MeetingList / ApprovalCenter / admin/*...）
-├── components/   # 业务组件（RoomPicker / UserPicker / MeetingStatusTag...）
-└── layouts/      # MainLayout 等骨架
+web/
+├── src/          # 业务源码（api / stores / hooks / pages / components / layouts）
+├── tests/        # Vitest 单测，镜像 src/ 目录结构（*.test.ts）
+└── e2e/          # Playwright 真浏览器脚本（*.cjs）
 ```
 
 - **所有请求必须走 `src/api/`**：组件内不许直接 axios / fetch；token 注入、401 刷新、统一错误处理全部收在 `request.ts` 拦截器里（含 **401 single-flight 刷新**，见 02 文档 5.1）

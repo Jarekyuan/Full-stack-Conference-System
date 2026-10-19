@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import dayjs from 'dayjs'
-import { BUSINESS_END_HOUR, BUSINESS_START_HOUR, businessHoursViolation, disabledTimeForBooking } from './datePickerLimits'
+import { BUSINESS_END_HOUR, BUSINESS_START_HOUR, businessHoursViolation, disabledTimeForBooking } from '@/components/datePickerLimits'
 
 const NOW = dayjs('2026-10-17 10:30:45')
 

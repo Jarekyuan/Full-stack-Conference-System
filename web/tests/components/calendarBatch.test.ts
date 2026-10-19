@@ -3,7 +3,7 @@
  * 50 是后端硬上限；第 51 间房必须分成两片，而不是整页失败。
  */
 import { describe, expect, it } from 'vitest'
-import { CALENDAR_ROOM_BATCH_SIZE, chunkRoomIds } from './calendarBatch'
+import { CALENDAR_ROOM_BATCH_SIZE, chunkRoomIds } from '@/components/calendarBatch'
 
 const ids = (n: number) => Array.from({ length: n }, (_, i) => i + 1)
 

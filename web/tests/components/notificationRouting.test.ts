@@ -3,7 +3,7 @@
  * 这些分支如果只写在组件 switch 里，要靠 e2e 逐类造通知才能覆盖，成本高且容易漏。
  */
 import { describe, expect, it } from 'vitest'
-import { notificationTarget } from './notificationRouting'
+import { notificationTarget } from '@/components/notificationRouting'
 
 describe('notificationTarget', () => {
   it('待审批 → 先查会议状态（approvals-check）', () => {

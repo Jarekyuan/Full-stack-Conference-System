@@ -7,7 +7,7 @@ const http = vi.hoisted(() => ({
   delete: vi.fn(),
 }))
 
-vi.mock('./request', () => ({ http }))
+vi.mock('@/api/request', () => ({ http }))
 
 import {
   abortMultipart,
@@ -15,7 +15,7 @@ import {
   getPartUrls,
   getUploadSession,
   initMultipart,
-} from './file'
+} from '@/api/file'
 
 beforeEach(() => {
   vi.clearAllMocks()

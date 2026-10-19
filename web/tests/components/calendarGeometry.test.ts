@@ -12,7 +12,7 @@ import {
   pastRatio,
   slotFromClickRatio,
   toMinutes,
-} from './calendarGeometry'
+} from '@/components/calendarGeometry'
 
 /** 造一个只关心时间的会议块 */
 function meeting(startTime: string, endTime: string): CalendarMeeting {

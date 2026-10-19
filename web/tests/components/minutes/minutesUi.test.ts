@@ -16,7 +16,7 @@ import {
   minutesActionItemKey,
   minutesAiStatusMeta,
   minutesEmptyStateKind,
-} from './minutesUi'
+} from '@/components/minutes/minutesUi'
 
 describe('minutesEmptyStateKind', () => {
   it('无管理权限时一律"暂无会议纪要"，优先于会议状态', () => {

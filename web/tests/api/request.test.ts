@@ -38,7 +38,7 @@ vi.mock('axios', () => {
   return { default: { create } }
 })
 
-vi.mock('./token', () => ({
+vi.mock('@/api/token', () => ({
   getAccessToken: () => mocks.accessToken,
   getRefreshToken: () => mocks.refreshToken,
   setTokens: mocks.setTokens,
@@ -49,8 +49,8 @@ import {
   downloadFile,
   parseContentDispositionFilename,
   sanitizeDownloadFilename,
-} from './request'
-import { ApiError } from './types'
+} from '@/api/request'
+import { ApiError } from '@/api/types'
 
 // request.ts 按顺序创建三个实例：主实例 / 刷新专用 / 下载专用
 const downloadClient = () => mocks.clients[2]

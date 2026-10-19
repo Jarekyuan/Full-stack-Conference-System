@@ -10,12 +10,12 @@ const mocks = vi.hoisted(() => ({
   downloadFile: vi.fn(),
 }))
 
-vi.mock('./request', () => ({
+vi.mock('@/api/request', () => ({
   http: mocks.http,
   downloadFile: mocks.downloadFile,
 }))
 
-import { exportMinutes, startTranscription } from './minutes'
+import { exportMinutes, startTranscription } from '@/api/minutes'
 
 beforeEach(() => {
   vi.clearAllMocks()
