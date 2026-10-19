@@ -295,9 +295,9 @@ git commit -m "docs: 新增 Day1 全栈全景与登录链路教程"
 
 至少覆盖：
 - `server/meeting-service/src/main/java/com/smt/meeting/statemachine/MeetingStateMachine.java`
-- `server/meeting-service/src/main/java/com/smt/meeting/enums/MeetingStatus.java`
+- `server/meeting-service/src/main/java/com/smt/meeting/enums/MeetingStatusEnum.java`
 - `server/meeting-service/src/main/java/com/smt/meeting/service/ConflictChecker.java`
-- `server/meeting-service/src/main/java/com/smt/meeting/service/MeetingService.java`（创建校验链）
+- `server/meeting-service/src/main/java/com/smt/meeting/service/MeetingReserveService.java`（创建校验链）
 - `server/meeting-service/src/main/java/com/smt/meeting/service/AvailabilityService.java`
 - `server/meeting-service/src/main/java/com/smt/meeting/service/MeetingQueryService.java`
 - `server/meeting-service/src/main/resources/mapper/MeetingMapper.xml`（冲突 SQL）
@@ -395,7 +395,7 @@ JVM 内 synchronized → 单库事务/行锁/乐观锁 → 多实例 Redisson
 - [ ] **Step 3: 后端代码走读**
 
 至少覆盖：
-- `server/meeting-service/src/main/java/com/smt/meeting/service/MeetingService.java`（创建/改期/取消）
+- `server/meeting-service/src/main/java/com/smt/meeting/service/MeetingReserveService.java`（创建/改期/取消）
 - `server/meeting-service/src/main/java/com/smt/meeting/aop/Idempotent.java`
 - `server/meeting-service/src/main/java/com/smt/meeting/aop/IdempotentAspect.java`
 - `server/meeting-service/src/main/resources/mapper/MeetingMapper.xml`（version/行锁）

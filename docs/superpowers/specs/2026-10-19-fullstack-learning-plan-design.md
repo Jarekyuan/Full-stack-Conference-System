@@ -341,9 +341,9 @@
 
 - `state machine/MeetingStateMachine.java` + 迁移表
 - `service/ConflictChecker.java` + `MeetingMapper.xml` 冲突 SQL
-- `service/MeetingService.java` 创建预约校验链
+- `service/MeetingReserveService.java` 创建预约校验链
 - `service/AvailabilityService.java`、`MeetingQueryService.java` 日历接口
-- `entity/Meeting.java`、`RoomStrategy.java`、`enums/MeetingStatus.java`
+- `entity/Meeting.java`、`RoomStrategy.java`、`enums/MeetingStatusEnum.java`
 
 **前端走读**
 
@@ -374,10 +374,10 @@
 
 **后端走读**
 
-- `service/MeetingService.java` 预约锁 + `TransactionTemplate`
+- `service/MeetingReserveService.java` 预约锁 + `TransactionTemplate`
 - `aop/Idempotent.java`、`IdempotentAspect.java`
 - `MeetingMapper.xml` 的 `version` 乐观锁
-- `service/MeetingService.java` 改期/取消
+- `service/MeetingReserveService.java` 改期/取消
 - `scripts/concurrent-reserve.sh`、`concurrent-modify.sh`
 
 **前端走读**
