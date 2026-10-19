@@ -88,6 +88,8 @@ cleanup() {
     sql "DELETE FROM smt_meeting.sys_user_role WHERE user_id=$ADMIN2_ID;
          DELETE FROM smt_meeting.sys_user WHERE id=$ADMIN2_ID;" > /dev/null
   fi
+  # R7 用例可能把 admin 停用；无论成败都恢复，避免污染后续脚本
+  sql "UPDATE smt_meeting.sys_user SET status=1 WHERE id=1;" > /dev/null
   [ -n "$WEEK_A" ] && redis_cli DEL "cache:calendar:1:$WEEK_A" > /dev/null
   [ -n "$WEEK_B" ] && [ -n "$ROOM_ID" ] && redis_cli DEL "cache:calendar:$ROOM_ID:$WEEK_B" > /dev/null
   if [ -n "$ROOM_ID" ] || [ -n "$USER_ID" ]; then
@@ -330,6 +332,14 @@ CROSS_LEFT=$(sql "SELECT COUNT(*) FROM smt_meeting.meeting WHERE title='$CROSS_T
 check "跨天没有落库" "$([ "$CROSS_LEFT" = "0" ] && echo 1 || echo 0)" "count=$CROSS_LEFT"
 
 # ---------- ⑤.6 最后一名启用 ADMIN 保护（评审 R7） ----------
+# 该用例假设 admin(id=1) 是唯一启用管理员；用户环境可能已有别的 ADMIN（如 admin2）。
+OTHER_ACTIVE_ADMINS=$(sql "SELECT COUNT(*) FROM smt_meeting.sys_user u
+  JOIN smt_meeting.sys_user_role ur ON ur.user_id=u.id
+  JOIN smt_meeting.sys_role r ON r.id=ur.role_id
+  WHERE r.code='ADMIN' AND u.status=1 AND u.id<>1;")
+if [ "${OTHER_ACTIVE_ADMINS:-0}" != "0" ]; then
+  echo "  ⏭️ 跳过最后管理员保护：环境存在 ${OTHER_ACTIVE_ADMINS} 个其他启用管理员"
+else
 ADMIN2_USERNAME="t62_admin_$STAMP"
 ADMIN2_RESP=$(post_api "/api/users" "$ADMIN_TOKEN" \
   "{\"username\":\"$ADMIN2_USERNAME\",\"password\":\"t62_pass123\",\"realName\":\"T62临时管理员\",\"roleIds\":[1,3],\"deptId\":2}")
@@ -347,6 +357,7 @@ if [ -n "$ADMIN2_ID" ]; then
   check "降权后的旧 token 不能停用最后一名 ADMIN（20007）" \
     "$([ "$(code_of "$LAST_ADMIN_RESP")" = "20007" ] && echo 1 || echo 0)" "code=$(code_of "$LAST_ADMIN_RESP")"
   check "管理员 A 仍是启用状态" "$(sql "SELECT status FROM smt_meeting.sys_user WHERE id=1;")" "1"
+fi
 fi
 
 # ---------- ⑥ 选人排除停用用户；管理端仍可见 ----------
