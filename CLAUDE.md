@@ -32,10 +32,10 @@
 | 文档 | 内容 | 何时读 |
 |------|------|--------|
 | `docs/00-项目初心与目标.md` | **为什么做这个项目 + 三重目标 + 验收标尺**（防走偏） | 开工前 / 每个里程碑结束对照 |
-| `docs/01-需求文档.md` | 需求 + 规则编号 R-1~R-14 + **v1.3 数据模型**（RBAC 五表/部门树/参会人简化） | 改业务规则前 |
+| `docs/01-需求文档.md` | 需求 + 规则编号 R-1~R-17 + **v1.3 数据模型**（RBAC 五表/部门树/参会人简化） | 改业务规则前 |
 | `docs/02-技术架构方案.md` | 技术选型 + 8 项决策 + 关键设计（双 token/分布式锁/索引/Feign） | 动架构前 |
-| `docs/03-数据库设计.md` | **15 张表** DDL + 索引设计 + 面试决策点（为何无外键/为何半开区间） | 改表结构前 |
-| `docs/04-接口设计.md` | 全部 API 契约 + **错误码表**（10000~60001）+ 身份头约定 | 写接口前 |
+| `docs/03-数据库设计.md` | **20 张表** DDL + 索引设计 + 面试决策点（为何无外键/为何半开区间） | 改表结构前 |
+| `docs/04-接口设计.md` | 全部 API 契约 + **错误码表**（10000~70010）+ 身份头约定 | 写接口前 |
 | `docs/05-开发计划.md` | **66 任务清单** + 每任务实现要点/验收标准 | 认领任务前 |
 | `docs/07-项目理解指南.md` | M0+M1 理解指南（架构全景 + 4 条链路走读 + 8 个难点 + 10 个坑） | 理解已有代码 |
 | `server/AI-RULES.md` | 后端编码规范（红线） | 写后端代码前 |
@@ -47,13 +47,14 @@
 
 | 里程碑 | 状态 | 内容 |
 |--------|------|------|
-| M0 基础设施 | ✅ | Docker 4 容器 + 数据库 15 表 + Git |
+| M0 基础设施 | ✅ | Docker 4 容器 + 数据库 20 表 + Git |
 | M1 骨架+认证+会议室 | ✅ | 24 任务：双 token 无感刷新、会议室 CRUD、策略、Feign、登录/布局、**T1.20 组织与用户** |
 | M2 后端（预约核心） | ✅ **10/10** | 状态机 → 冲突检测 → 可用性/日历 → 创建预约 → 幂等 → Redisson 锁 → 并发脚本 → 列表详情 → 取消 → 修改（乐观锁） |
 | M2 前端 | ✅ **3/3** | ✅ T2.F1 日历页（时间轴定位 + memo 行级组件化）｜✅ T2.F2 预约表单 Drawer（防抖冲突提示 + 幂等提交）｜✅ T2.F3 我的会议列表 + 详情（筛选分页 + 状态时间线 + 取消） |
 | M3 审批+生命周期 | ✅ **8/8** | ✅ T3.1 待办/已办列表｜✅ T3.2 审批通过（复检+行锁）｜✅ T3.3 拒绝｜✅ T3.4 延长 + 提前结束｜✅ T3.5 定时流转｜✅ T3.6 对账补偿｜✅ T3.F1 审批中心（前端）｜✅ T3.F2 详情页延长/结束（前端） |
 | M4 通知+MQ+打磨 | ✅ **12/12**（评审见 `docs/review-M4.md`） | ✅ T4.1 事件发布（`meeting.events` topic + 事务提交后投递）｜✅ T4.2 notification-service 骨架（:8083）｜✅ T4.3 消费落库站内信（幂等 + 手动 ACK + 死信）｜✅ T4.4 通知 REST（列表/未读/已读，契约补登 docs/04 3.3）｜✅ T4.5 会议提醒（扫描 + 幂等 key）｜✅ T4.6 WebSocket 推送（网关 `?token=` + 提交后推）｜✅ T4.7 Redis 缓存（会议室注解式 + 日历手写式）｜✅ T4.8 预约限流（ZSET+Lua + Nacos 动态阈值）｜✅ T4.9 traceId 服务侧（MDC + 网关访问日志）｜✅ T4.10 测试盘点（单测 52→80 例）｜✅ T4.11 审计切面（@Log + 独立 audit.log）｜✅ T4.F1 通知中心（铃铛角标 + 列表 + WS 实时更新） |
 | M5 进阶+部署 | 🟡 **4/7** | ✅ T5.1 周期创建｜✅ T5.2 系列取消｜✅ T5.3 统计接口｜✅ T5.4 前端看板+周期入口；⏸ **T5.5~T5.7 容器化/部署按用户要求暂缓** |
+| M6 会议纪要 | ✅ **6/6** | ✅ 5 张表 + ObjectStorage/COS 分片｜✅ 腾讯 ASR 导入/详情/洞察｜✅ 语音文本联动｜✅ DeepSeek 异步纪要｜✅ Word 导出｜✅ 脚本/E2E/文档收口 |
 
 **M4 已全部完成（2026-10-16，12/12）**；**M5 做到 4/7**（周期会议 + 统计 + 看板），
 **剩下的 T5.5~T5.7（Dockerfile×4 + compose + Nginx）按用户要求暂缓**——用户要先自行验证一些东西。
@@ -170,6 +171,19 @@
   `verify-calendar-optimize` **30/30**、`verify-m5-recurring` **41/41**、
   `verify-m5-recurring-cancel` **36/36**、`verify-m4-notify-api` **46/46**；
   `e2e-meeting-list` **25/25**、其余 e2e 全绿；`npm run check` **68 例**、`npm run build` 通过。
+
+**M6 会议纪要（2026-10-19，记录见 `docs/05` 七·附四 / `docs/review-M5-T6.md`）**：
+- 会议详情新增「会议纪要」Tab：m4a 音频 + 腾讯 ASR 转写 → 播放高亮/点击 seek →
+  会议洞察（发言时长/占比/覆盖率）→ DeepSeek 结构化纪要 → Word 导出。
+- COS 分片上传（5MiB/并发 3/断点续传，预签名直传）；本地/CI 用 `LocalObjectStorage`，
+  真实 COS 走 `scripts/verify-cos-upload.sh`（缺 env 自动跳过）。
+- 新增 5 张表与 7xxxx 错误码；AI 状态机 `0→10→20→30/40`，失败自动重试 3 次；
+  `ai_started_at` 作为 run token 参与 CAS，`minutesTaskScheduler` 独立于会议状态/提醒任务；
+  生成接口限流 + 同会议 60 秒冷却 + max-chunks 10。
+- 验证：后端 **296 例**（排除需 auth 停机的用例）、`npm run check` **151 例**、
+  `verify-minutes` **19/19**、`verify-minutes-ai` **7/7**、`e2e-meeting-minutes` **7/7**，
+  其余脚本/e2e 全绿。集成验证时 `admin` 曾被 R7 用例停用：脚本已改为环境已有第二管理员时跳过，
+  并在 cleanup 无条件恢复 `admin` 启用。
 
 **M4 演示脚本（可照做）**：user1 登录前端（:5173）→ 另开一个浏览器/接口以 approver1 身份审批 →
 user1 端**铃铛角标秒级 +1**（WS）→ 打开通知中心看到"审批通过"→ 点掉角标归零。
@@ -438,6 +452,17 @@ user1 端**铃铛角标秒级 +1**（WS）→ 打开通知中心看到"审批通
     **规矩**：先处理完整状态块与 `hover:` 复合类，再处理普通类；最后统一做一次 token 去重，
     并人工看一遍 `dark:.*dark:` 的行。纯机械替换一定会制造这类“看起来能跑但语义错”的类。
 
+29. **COS 分片上传必须 ExposeHeader: ETag**：浏览器读不到 ETag 时 complete 拿不到分片校验值，
+    表象是“分片都传完了但完成失败”。CORS 规则见 docs/02 5.7；本地 provider 的 controller 已显式
+    `Access-Control-Expose-Headers: ETag`。
+30. **本地 provider 的 PUT 不能用 `curl --data-binary` 验证**：它会带
+    `Content-Type: application/x-www-form-urlencoded`，Spring 的 `OrderedFormContentFilter`
+    会在 controller 前把 body 消费成表单参数，controller 读到空流（ETag 为空、complete 70007）。
+    脚本用 `curl --upload-file`；浏览器 fetch 的 Blob 带音频 MIME，不受影响。
+31. **R7 最后管理员用例依赖“admin 是唯一启用管理员”**：用户环境若有第二个 ADMIN（如 admin2），
+    停用 admin 会被正确放行，脚本会误报。`verify-state-consequences.sh` 现按前置跳过该场景，
+    并在 cleanup 无条件恢复 admin 启用；单测仍覆盖 R7 不变式。
+
 ---
 
 ## 7. 怎么跑起来
@@ -482,6 +507,9 @@ bash scripts/verify-m4-audit.sh                    # T4.11：审计留痕（成�
 bash scripts/verify-m5-recurring.sh                # T5.1：周期创建（展开/N 场共享 recurring_id/冲突清单/40007/幂等）
 bash scripts/verify-m5-recurring-cancel.sh         # T5.2：系列取消（未来场次/历史不受影响/进行中拦截，约 2 分钟）
 bash scripts/verify-m5-stats.sh                    # T5.3：统计（接口 vs 独立 SQL 对账/裁剪/口径/权限）
+bash scripts/verify-minutes.sh                     # M6：分片上传/导入/联动/洞察/AI/导出（需 local provider + mock AI）
+bash scripts/verify-minutes-ai.sh                  # M6：AI 状态机 10→20→30、MOCK_FAIL→40→重试→30
+bash scripts/verify-cos-upload.sh                  # M6：真实 COS 冒烟（缺 COS_* env 自动跳过）
 #   ⚠️ **凡是会连续造会的脚本，开头都要装限流开关**（T4.8 之后预约有用户级限流 10 次/分钟）：
 #      `source "$(dirname "$0")/lib/ratelimit.sh"` + `ratelimit_disable_for_script`
 #      （e2e 用 `web/e2e/lib/ratelimit.cjs` 的 `disableRateLimit()`）。
@@ -505,9 +533,10 @@ cd server && mvn -q clean test -Dtest='!AuthFeignClientTest#batchUsersShouldDegr
 #      会以 "No tests matching pattern" 判定失败——看着像构建挂了，其实只是过滤器没匹配到任何用例
 
 # 前端
-cd web && npm run check     # = tsc --noEmit + eslint + vitest（26 例）
+cd web && npm run check     # = tsc --noEmit + eslint + vitest（151 例）
 node e2e/e2e-calendar.cjs   # playwright E2E（需先 npm i --no-save playwright + dev server；详见 web/e2e/README.md）
 node e2e/e2e-notify-ws.cjs  # T4.6：真浏览器验 WS 推送（连接/鉴权拒连/隔离/多标签页/秒级推送/会话注销）
+node e2e/e2e-meeting-minutes.cjs # M6：上传/转写 seek/洞察/AI/Word 导出（需 local provider + mock AI）
 ```
 
 **演示账号**（密码均为 `admin123`/`user123`）：
