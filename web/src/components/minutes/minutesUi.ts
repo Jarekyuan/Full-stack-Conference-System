@@ -1,7 +1,7 @@
 /**
  * 会议纪要 UI 的纯逻辑（无 React 依赖）：
  * - `minutesEmptyStateKind`：空态展示什么，权限判断优先于会议状态；
- * - `describeMinutesError`：后端错误码 → 用户可操作文案（70003 定位到行、70006 重新上传等）；
+ * - `describeMinutesError`：后端错误码 → 用户可操作文案（70006 重新上传、70012 未配置等）；
  * - `MINUTES_AI_STATUS_META`：AI 状态 → 文案/颜色/按钮文案的唯一映射（头部与 AI 状态条共用）；
  * - `escapeHtml`：ECharts HTML tooltip 的转义（displayName 是用户输入，直接拼 HTML 会 XSS）；
  * - `formatDuration` / `compactList` / `minutesActionItemKey`：洞察时长与摘要表格的纯函数。
@@ -34,8 +34,9 @@ export function minutesEmptyStateKind(
 
 /** 错误类别：调用方按类别决定 toast / 内联提示 / 静默 */
 export type MinutesErrorKind =
-  | 'transcript-format'
   | 'file-too-large'
+  | 'asr-failed'
+  | 'asr-not-configured'
   | 'upload-session-expired'
   | 'rate-limited'
   | 'forbidden'
@@ -47,40 +48,26 @@ export interface MinutesErrorInfo {
   kind: MinutesErrorKind
   /** 可直接展示给用户的文案；abort 时为空串（调用方应静默） */
   message: string
-  /** 70003 专用：出错行号（后端未提供时 undefined） */
-  line?: number
-  /** 70003 专用：后端给出的原因 */
-  reason?: string
 }
 
-/**
- * 把任意异常翻译成 UI 可用的结构。
- * 70003 的 data 约定为 `{line, reason}`（设计文档 §10.2），缺失时降级为「第 ? 行：<msg>」。
- */
+/** 把任意异常翻译成 UI 可用的结构。 */
 export function describeMinutesError(
   error: unknown,
   fallback = '操作失败，请稍后重试',
 ): MinutesErrorInfo {
   if (error instanceof ApiError) {
     switch (error.code) {
-      case 70003: {
-        const detail = (error.data ?? null) as { line?: number; reason?: string } | null
-        const line = typeof detail?.line === 'number' ? detail.line : undefined
-        const reason = typeof detail?.reason === 'string' ? detail.reason : undefined
-        return {
-          kind: 'transcript-format',
-          line,
-          reason,
-          message: `第 ${line ?? '?'} 行：${reason ?? error.message}`,
-        }
-      }
       case 70005:
         return {
           kind: 'file-too-large',
-          message: '文件或语音转写超出大小上限（音频 2GiB / 文本 5MiB）',
+          message: '文件超出大小上限（音频 2GiB）',
         }
       case 70006:
         return { kind: 'upload-session-expired', message: '上传会话已过期，请重新上传' }
+      case 70011:
+        return { kind: 'asr-failed', message: error.message || '语音识别失败，请重试' }
+      case 70012:
+        return { kind: 'asr-not-configured', message: '语音识别服务未配置，请联系管理员' }
       case 10005:
         return { kind: 'rate-limited', message: '请求过于频繁，请稍后再试' }
       case 10003:

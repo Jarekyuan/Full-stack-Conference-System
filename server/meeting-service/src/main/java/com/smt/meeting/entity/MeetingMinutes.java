@@ -27,6 +27,13 @@ public class MeetingMinutes {
     private Integer aiAttempts;
     private LocalDateTime aiStartedAt;
     private LocalDateTime aiFinishedAt;
+    /** 0 未转写 / 10 待识别 / 20 识别中 / 30 成功 / 40 失败 */
+    private Integer asrStatus;
+    private String asrTaskId;
+    private String asrError;
+    private Integer asrAttempts;
+    private LocalDateTime asrStartedAt;
+    private LocalDateTime asrFinishedAt;
     private Long createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

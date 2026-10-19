@@ -37,11 +37,4 @@
         </foreach>
     </insert>
 
-    <!-- 命中 uk_minutes_speaker(minutes_id, speaker_key) -->
-    <update id="updateDisplayName">
-        UPDATE meeting_minutes_speaker
-        SET display_name = #{displayName}, color = #{color}
-        WHERE minutes_id = #{minutesId} AND speaker_key = #{speakerKey}
-    </update>
-
 </mapper>

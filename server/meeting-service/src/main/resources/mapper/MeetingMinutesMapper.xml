@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<!-- 会议纪要 SQL（手写 XML）：AI 状态迁移通常带前态条件（CAS），影响 0 行 = 状态已被并发变更；
-     唯一例外是 resetAi：重新导入时无条件作废生成结果（见该语句注释） -->
+<!-- 会议纪要 SQL（手写 XML）：AI/ASR 状态迁移都带前态条件（CAS），影响 0 行 = 状态已被并发变更 -->
 <mapper namespace="com.smt.meeting.mapper.MeetingMinutesMapper">
 
     <resultMap id="BaseResultMap" type="com.smt.meeting.entity.MeetingMinutes">
@@ -19,6 +18,12 @@
         <result column="ai_attempts" property="aiAttempts"/>
         <result column="ai_started_at" property="aiStartedAt"/>
         <result column="ai_finished_at" property="aiFinishedAt"/>
+        <result column="asr_status" property="asrStatus"/>
+        <result column="asr_task_id" property="asrTaskId"/>
+        <result column="asr_error" property="asrError"/>
+        <result column="asr_attempts" property="asrAttempts"/>
+        <result column="asr_started_at" property="asrStartedAt"/>
+        <result column="asr_finished_at" property="asrFinishedAt"/>
         <result column="created_by" property="createdBy"/>
         <result column="created_at" property="createdAt"/>
         <result column="updated_at" property="updatedAt"/>
@@ -27,7 +32,8 @@
     <sql id="BaseColumns">
         id, meeting_id, room_id, audio_file_id, transcript_source, duration_ms,
         ai_status, summary_json, ai_model, ai_error, ai_attempts,
-        ai_started_at, ai_finished_at, created_by, created_at, updated_at
+        ai_started_at, ai_finished_at, asr_status, asr_task_id, asr_error,
+        asr_attempts, asr_started_at, asr_finished_at, created_by, created_at, updated_at
     </sql>
 
     <select id="selectById" resultMap="BaseResultMap">
@@ -62,24 +68,6 @@
             (#{meetingId}, #{roomId}, #{audioFileId}, #{transcriptSource}, #{durationMs},
              #{aiStatus}, #{createdBy})
     </insert>
-
-    <!-- 导入录音：只回填音频文件与时长，不触碰 AI 状态 -->
-    <update id="updateImport">
-        UPDATE meeting_minutes
-        SET audio_file_id = #{audioFileId},
-            duration_ms = #{durationMs},
-            transcript_source = #{transcriptSource}
-        WHERE id = #{id}
-    </update>
-
-    <!-- 重置：重新导入时无条件作废上一次生成结果（含模型标记），回到 0 未生成。
-         若此时仍有 worker 停在生成中(20)，其 markSuccess 的 CAS（20）会以 0 行收场，结果被有意丢弃。 -->
-    <update id="resetAi">
-        UPDATE meeting_minutes
-        SET ai_status = 0, summary_json = NULL, ai_model = NULL, ai_error = NULL,
-            ai_attempts = 0, ai_started_at = NULL, ai_finished_at = NULL
-        WHERE id = #{id}
-    </update>
 
     <!-- 请求生成：0 未生成 / 30 成功 / 40 失败 → 10 待生成 -->
     <update id="requestGenerate">
@@ -151,6 +139,141 @@
         WHERE ai_status = 20
           AND (ai_started_at IS NULL OR ai_started_at &lt; #{before})
         ORDER BY ai_started_at
+        LIMIT #{limit}
+    </select>
+
+    <!-- ==================== 腾讯 ASR 转写 ==================== -->
+
+    <!-- 开始/重开转写：绑定新音频，清空旧转写与 AI 结果；asr_status 进入 10 待识别。
+         旧 speakers/segments 由 Service 在同一事务内删除。 -->
+    <update id="startAsr">
+        UPDATE meeting_minutes
+        SET audio_file_id = #{audioFileId},
+            transcript_source = 'TENCENT_ASR',
+            duration_ms = #{durationMs},
+            asr_status = 10,
+            asr_task_id = NULL,
+            asr_error = NULL,
+            asr_attempts = 0,
+            asr_started_at = #{startedAt},
+            asr_finished_at = NULL,
+            ai_status = 0,
+            summary_json = NULL,
+            ai_model = NULL,
+            ai_error = NULL,
+            ai_attempts = 0,
+            ai_started_at = NULL,
+            ai_finished_at = NULL
+        WHERE id = #{id}
+    </update>
+
+    <!-- 提交成功：10 → 20；asr_started_at 是本次 run token -->
+    <update id="markAsrSubmitted">
+        UPDATE meeting_minutes
+        SET asr_status = 20,
+            asr_task_id = #{taskId},
+            asr_started_at = #{startedAt},
+            asr_error = NULL,
+            asr_finished_at = NULL
+        WHERE id = #{id} AND asr_status = 10
+        <choose>
+            <when test="startedAt != null">AND asr_started_at = #{startedAt}</when>
+            <otherwise>AND asr_started_at IS NULL</otherwise>
+        </choose>
+    </update>
+
+    <!-- 提交 ASR 失败待重试：保持 10，记录次数与错误；下一轮重新提交 -->
+    <update id="markAsrSubmitRetry">
+        UPDATE meeting_minutes
+        SET asr_error = #{error}, asr_attempts = #{attempts}, asr_finished_at = #{finishedAt}
+        WHERE id = #{id} AND asr_status = 10
+        <choose>
+            <when test="startedAt != null">AND asr_started_at = #{startedAt}</when>
+            <otherwise>AND asr_started_at IS NULL</otherwise>
+        </choose>
+    </update>
+
+    <!-- 提交 ASR 失败终止：10 → 40 -->
+    <update id="markAsrSubmitFailed">
+        UPDATE meeting_minutes
+        SET asr_status = 40, asr_error = #{error}, asr_attempts = #{attempts},
+            asr_finished_at = #{finishedAt}
+        WHERE id = #{id} AND asr_status = 10
+        <choose>
+            <when test="startedAt != null">AND asr_started_at = #{startedAt}</when>
+            <otherwise>AND asr_started_at IS NULL</otherwise>
+        </choose>
+    </update>
+
+    <!-- 识别成功：20 → 30（同时校验 run token，旧任务的结果不会覆盖新一轮） -->
+    <update id="markAsrSuccess">
+        UPDATE meeting_minutes
+        SET asr_status = 30,
+            duration_ms = #{durationMs},
+            asr_error = NULL,
+            asr_finished_at = #{finishedAt}
+        WHERE id = #{id} AND asr_status = 20
+        <choose>
+            <when test="startedAt != null">AND asr_started_at = #{startedAt}</when>
+            <otherwise>AND asr_started_at IS NULL</otherwise>
+        </choose>
+    </update>
+
+    <!-- 识别失败待重试：20 → 10，清空 taskId 后下一轮重新提交 -->
+    <update id="markAsrRetry">
+        UPDATE meeting_minutes
+        SET asr_status = 10,
+            asr_task_id = NULL,
+            asr_error = #{error},
+            asr_attempts = #{attempts},
+            asr_finished_at = #{finishedAt}
+        WHERE id = #{id} AND asr_status = 20
+        <choose>
+            <when test="startedAt != null">AND asr_started_at = #{startedAt}</when>
+            <otherwise>AND asr_started_at IS NULL</otherwise>
+        </choose>
+    </update>
+
+    <!-- 识别失败终止：20 → 40 -->
+    <update id="markAsrFailed">
+        UPDATE meeting_minutes
+        SET asr_status = 40,
+            asr_task_id = NULL,
+            asr_error = #{error},
+            asr_attempts = #{attempts},
+            asr_finished_at = #{finishedAt}
+        WHERE id = #{id} AND asr_status = 20
+        <choose>
+            <when test="startedAt != null">AND asr_started_at = #{startedAt}</when>
+            <otherwise>AND asr_started_at IS NULL</otherwise>
+        </choose>
+    </update>
+
+    <!-- 待提交 ASR 队列：命中 idx_asr_status(asr_status, updated_at) -->
+    <select id="selectAsrPending" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM meeting_minutes
+        WHERE asr_status = 10
+        ORDER BY updated_at
+        LIMIT #{limit}
+    </select>
+
+    <!-- 识别中队列：每轮轮询 DescribeTaskStatus -->
+    <select id="selectAsrRunning" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM meeting_minutes
+        WHERE asr_status = 20
+        ORDER BY updated_at
+        LIMIT #{limit}
+    </select>
+
+    <!-- ASR 超时：卡在 20 且 started_at 早于阈值（NULL 也捞出来恢复） -->
+    <select id="selectAsrStuck" resultMap="BaseResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM meeting_minutes
+        WHERE asr_status = 20
+          AND (asr_started_at IS NULL OR asr_started_at &lt; #{before})
+        ORDER BY asr_started_at
         LIMIT #{limit}
     </select>
 

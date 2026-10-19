@@ -5,6 +5,10 @@
 > 适用项目：`new-meeting-systems`
 > 输入素材：旧项目 `前端部分/virsical-meeting-dev-v11.5` 的 `MeetingNoteForTime`（音频播放 + 转写高亮联动）；
 > 转写文本为腾讯云 ASR 体验页导出格式。
+>
+> **v1.5 变更（2026-10-19）**：转写改为「只上传音频 → 腾讯云 ASR 异步自动转写」；
+> 移除手工粘贴转写与发言人重命名。ASR 使用 `CreateRecTask`/`DescribeTaskStatus`，
+> `asr_status` 0/10/20/30/40，`asr_started_at` 作为 run token；E2E 用 `MINUTES_ASR_PROVIDER=mock`。
 
 ---
 
@@ -17,7 +21,7 @@
 目标：
 
 1. 会议结束后，组织人上传录音（m4a 为主）与腾讯云 ASR 语音转写，系统解析为带时间戳/说话人的分段。
-2. 提供语音文本联动工作台：播放高亮、点击跳转、自动滚动、倍速、发言人重命名。
+2. 提供语音文本联动工作台：逐句高亮、点击跳转、自动滚动、倍速。
 3. 基于转写调用 DeepSeek 生成**结构化会议纪要**（摘要/关键结论/待办/风险），异步生成、可重试。
 4. 基于转写实时计算**会议洞察**（每人发言时长/占比/次数、发言覆盖率），在纪要页展示。
 5. 导出 Word（docx）。
@@ -54,21 +58,20 @@
 | 操作 | 组织人 | 参会人 | ADMIN | 其他登录用户 |
 |---|---|---|---|---|
 | 查看纪要/转写/洞察/导出 | ✅ | ✅ | ✅ | ❌ |
-| 上传/导入/重命名发言人/重新生成 | ✅ | ❌ | ✅ | ❌ |
+| 上传音频/发起转写/重新生成 | ✅ | ❌ | ✅ | ❌ |
 
 - 参会人判定查 `meeting_participant`（`uk_meeting_user`）。
 - 会议详情本身是登录可查，但纪要接口必须单独鉴权，不能沿用“详情公开”的假设。
 - `GET /meetings/{id}/minutes` 返回 `permissions.canManage/canView`，前端据此显示入口与按钮；
   服务端仍是最终裁决。无纪要时 `data=null`，前端用会议详情里的组织人/参会人/角色计算入口，
   真正的校验仍在服务端。
-- 本期导入要求**音频与转写同时具备**；不支持纯文本纪要（无时间戳无法联动）。
+- 本期只支持上传音频并由腾讯 ASR 自动转写；不再支持手工粘贴纯文本（无时间戳无法联动）。
 
 ### 2.3 覆盖规则
 
 - 每场会议只有一份当前纪要（`meeting_minutes.meeting_id` 唯一）。
-- 重新导入会覆盖旧转写与发言人，并重置 AI 纪要；前端必须二次确认。
+- 重新上传会覆盖旧音频、清空旧转写/发言人并重置 AI 纪要；前端必须二次确认。
 - 旧音频对象在新导入成功提交后再异步删除；删除失败只记 WARN，不影响主流程。
-- 发言人在 AI 生成后重命名，不会自动改写已生成的纪要文本；前端提示“重新生成可同步新称呼”。
 
 ---
 
@@ -136,7 +139,7 @@ CREATE TABLE IF NOT EXISTS meeting_minutes (
   room_id         BIGINT       NOT NULL,
   audio_file_id   BIGINT       NULL COMMENT 'file_object.id',
   transcript_source VARCHAR(32) NOT NULL DEFAULT 'TENCENT_ASR',
-  duration_ms     BIGINT       NOT NULL DEFAULT 0 COMMENT '录音时长；导入时由前端 audio.duration 提供，缺省用最后分段 end_ms',
+  duration_ms     BIGINT       NOT NULL DEFAULT 0 COMMENT '录音时长；ASR 成功后取 AudioDuration，缺省用最后分段 end_ms',
   ai_status       TINYINT      NOT NULL DEFAULT 0 COMMENT '0 未生成 10 待生成 20 生成中 30 成功 40 失败',
   summary_json    JSON         NULL COMMENT '结构化纪要',
   ai_model        VARCHAR(64)  NULL,
@@ -160,7 +163,7 @@ CREATE TABLE IF NOT EXISTS meeting_minutes_speaker (
   id           BIGINT      NOT NULL AUTO_INCREMENT,
   minutes_id   BIGINT      NOT NULL,
   speaker_key  VARCHAR(32) NOT NULL COMMENT 'ASR 原始说话人编号，如 0/1/2',
-  display_name VARCHAR(50) NOT NULL COMMENT '默认“说话人 N”，可重命名',
+  display_name VARCHAR(50) NOT NULL COMMENT '默认“说话人 N”',
   color        VARCHAR(16) NOT NULL COMMENT '前端展示色，#RRGGBB',
   created_at   DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at   DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -303,7 +306,7 @@ public interface ObjectStorage {
 
 ---
 
-## 5. 转写导入与解析
+## 5. 转写导入与解析（v1.5 起改为 ASR 自动转写，以下手工导入细节保留作历史设计）
 
 ### 5.1 输入格式（腾讯云 ASR）
 
@@ -325,7 +328,7 @@ public interface ObjectStorage {
   另加 `h:mm:ss.SSS` 变体。
 - 校验：`start < end`；`start` 不早于上一段 `start`（允许相同起点，不允许倒序）；单段文本 ≤ 2000 字符；
   总文本 ≤ 5 MiB；分段数 ≤ 20000。
-- 失败返回 `70003`，`data` 带 `line`、`reason`，前端直接定位到出错行。
+- 上传音频后调 `POST /meetings/{id}/minutes/transcribe`；ASR 失败返回 `70011`，未配置返回 `70012`。
 - 说话人按首次出现顺序创建 `meeting_minutes_speaker`，默认名 `说话人 1/2/...`，
   颜色按固定调色板循环取：`#7D8CFF / #69CFF5 / #FFB020 / #52C41A / #FF6D6A / #B37FEB / #13C2C2 / #FA8C16`
   （与旧项目风格一致，保证深色模式可读）。
@@ -344,7 +347,7 @@ public interface ObjectStorage {
    `ai_started_at/ai_finished_at=NULL`。
 6. 事务提交后 best-effort 删除旧音频对象。
 
-`duration_ms` 取导入请求里的 `durationMs`（前端用 `audio.duration * 1000` 得到，允许 0–24 小时）；
+`duration_ms` 取 ASR 结果的 `AudioDuration`，缺省用最后分段 endMs；
 缺省或小于最后一段 `end_ms` 时取最后一段 `end_ms`，保证洞察覆盖率不被错误裁剪。
 
 ---
@@ -389,7 +392,6 @@ findActiveSegment(segments, currentMs): number | null
   子句时间按字符数比例从段起止时间估算（ASR 只有段级时间戳），点击子句按估算时间跳转。
 - 仅在子句移出视口时**自动滚动**，避免每 250ms 抖动。
 - 点击任意分段文本：`audio.currentTime = startMs/1000`；正在播放则继续播放，暂停则只定位。
-- 发言人色块点击打开重命名弹窗；重命名只影响展示，不影响分段原始 `speaker_key`。
 - 转写列表行级 memo + `@tanstack/react-virtual` 虚拟滚动：只挂载可视区 + overscan 行，
   行高由 `measureElement` 动态测量；播放高亮用 `scrollToIndex` 保持当前段可见。上限 20000 段。
 - 键盘：播放器聚焦时空格播放/暂停，左右箭头 ±5 秒；分段可用 Tab 聚焦、Enter 跳转。
@@ -634,27 +636,15 @@ User：按 `[HH:mm:ss] 发言人：文本` 拼接转写。
 
 响应：`{ "url": "https://...", "expiresAt": "2026-10-18 19:00:00" }`。
 
-#### `POST /meetings/{id}/minutes/import`
+#### `POST /meetings/{id}/minutes/transcribe`
 
 ```json
-{
-  "fileId": 123,
-  "transcriptText": "[0:1.030,0:8.570,0] ……",
-  "durationMs": 3600000,
-  "source": "TENCENT_ASR"
-}
+{ "fileId": 123 }
 ```
 
 - 权限：组织人/ADMIN；会议 `status=40`；文件属于该会议。
-- 响应：同 `GET minutes`（含 `permissions`）。
-- 失败：`70002/70003/70004/70010`。
-
-#### `PUT /meetings/{id}/minutes/speakers/{speakerKey}`
-
-请求：`{ "displayName": "张三", "color": "#7D8CFF" }`
-
-- `displayName` 1–50 字符；`color` 匹配 `^#[0-9A-Fa-f]{6}$`。
-- 响应：更新后的发言人对象。
+- 响应：同 `GET minutes`（含 `asrStatus` / `permissions`）。
+- 失败：`70002/70004/70005/70011/70012`。
 
 #### `POST /meetings/{id}/minutes/generate`
 
@@ -676,14 +666,15 @@ User：按 `[HH:mm:ss] 发言人：文本` 拼接转写。
 |---|---|---|
 | 70001 | 会议纪要不存在 | 提示并回到上传态 |
 | 70002 | 当前会议状态不能上传纪要 | 提示“会议结束后再试” |
-| 70003 | 语音转写格式错误（`data.line/reason`） | 定位到出错行 |
 | 70004 | 文件类型不支持 | 展示白名单 |
-| 70005 | 文件或语音转写超出大小上限 | 展示 2GB / 5MiB 上限 |
+| 70005 | 文件超出大小上限 | 展示 2GiB 上限 |
 | 70006 | 上传会话不存在或已过期 | 清除本地会话，重新上传 |
 | 70007 | 分片不完整或大小不一致 | 展示缺失分片，允许续传 |
 | 70008 | AI 服务未配置 | 提示联系管理员配置 |
 | 70009 | 纪要生成失败 | 展示 `msg`，提供重试 |
 | 70010 | 语音转写内容无有效分段 | 提示检查文件 |
+| 70011 | 语音识别失败 | 提示重试/重新上传 |
+| 70012 | 语音识别服务未配置 | 提示管理员配置 |
 
 全部登记 `ErrorCode` 枚举 + `docs/04` 2.2 错误码表。
 
@@ -765,7 +756,7 @@ minutes:
 - 网关新增路由 `/api/files/**` → meeting-service；`/api/meetings/**` 复用现有路由。
 - 新增 Maven 依赖：`com.qcloud:cos_api:5.6.227`、`org.apache.poi:poi-ooxml:5.2.5`。
   若 Maven Central 拉取失败，升级到同 5.6.x 的最新稳定版并在 pom 注释版本来源。
-- 转写导入走 JSON 请求体（≤5 MiB）；meeting-service 增加 `Content-Length` 上限过滤器（8 MiB，
+- v1.5 起手工转写 JSON 请求体已移除；音频仍走 COS 分片，转写结果由 ASR worker 落库。
   含 JSON 转义余量），超限返回 `70005`。网关如启用请求体缓存，同步设置
   `spring.codec.max-in-memory-size: 8MB`；否则大请求可能被网关截断。
 - 本地/CI 用 `STORAGE_PROVIDER=local` + `MINUTES_AI_PROVIDER=mock`；演示用 `cos` + `deepseek`。
@@ -801,13 +792,13 @@ minutes:
 - `MinutesAiStateMachineTest`：合法/非法迁移、CAS 失败、卡死恢复。
 - `AiSummaryParserTest`：合法 JSON、缺字段、非法日期、非法 priority、null owner。
 - `MinutesPermissionTest`：组织人/参会人/ADMIN/路人 × 查看/管理。
-- `MinutesServiceTest`：导入覆盖、AI 重置、旧对象删除 best-effort、重名发言人。
+- `MinutesServiceTest`：读侧详情/转写/音频 URL；`MinutesAsrServiceTest`：ASR 入队/幂等/成功/失败重试。
 - `MultipartUploadServiceTest`：init 校验、complete 幂等、大小不一致、会话过期、越权 uploadId。
 
 ### 15.2 脚本（本地 provider + mock LLM，CI 可跑）
 
 - `scripts/verify-minutes.sh`：init → 分片 → listParts → complete → import → detail/transcript/insights →
-  重命名 → 导出 docx（校验 ZIP 魔数与关键文本）→ 重新导入覆盖 → 权限负例。
+  → 导出 docx（校验 ZIP 魔数与关键文本）→ 重新上传覆盖 → 权限负例。
 - `scripts/verify-minutes-ai.sh`：触发 → 10→20→30；mock 失败 → 40 → 重试 → 30；卡死恢复；
   重复触发幂等；未配置 AI → 70008。
 - `scripts/verify-cos-upload.sh`（手动）：读 `COS_*` 环境变量，小文件走真实 COS 分片并删除；
@@ -824,7 +815,7 @@ minutes:
   - 断言洞察数字与 SQL/解析结果一致；
   - mock AI 生成 → 断言摘要来自本次转写、页面有「本地演示」提示；
   - 导出触发下载并断言文件名与响应 Content-Type；
-  - 重新导入 300 段 → 断言 DOM 只渲染可视区行数、滚动到底部后末段才挂载。
+  - 上传音频后等待 ASR 完成 → 断言逐句高亮与点击 seek（E2E 使用 mock ASR）。
 - 所有脚本/e2e 自清理：会议、纪要、分段、发言人、文件对象、上传会话、本地对象目录。
 
 ### 15.4 回归
@@ -840,8 +831,8 @@ minutes:
 | 里程碑 | 内容 | 验收 |
 |---|---|---|
 | M6.1 | 5 张表 + `ObjectStorage` 抽象 + COS/Local 实现 + 分片接口 | `verify-cos-upload.sh` 手动通过；本地上传脚本通过 |
-| M6.2 | 腾讯 ASR 解析 + 导入/覆盖 + 纪要详情/转写/洞察接口 | 单测 + `verify-minutes.sh` 前半通过 |
-| M6.3 | 语音文本联动工作台（播放器/逐句高亮/跳转/重命名） | 前端单测 + e2e 联动断言 |
+| M6.2 | 腾讯 ASR 自动转写 + 纪要详情/转写/洞察接口 | 单测 + `verify-minutes.sh` 通过 |
+| M6.3 | 语音文本联动工作台（播放器/逐句高亮/跳转） | 前端单测 + e2e 联动断言 |
 | M6.4 | DeepSeek 异步任务 + 结构化纪要 + 轮询/重试 | `verify-minutes-ai.sh` + mock e2e |
 | M6.5 | Word 导出 + 会议洞察图表 | 导出脚本 + e2e |
 | M6.6 | 文档收口 + 全量回归 | 所有脚本/e2e/单测绿，工作区干净 |
@@ -866,12 +857,12 @@ minutes:
 | 2GB 文件浏览器内存 | 只用 `File.slice`，不整体读入内存；并发 3；进度按已传字节 |
 | DeepSeek 超时/限流/费用 | 异步 + 3 次上限 + 手动重试；输入分块；只在组织人/ADMIN 触发 |
 | 长转写渲染卡顿 | 行级 memo + 虚拟滚动只挂载可视行；20000 段上限 |
-| 转写质量差/说话人错 | 支持重命名发言人；AI 提示“无法确定用 null”；不自动改写原始分段 |
-| 录音时长缺失 | 导入时前端提供 `audio.duration`；缺省取最后分段 `end_ms` |
+| 转写质量差/说话人错 | ASR 话者分离自动生成“说话人 N”；AI 提示“无法确定用 null”；不自动改写原始分段 |
+| 录音时长缺失 | ASR 返回 `AudioDuration`；缺省取最后分段 `end_ms` |
 | 旧项目代码风格差异 | 不复制 Umi/Dva 代码，只复用交互与数据口径；按本项目 React 18 + hooks 重写 |
 | COS/DeepSeek 在 CI 不可用 | 本地 provider + mock LLM；真实链路用手动冒烟脚本 |
 | COS SDK 与现有 OkHttp/Jackson 依赖冲突 | 先跑 `mvn dependency:tree` 对齐，必要时 exclusion；全量单测回归 |
-| 转写 JSON 请求体过大 | 5 MiB 上限 + 网关/服务端请求体同步调整 + 超限返回 `70005` |
+| 长音频 ASR 超时 | 录音文件识别异步任务 + 6 小时预签名 URL + 超时/重试；单文件 ≤5 小时/512MB |
 | 本地存储端点误开到生产 | 仅 `storage.provider=local` 注册；生产 profile 强制 `cos` 并加启动校验 |
 
 ---

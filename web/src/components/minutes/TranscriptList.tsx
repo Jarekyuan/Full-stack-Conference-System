@@ -24,9 +24,7 @@ interface Props {
   activeId: number | null
   /** 当前子句下标；仅 activeId 对应的那一行使用 */
   activeSentenceIndex: number | null
-  canManage: boolean
   onSelect: (segment: TranscriptSegment, sentenceIndex: number, startMs: number) => void
-  onRename: (speaker: MinutesSpeaker) => void
 }
 
 interface RowProps {
@@ -34,9 +32,7 @@ interface RowProps {
   speaker: MinutesSpeaker | undefined
   active: boolean
   activeSentenceIndex: number | null
-  canManage: boolean
   onSelect: (segment: TranscriptSegment, sentenceIndex: number, startMs: number) => void
-  onRename: (speaker: MinutesSpeaker) => void
 }
 
 const TranscriptRow = memo(function TranscriptRow({
@@ -44,9 +40,7 @@ const TranscriptRow = memo(function TranscriptRow({
   speaker,
   active,
   activeSentenceIndex,
-  canManage,
   onSelect,
-  onRename,
 }: RowProps) {
   const color = speaker?.color ?? '#7D8CFF'
   const phrases = useMemo<TimedSentence[]>(() => {
@@ -74,20 +68,12 @@ const TranscriptRow = memo(function TranscriptRow({
       style={active ? { borderLeftColor: color } : undefined}
     >
       <div className="mb-1 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            if (canManage && speaker) onRename(speaker)
-          }}
-          onKeyDown={(e) => e.stopPropagation()}
-          disabled={!canManage || !speaker}
-          aria-label={speaker ? `重命名发言人 ${speaker.displayName}` : undefined}
-          className="rounded px-1.5 py-0.5 text-xs font-medium focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-default"
+        <span
+          className="rounded px-1.5 py-0.5 text-xs font-medium"
           style={{ color, backgroundColor: `${color}1A` }}
         >
           {speaker?.displayName ?? `说话人 ${segment.speakerKey}`}
-        </button>
+        </span>
         <Tag className="m-0 text-[11px]">{formatOffset(segment.startMs)}</Tag>
       </div>
       <button
@@ -141,9 +127,7 @@ function TranscriptList({
   speakers,
   activeId,
   activeSentenceIndex,
-  canManage,
   onSelect,
-  onRename,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // 轮询每 3s 返回全新的 speakers 数组；按内容签名缓存 Map，
@@ -224,9 +208,7 @@ function TranscriptList({
                 speaker={speakerMap.get(segment.speakerKey)}
                 active={segment.id === activeId}
                 activeSentenceIndex={segment.id === activeId ? activeSentenceIndex : null}
-                canManage={canManage}
                 onSelect={onSelect}
-                onRename={onRename}
               />
             </div>
           )
@@ -246,8 +228,6 @@ export default memo(
     prev.segments === next.segments &&
     prev.activeId === next.activeId &&
     prev.activeSentenceIndex === next.activeSentenceIndex &&
-    prev.canManage === next.canManage &&
     prev.onSelect === next.onSelect &&
-    prev.onRename === next.onRename &&
     speakerListSignature(prev.speakers) === speakerListSignature(next.speakers),
 )

@@ -18,10 +18,4 @@ public interface MinutesSpeakerMapper {
 
     /** 批量新增（<foreach> 生成多值 INSERT） */
     int batchInsert(@Param("list") List<MinutesSpeaker> speakers);
-
-    /** 修改展示名与展示色（命中 uk_minutes_speaker） */
-    int updateDisplayName(@Param("minutesId") Long minutesId,
-                          @Param("speakerKey") String speakerKey,
-                          @Param("displayName") String displayName,
-                          @Param("color") String color);
 }

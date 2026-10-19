@@ -5,15 +5,14 @@ import com.smt.common.exception.BusinessException;
 import com.smt.common.result.ErrorCode;
 import com.smt.common.result.Result;
 import com.smt.meeting.aop.RateLimit;
-import com.smt.meeting.dto.MinutesImportDTO;
-import com.smt.meeting.dto.SpeakerUpdateDTO;
+import com.smt.meeting.dto.MinutesTranscribeDTO;
 import com.smt.meeting.service.MinutesAiService;
+import com.smt.meeting.service.MinutesAsrService;
 import com.smt.meeting.service.MinutesExportService;
 import com.smt.meeting.service.MinutesService;
 import com.smt.meeting.vo.AiGenerateVO;
 import com.smt.meeting.vo.AudioUrlVO;
 import com.smt.meeting.vo.MinutesDetailVO;
-import com.smt.meeting.vo.MinutesSpeakerVO;
 import com.smt.meeting.vo.TranscriptVO;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
@@ -21,7 +20,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -42,6 +40,7 @@ public class MinutesController {
 
     private final MinutesService minutesService;
     private final MinutesAiService minutesAiService;
+    private final MinutesAsrService minutesAsrService;
     private final MinutesExportService minutesExportService;
 
     @GetMapping("/{id}/minutes")
@@ -81,20 +80,16 @@ public class MinutesController {
         return Result.success(minutesService.audioUrl(id, UserContext.getUserId()));
     }
 
-    @PostMapping("/{id}/minutes/import")
-    public Result<MinutesDetailVO> importMinutes(@PathVariable Long id,
-                                                 @Valid @RequestBody MinutesImportDTO dto) {
+    /**
+     * 上传音频后发起腾讯 ASR 转写。音频必须先完成分片上传并拿到 fileId；
+     * 转写是异步的，前端轮询会议纪要详情里的 asrStatus（10/20 → 30/40）。
+     */
+    @PostMapping("/{id}/minutes/transcribe")
+    public Result<MinutesDetailVO> transcribe(@PathVariable Long id,
+                                              @Valid @RequestBody MinutesTranscribeDTO dto) {
         Long userId = UserContext.getUserId();
-        minutesService.importMinutes(id, dto, userId);
+        minutesAsrService.request(id, dto, userId);
         return Result.success(minutesService.detail(id, userId));
-    }
-
-    @PutMapping("/{id}/minutes/speakers/{speakerKey}")
-    public Result<MinutesSpeakerVO> renameSpeaker(@PathVariable Long id,
-                                                  @PathVariable String speakerKey,
-                                                  @Valid @RequestBody SpeakerUpdateDTO dto) {
-        return Result.success(minutesService.renameSpeaker(
-                id, speakerKey, dto, UserContext.getUserId()));
     }
 
     /**

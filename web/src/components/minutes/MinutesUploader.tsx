@@ -1,20 +1,16 @@
 /**
- * 纪要上传器：音频（m4a 为主）+ 腾讯 ASR 语音转写。
+ * 纪要上传器：只上传会议录音，随后自动调用腾讯 ASR 转写。
  * - 音频走 useMultipartUpload，支持暂停/续传；
- * - 上传成功即缓存 fileId：导入失败（如 70003 行格式错误）重试时只重导、不重传；
- * - 暂停后「继续上传并导入」在分片续传完成后直接导入；
- * - 语音转写以 ref 为准，上传期间继续编辑的内容会用于最终导入。
+ * - 上传完成拿到 fileId 后调 /minutes/transcribe，父组件刷新详情即可看到识别进度；
+ * - 转写失败重试时可复用已上传的 fileId，不重复传大文件。
  */
 import { useRef, useState } from 'react'
-import { Alert, App, Button, Card, Input, Progress, Space, Tag, Typography } from 'antd'
-import { importMinutes } from '@/api/minutes'
+import { Alert, App, Button, Card, Progress, Space, Tag } from 'antd'
+import { startTranscription } from '@/api/minutes'
 import { useMultipartUpload } from '@/hooks/useMultipartUpload'
 import { describeMinutesError } from './minutesUi'
 
 const AUDIO_ACCEPT = '.m4a,.mp3,.wav,.aac,.ogg,audio/*'
-const TRANSCRIPT_MAX_BYTES = 5 * 1024 * 1024
-/** 音频元数据读取上限：读不到就按 undefined 传给后端，不阻塞导入 */
-const DURATION_TIMEOUT_MS = 5000
 
 interface UploadedAudio {
   /** name:size:lastModified，文件内容/身份变化时缓存失效 */
@@ -26,50 +22,23 @@ function audioFileKey(file: File): string {
   return `${file.name}:${file.size}:${file.lastModified}`
 }
 
-async function readAudioDuration(file: File): Promise<number | undefined> {
-  return new Promise((resolve) => {
-    const url = URL.createObjectURL(file)
-    const audio = new Audio()
-    let settled = false
-    const finish = (value?: number) => {
-      if (settled) return
-      settled = true
-      window.clearTimeout(timer)
-      audio.onloadedmetadata = null
-      audio.onerror = null
-      audio.removeAttribute('src')
-      audio.load()
-      URL.revokeObjectURL(url)
-      resolve(value)
-    }
-    const timer = window.setTimeout(() => finish(undefined), DURATION_TIMEOUT_MS)
-    audio.onloadedmetadata = () => {
-      finish(Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : undefined)
-    }
-    audio.onerror = () => finish(undefined)
-    audio.src = url
-  })
-}
-
 interface Props {
   meetingId: number
+  /** 转写任务已提交：父组件刷新纪要详情，展示 ASR 进度/工作台 */
   onImported: () => void
 }
 
 export default function MinutesUploader({ meetingId, onImported }: Props) {
   const { message } = App.useApp()
   const audioInput = useRef<HTMLInputElement>(null)
-  const transcriptInput = useRef<HTMLInputElement>(null)
   const [audioFile, setAudioFile] = useState<File | null>(null)
-  const [transcript, setTranscript] = useState('')
-  const transcriptRef = useRef('')
-  const [importing, setImporting] = useState(false)
-  // ref 给异步流程读最新值，state 只负责渲染"已上传/待导入"标签
+  const [submitting, setSubmitting] = useState(false)
+  // ref 给异步流程读最新值，state 只负责渲染"已上传/待转写"标签
   const uploadedRef = useRef<UploadedAudio | null>(null)
   const [uploaded, setUploaded] = useState<UploadedAudio | null>(null)
   const { upload, pause, resume, reset, progress, status, error } = useMultipartUpload(meetingId)
 
-  const selectionLocked = importing || status === 'uploading' || status === 'paused'
+  const selectionLocked = submitting || status === 'uploading' || status === 'paused'
   const uploadedForCurrentFile =
     uploaded != null && audioFile != null && uploaded.key === audioFileKey(audioFile)
   const uploadStatusText =
@@ -80,15 +49,10 @@ export default function MinutesUploader({ meetingId, onImported }: Props) {
         : status === 'error'
           ? '音频上传失败'
           : uploadedForCurrentFile
-            ? '音频已上传，待导入'
+            ? '音频已上传，待转写'
             : audioFile
               ? `已选择音频 ${audioFile.name}`
               : ''
-
-  const setTranscriptValue = (value: string) => {
-    transcriptRef.current = value
-    setTranscript(value)
-  }
 
   const rememberUploaded = (value: UploadedAudio | null) => {
     uploadedRef.current = value
@@ -101,33 +65,9 @@ export default function MinutesUploader({ meetingId, onImported }: Props) {
     rememberUploaded(null)
   }
 
-  const handleTranscriptFile = async (file: File) => {
-    if (file.size > TRANSCRIPT_MAX_BYTES) {
-      message.error('语音转写不能超过 5MiB')
-      return
-    }
-    try {
-      setTranscriptValue(await file.text())
-    } catch {
-      message.error('无法读取语音转写文件，请重试或直接粘贴')
-    }
-  }
-
-  /** 只做导入（不含上传）；durationMs 此时读取，缓存 fileId 的纯重试也能带上时长 */
-  const runImport = async (fileId: number, transcriptText: string) => {
-    const durationMs = audioFile ? await readAudioDuration(audioFile) : undefined
-    await importMinutes(meetingId, {
-      fileId,
-      transcriptText,
-      durationMs,
-      source: 'TENCENT_ASR',
-    })
-  }
-
-  const finishImport = async (fileId: number) => {
-    await runImport(fileId, transcriptRef.current)
-    message.success('会议纪要已导入')
-    rememberUploaded(null)
+  const finishTranscription = async (fileId: number) => {
+    await startTranscription(meetingId, fileId)
+    message.success('音频已上传，正在识别转写')
     onImported()
   }
 
@@ -139,23 +79,18 @@ export default function MinutesUploader({ meetingId, onImported }: Props) {
   }
 
   const handleSubmit = async () => {
-    if (importing) return
+    if (submitting) return
     if (!audioFile) {
-      message.warning('请选择音频文件')
-      return
-    }
-    if (!transcriptRef.current.trim()) {
-      message.warning('请粘贴或上传语音转写')
+      message.warning('请选择会议录音')
       return
     }
 
-    setImporting(true)
-    let stage: 'upload' | 'import' = 'upload'
+    setSubmitting(true)
     try {
       const key = audioFileKey(audioFile)
       let fileId: number
       if (uploadedRef.current?.key === key) {
-        // 上次已上传成功、仅导入失败：直接复用 fileId，避免大文件重传
+        // 上次已上传成功、仅转写提交失败：直接复用 fileId
         fileId = uploadedRef.current.fileId
       } else {
         const uploadedId = await upload(audioFile)
@@ -163,46 +98,37 @@ export default function MinutesUploader({ meetingId, onImported }: Props) {
         fileId = uploadedId
         rememberUploaded({ key, fileId })
       }
-      stage = 'import'
-      await finishImport(fileId)
+      await finishTranscription(fileId)
     } catch (e) {
-      const info = describeMinutesError(e, '导入失败，请稍后重试')
+      const info = describeMinutesError(e, '转写提交失败，请稍后重试')
       if (info.kind === 'upload-session-expired') {
         handleExpiredSession(info.message)
-      } else if (stage === 'import' && info.kind !== 'abort') {
-        // 导入失败用 toast；上传失败已由 hook 的 error 状态在 Card 内联展示，避免重复提示
+      } else if (info.kind !== 'abort') {
         message.error(info.message)
       }
     } finally {
-      setImporting(false)
+      setSubmitting(false)
     }
   }
 
-  /** 暂停后的续传：拿到 fileId 后直接导入，不再要求用户点第二次提交 */
+  /** 暂停后的续传：拿到 fileId 后直接提交转写，不再要求用户点第二次提交 */
   const handleResume = async () => {
-    if (importing || !audioFile) return
-    if (!transcriptRef.current.trim()) {
-      message.warning('请粘贴或上传语音转写')
-      return
-    }
-
-    setImporting(true)
-    let stage: 'upload' | 'import' = 'upload'
+    if (submitting || !audioFile) return
+    setSubmitting(true)
     try {
       const fileId = await resume()
       if (fileId == null) return
       rememberUploaded({ key: audioFileKey(audioFile), fileId })
-      stage = 'import'
-      await finishImport(fileId)
+      await finishTranscription(fileId)
     } catch (e) {
-      const info = describeMinutesError(e, '导入失败，请稍后重试')
+      const info = describeMinutesError(e, '转写提交失败，请稍后重试')
       if (info.kind === 'upload-session-expired') {
         handleExpiredSession(info.message)
-      } else if (stage === 'import' && info.kind !== 'abort') {
+      } else if (info.kind !== 'abort') {
         message.error(info.message)
       }
     } finally {
-      setImporting(false)
+      setSubmitting(false)
     }
   }
 
@@ -211,11 +137,11 @@ export default function MinutesUploader({ meetingId, onImported }: Props) {
       <Alert
         type="info"
         showIcon
-        message="上传会议录音与腾讯云 ASR 语音转写"
-        description="音频仅支持 m4a/mp3/wav/aac/ogg，单文件不超过 2GiB；m4a 请使用 AAC 编码（ALAC 浏览器无法播放）。语音转写格式：[开始,结束,说话人] 文本。"
+        message="上传会议录音，系统会自动转写并进入会议纪要工作台"
+        description="支持 m4a/mp3/wav/aac/ogg，单文件不超过 2GiB；m4a 请使用 AAC 编码（ALAC 浏览器无法播放）。转写由腾讯云 ASR 完成，可能需要几分钟。"
       />
 
-      <Card size="small" title="1. 音频文件">
+      <Card size="small" title="会议录音">
         <input
           ref={audioInput}
           type="file"
@@ -240,7 +166,7 @@ export default function MinutesUploader({ meetingId, onImported }: Props) {
               {audioFile.name}（{(audioFile.size / 1024 / 1024).toFixed(1)} MB）
             </Tag>
           )}
-          {uploadedForCurrentFile && <Tag color="green">音频已上传，待导入</Tag>}
+          {uploadedForCurrentFile && <Tag color="green">音频已上传，待转写</Tag>}
         </Space>
         {status === 'uploading' && (
           <div className="mt-3">
@@ -259,7 +185,7 @@ export default function MinutesUploader({ meetingId, onImported }: Props) {
               format={() => `已暂停（已上传 ${progress}%）`}
             />
             <Button size="small" className="mt-2" onClick={() => void handleResume()}>
-              继续上传并导入
+              继续上传并转写
             </Button>
           </div>
         )}
@@ -274,37 +200,12 @@ export default function MinutesUploader({ meetingId, onImported }: Props) {
         )}
       </Card>
 
-      <Card size="small" title="2. 语音转写">
-        <input
-          ref={transcriptInput}
-          type="file"
-          accept=".txt,text/plain"
-          hidden
-          onChange={(e) => {
-            const file = e.target.files?.[0]
-            if (file) void handleTranscriptFile(file)
-            e.target.value = ''
-          }}
-        />
-        <Space className="mb-2">
-          <Button onClick={() => transcriptInput.current?.click()}>上传 .txt</Button>
-          <Typography.Text type="secondary">或直接粘贴下面的文本</Typography.Text>
-        </Space>
-        <Input.TextArea
-          aria-label="语音转写"
-          rows={8}
-          value={transcript}
-          onChange={(e) => setTranscriptValue(e.target.value)}
-          placeholder="[0:1.030,0:8.570,0]  恩格斯论述了雅典国家……"
-        />
-      </Card>
-
       <Button
         type="primary"
-        loading={importing || status === 'uploading'}
+        loading={submitting || status === 'uploading'}
         onClick={() => void handleSubmit()}
       >
-        开始解析并进入工作台
+        上传并开始转写
       </Button>
     </Space>
   )

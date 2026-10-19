@@ -15,21 +15,20 @@ vi.mock('./request', () => ({
   downloadFile: mocks.downloadFile,
 }))
 
-import { exportMinutes, renameSpeaker } from './minutes'
+import { exportMinutes, startTranscription } from './minutes'
 
 beforeEach(() => {
   vi.clearAllMocks()
 })
 
 describe('minutes api', () => {
-  it('renameSpeaker 对 speakerKey 做 URL 编码', async () => {
-    const input = { displayName: '张三', color: '#112233' }
+  it('startTranscription 提交 fileId', async () => {
+    await startTranscription(42, 7)
 
-    await renameSpeaker(42, 'speaker/1', input)
-
-    expect(mocks.http.put).toHaveBeenCalledWith(
-      '/meetings/42/minutes/speakers/speaker%2F1',
-      input,
+    expect(mocks.http.post).toHaveBeenCalledWith(
+      '/meetings/42/minutes/transcribe',
+      { fileId: 7 },
+      { timeout: 30_000 },
     )
   })
 

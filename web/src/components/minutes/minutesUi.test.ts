@@ -1,7 +1,7 @@
 /**
  * 纪要 UI 纯逻辑单测：
  * - 空态决策覆盖 40/50/60/10 × canManage true/false，并守住"权限优先于状态"的顺序；
- * - 错误映射覆盖 70003（带/不带行号）、70005、70006、10005、10003、AbortError 与兜底；
+ * - 错误映射覆盖 70005、70006、70011、70012、10005、10003、AbortError 与兜底；
  * - AI 状态映射覆盖 0/10/20/30/40 + 未知值；tooltip 转义覆盖标签/引号/实体；
  * - 洞察时长、脏数据过滤与待办 rowKey 的边界。
  */
@@ -42,25 +42,11 @@ describe('minutesEmptyStateKind', () => {
 })
 
 describe('describeMinutesError', () => {
-  it('70003 使用 data.line/reason 定位到行', () => {
-    const info = describeMinutesError(
-      new ApiError(70003, '语音转写格式错误', { line: 3, reason: '缺少说话人' }),
-    )
-    expect(info.kind).toBe('transcript-format')
-    expect(info.line).toBe(3)
-    expect(info.reason).toBe('缺少说话人')
-    expect(info.message).toBe('第 3 行：缺少说话人')
-  })
-
-  it('70003 缺 data 时降级为未知行号并回落到后端 message', () => {
-    const info = describeMinutesError(new ApiError(70003, '语音转写格式错误', null))
-    expect(info.line).toBeUndefined()
-    expect(info.message).toBe('第 ? 行：语音转写格式错误')
-  })
-
   it('70005/70006/10005 映射为固定可操作文案', () => {
     expect(describeMinutesError(new ApiError(70005, 'x')).kind).toBe('file-too-large')
     expect(describeMinutesError(new ApiError(70005, 'x')).message).toContain('2GiB')
+    expect(describeMinutesError(new ApiError(70011, '识别服务失败')).kind).toBe('asr-failed')
+    expect(describeMinutesError(new ApiError(70012, 'x')).message).toContain('未配置')
     expect(describeMinutesError(new ApiError(70006, 'x'))).toMatchObject({
       kind: 'upload-session-expired',
       message: '上传会话已过期，请重新上传',

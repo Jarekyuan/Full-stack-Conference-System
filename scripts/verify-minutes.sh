@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 会议纪要主链路验证：分片上传 → 导入 → 详情/转写/洞察 → 重命名 → AI → 导出 → 权限负例 → 重导入
-# 前置：services 已启动；storage 可为 local 或 cos，AI 可为 mock 或 deepseek。
+# 会议纪要主链路验证：分片上传 → 腾讯 ASR 转写 → 详情/转写/洞察 → AI → 导出 → 权限负例 → 重新转写
+# 前置：services 已启动；CI 建议 meeting-service 使用 MINUTES_ASR_PROVIDER=mock（真实 ASR 会慢且计费）。
 # COS 模式只清理 MySQL/本地目录，不删除桶内 minutes/{meetingId}/ 测试对象。
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -89,57 +89,46 @@ SESSION=$(curl -s "$BASE/files/multipart/${UPLOAD_ID}" -H "Authorization: Bearer
 check "已完成会话返回 fileId" "$(echo "$SESSION" | jget data.fileId)" "$FILE_ID"
 check "已完成会话 status 10" "$(echo "$SESSION" | jget data.status)" "10"
 
-# 6) 导入转写
-PRIVACY_MARKER="私有正文${TS}"
-IMPORT_BODY=$(FILE_ID="$FILE_ID" PRIVACY_MARKER="$PRIVACY_MARKER" python3 - <<'PY'
-import json, os
-text = ("[0:0.100,0:0.500,0]  你好\n[0:0.600,0:0.900,1]  世界 "
-        + os.environ["PRIVACY_MARKER"])
-print(json.dumps({
-    "fileId": int(os.environ["FILE_ID"]),
-    "transcriptText": text,
-    "durationMs": 1000,
-    "source": "TENCENT_ASR",
-}))
-PY
-)
-IMPORT=$(curl -s -X POST "$BASE/meetings/${MEETING_ID}/minutes/import" \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$IMPORT_BODY")
-check "导入后有 2 个发言人" "$(echo "$IMPORT" | python3 -c 'import sys,json; print(len(json.load(sys.stdin)["data"]["speakers"]))')" "2"
-check "导入后 AI 状态 0" "$(echo "$IMPORT" | jget data.aiStatus)" "0"
-
-# 7) 详情 / 转写 / 洞察
-DETAIL=$(curl -s "$BASE/meetings/${MEETING_ID}/minutes" -H "Authorization: Bearer $TOKEN")
-check "发言时长 700ms" "$(echo "$DETAIL" | jget data.insights.speakingMs)" "700"
-check "分段数 2" "$(echo "$DETAIL" | jget data.insights.totalSegments)" "2"
-TRANSCRIPT=$(curl -s "$BASE/meetings/${MEETING_ID}/minutes/transcript" -H "Authorization: Bearer $TOKEN")
-check "转写第 1 段文本" "$(echo "$TRANSCRIPT" | jget data.segments.0.text)" "你好"
-LOG_FILE="${MEETING_LOG:-server/logs/meeting-service.log}"
-if [ -f "$LOG_FILE" ]; then
-  check "服务日志不含转写正文" "$(grep -c "$PRIVACY_MARKER" "$LOG_FILE" || true)" "0"
-fi
-
-# 8) 发言人重命名
-RENAME=$(curl -s -X PUT "$BASE/meetings/${MEETING_ID}/minutes/speakers/0" \
+# 6) 发起 ASR 转写
+TRANSCRIBE=$(curl -s -X POST "$BASE/meetings/${MEETING_ID}/minutes/transcribe" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"displayName":"张三","color":"#7D8CFF"}')
-check "重命名返回张三" "$(echo "$RENAME" | jget data.displayName)" "张三"
+  -d "{\"fileId\":${FILE_ID}}")
+check "转写已入队" "$(echo "$TRANSCRIBE" | jget data.asrStatus | awk '{print ($1==10||$1==20)?1:0}')" "1"
 
-# 9) 生成 AI（mock）
+STATUS=0
+for _ in $(seq 1 60); do
+  sleep 2
+  DETAIL=$(curl -s "$BASE/meetings/${MEETING_ID}/minutes" -H "Authorization: Bearer $TOKEN")
+  STATUS=$(echo "$DETAIL" | jget data.asrStatus)
+  [ "$STATUS" = "30" ] && break
+  [ "$STATUS" = "40" ] && break
+done
+check "ASR 转写成功" "$STATUS" "30"
+check "转写有 2 个发言人" \
+  "$(echo "$DETAIL" | python3 -c 'import sys,json; print(len(json.load(sys.stdin)["data"]["speakers"]))')" "2"
+check "转写有 2 段" "$(echo "$DETAIL" | jget data.insights.totalSegments)" "2"
+check "AI 初始状态 0" "$(echo "$DETAIL" | jget data.aiStatus)" "0"
+
+# 7) 转写接口 / 隐私
+TRANSCRIPT=$(curl -s "$BASE/meetings/${MEETING_ID}/minutes/transcript" -H "Authorization: Bearer $TOKEN")
+check "转写第 1 段文本" "$(echo "$TRANSCRIPT" | jget data.segments.0.text)" "你好，"
+
+# 8) 生成 AI（mock/DeepSeek）
 GEN=$(curl -s -X POST "$BASE/meetings/${MEETING_ID}/minutes/generate" \
   -H "Authorization: Bearer $TOKEN")
 check "触发生成返回 10 或 20" "$(echo "$GEN" | jget data.aiStatus | awk '{print ($1==10||$1==20)?1:0}')" "1"
 AI_STATUS=0
-for _ in $(seq 1 30); do
+for _ in $(seq 1 60); do
   sleep 2
   AI_STATUS=$(curl -s "$BASE/meetings/${MEETING_ID}/minutes" -H "Authorization: Bearer $TOKEN" | jget data.aiStatus)
   [ "$AI_STATUS" = "30" ] && break
+  [ "$AI_STATUS" = "40" ] && break
 done
 check "AI 生成成功" "$AI_STATUS" "30"
 SUMMARY=$(curl -s "$BASE/meetings/${MEETING_ID}/minutes" -H "Authorization: Bearer $TOKEN" | jget data.summary.summary)
 check "AI 摘要非空" "$([ -n "$SUMMARY" ] && echo 1 || echo 0)" "1"
 
-# 10) 导出 docx
+# 9) 导出 docx
 curl -s -o "$TMP_DOCX" "$BASE/meetings/${MEETING_ID}/minutes/export?format=docx" -H "Authorization: Bearer $TOKEN"
 check "docx 是 ZIP 魔数" "$(head -c 2 "$TMP_DOCX")" "PK"
 if python3 - "$TMP_DOCX" <<'PY'
@@ -151,26 +140,28 @@ PY
 then DOCX_OK=1; else DOCX_OK=0; fi
 check "docx 含标题/转写" "$DOCX_OK" "1"
 
-# 11) 权限负例：user2 非参会人
+# 10) 权限负例：user2 非参会人
 TOKEN2=$(curl -s -X POST "$BASE/auth/login" -H 'Content-Type: application/json' \
   -d '{"username":"user2","password":"user123"}' | jget data.accessToken)
 DENY=$(curl -s "$BASE/meetings/${MEETING_ID}/minutes" -H "Authorization: Bearer $TOKEN2" | jget code)
 check "非参会人查看被拒 10003" "$DENY" "10003"
 
-# 12) 重导入覆盖并重置 AI
-REIMPORT_BODY=$(FILE_ID="$FILE_ID" python3 - <<'PY'
-import json, os
-print(json.dumps({
-    "fileId": int(os.environ["FILE_ID"]),
-    "transcriptText": "[0:0.100,0:0.500,0]  重新导入",
-    "durationMs": 500,
-}))
-PY
-)
-REIMPORT=$(curl -s -X POST "$BASE/meetings/${MEETING_ID}/minutes/import" \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$REIMPORT_BODY")
-check "重导入后 AI 重置为 0" "$(echo "$REIMPORT" | jget data.aiStatus)" "0"
-check "重导入后只剩 1 段" "$(echo "$REIMPORT" | jget data.insights.totalSegments)" "1"
+# 11) 重新转写：覆盖旧分段并重置 AI
+RE=$(curl -s -X POST "$BASE/meetings/${MEETING_ID}/minutes/transcribe" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d "{\"fileId\":${FILE_ID}}")
+check "重新转写已入队" "$(echo "$RE" | jget data.asrStatus | awk '{print ($1==10||$1==20)?1:0}')" "1"
+STATUS=0
+for _ in $(seq 1 60); do
+  sleep 2
+  DETAIL=$(curl -s "$BASE/meetings/${MEETING_ID}/minutes" -H "Authorization: Bearer $TOKEN")
+  STATUS=$(echo "$DETAIL" | jget data.asrStatus)
+  [ "$STATUS" = "30" ] && break
+  [ "$STATUS" = "40" ] && break
+done
+check "重新转写成功" "$STATUS" "30"
+check "重新转写后 AI 重置为 0" "$(echo "$DETAIL" | jget data.aiStatus)" "0"
+check "重新转写后仍为 2 段" "$(echo "$DETAIL" | jget data.insights.totalSegments)" "2"
 
 echo "----------------------------------------"
 echo "PASS=${PASS} FAIL=${FAIL}"

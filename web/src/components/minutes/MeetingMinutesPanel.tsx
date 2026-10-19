@@ -34,7 +34,12 @@ export default function MeetingMinutesPanel({ meeting }: Props) {
   // 切换会议后，上一个会议的响应可能晚到：meetingId 不匹配一律视为无数据。
   const minutes = data && data.meetingId === meeting.id ? data : null
   const aiStatus = minutes?.aiStatus
-  const polling = aiStatus === AI_STATUS_PENDING || aiStatus === AI_STATUS_PROCESSING
+  const asrStatus = minutes?.asrStatus
+  const polling =
+    asrStatus === AI_STATUS_PENDING ||
+    asrStatus === AI_STATUS_PROCESSING ||
+    aiStatus === AI_STATUS_PENDING ||
+    aiStatus === AI_STATUS_PROCESSING
 
   useEffect(() => {
     if (!polling) return

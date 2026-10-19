@@ -11,7 +11,6 @@ import org.springframework.stereotype.Component;
 public class MinutesProperties {
 
     private Upload upload = new Upload();
-    private Transcript transcript = new Transcript();
     private Ai ai = new Ai();
 
     @Data
@@ -21,13 +20,6 @@ public class MinutesProperties {
         private Integer sessionTtlHours = 24;
         /** 分片预签名 URL 有效期（分钟）。放在 minutes 下而非 cos 下：本地 provider 同样使用。 */
         private Integer partUrlTtlMinutes = 60;
-    }
-
-    @Data
-    public static class Transcript {
-        private Long maxBytes = 5L * 1024 * 1024;
-        private Integer maxSegments = 20_000;
-        private Integer maxSegmentChars = 2_000;
     }
 
     @Data

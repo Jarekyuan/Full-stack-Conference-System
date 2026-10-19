@@ -107,10 +107,25 @@ minutes:
     chunk-size-bytes: 5242880
     session-ttl-hours: 24
     part-url-ttl-minutes: 60
-  transcript:
-    max-bytes: 5242880
-    max-segments: 20000
-    max-segment-chars: 2000
+  asr:
+    enabled: ${MINUTES_ASR_ENABLED:true}
+    provider: ${MINUTES_ASR_PROVIDER:tencent}
+    # 默认复用 COS 子账号密钥；ASR 权限独立时用 TENCENT_ASR_* 覆盖
+    secret-id: ${TENCENT_ASR_SECRET_ID:${COS_SECRET_ID:${STORAGE_SECRET_ID:}}}
+    secret-key: ${TENCENT_ASR_SECRET_KEY:${COS_SECRET_KEY:${STORAGE_SECRET_KEY:}}}
+    region: ${TENCENT_ASR_REGION:${COS_REGION:${STORAGE_REGION:ap-chengdu}}}
+    endpoint: ${TENCENT_ASR_ENDPOINT:asr.tencentcloudapi.com}
+    engine-model-type: ${TENCENT_ASR_ENGINE:16k_zh}
+    channel-num: 1
+    res-text-format: 3
+    speaker-diarization: 1
+    speaker-number: 0
+    poll-interval-ms: 5000
+    max-attempts: 3
+    stuck-timeout-minutes: 120
+    url-ttl-hours: 6
+    batch-size: 5
+    mock-segments: ${MINUTES_ASR_MOCK_SEGMENTS:2}
   ai:
     enabled: ${MINUTES_AI_ENABLED:true}
     provider: ${MINUTES_AI_PROVIDER:deepseek}

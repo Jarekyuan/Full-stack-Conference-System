@@ -335,12 +335,19 @@ CREATE TABLE IF NOT EXISTS meeting_minutes (
   ai_attempts       INT          NOT NULL DEFAULT 0 COMMENT '已尝试次数',
   ai_started_at     DATETIME     DEFAULT NULL COMMENT '本次开始时间',
   ai_finished_at    DATETIME     DEFAULT NULL COMMENT '本次结束时间',
-  created_by        BIGINT       NOT NULL COMMENT '导入人',
+  asr_status        TINYINT      NOT NULL DEFAULT 0 COMMENT '0 未转写 / 10 待识别 / 20 识别中 / 30 成功 / 40 失败',
+  asr_task_id       VARCHAR(64)  DEFAULT NULL COMMENT '腾讯 ASR TaskId',
+  asr_error         VARCHAR(500) DEFAULT NULL COMMENT '语音识别失败原因（用户可读）',
+  asr_attempts      INT          NOT NULL DEFAULT 0 COMMENT '语音识别已尝试次数',
+  asr_started_at    DATETIME     DEFAULT NULL COMMENT '本次提交 ASR 的时间（run token）',
+  asr_finished_at   DATETIME     DEFAULT NULL COMMENT '本次识别结束时间',
+  created_by        BIGINT       NOT NULL COMMENT '上传人',
   created_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   updated_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (id),
   UNIQUE KEY uk_meeting (meeting_id),
-  KEY idx_ai_status (ai_status, updated_at)
+  KEY idx_ai_status (ai_status, updated_at),
+  KEY idx_asr_status (asr_status, updated_at)
 ) ENGINE = InnoDB COMMENT = '会议纪要';
 
 -- ----------------------------------------------------------------------------

@@ -15,9 +15,7 @@ import {
   generateMinutes,
   getAudioUrl,
   getTranscript,
-  renameSpeaker,
   type MinutesDetail,
-  type MinutesSpeaker,
   type TranscriptSegment,
 } from '@/api/minutes'
 import { ApiError } from '@/api/types'
@@ -27,7 +25,6 @@ import MinutesAiBar from './MinutesAiBar'
 import MinutesInsights from './MinutesInsights'
 import MinutesSummary from './MinutesSummary'
 import MinutesUploader from './MinutesUploader'
-import SpeakerRenameModal from './SpeakerRenameModal'
 import TranscriptList from './TranscriptList'
 import { describeMinutesError, minutesAiStatusMeta } from './minutesUi'
 
@@ -69,7 +66,6 @@ export default function AudioTranscriptWorkspace({
 
   const [activeId, setActiveId] = useState<number | null>(null)
   const [activeSentenceIndex, setActiveSentenceIndex] = useState<number | null>(null)
-  const [renaming, setRenaming] = useState<MinutesSpeaker | null>(null)
   const [generating, setGenerating] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -82,6 +78,8 @@ export default function AudioTranscriptWorkspace({
   const effectiveAiStatus = pendingAiStatus ?? minutes.aiStatus
   const aiMeta = minutesAiStatusMeta(effectiveAiStatus)
   const demoMode = minutes.aiProvider === 'mock'
+  const asrPending = minutes.asrStatus === 10 || minutes.asrStatus === 20
+  const asrFailed = minutes.asrStatus === 40
 
   const loadTranscript = useCallback(async () => {
     const token = ++transcriptRequestRef.current
@@ -101,16 +99,21 @@ export default function AudioTranscriptWorkspace({
     }
   }, [meeting.id])
 
-  // 切换会议/卸载：清空上一场的分段并让在途请求失效
+  // 切换会议/ASR 状态变化：清空上一场分段；只有转写成功（或历史无 ASR 状态的数据）才拉分段。
+  // ASR 10/20 时展示识别进度，30 时自动加载并进入工作台。
   useEffect(() => {
     setSegments([])
     setActiveId(null)
     setActiveSentenceIndex(null)
-    void loadTranscript()
+    if (minutes.asrStatus === 30 || minutes.asrStatus === 0) {
+      void loadTranscript()
+    } else {
+      setTranscriptLoading(false)
+    }
     return () => {
       transcriptRequestRef.current += 1
     }
-  }, [loadTranscript])
+  }, [loadTranscript, minutes.asrStatus])
 
   const loadAudioUrl = useCallback(
     async (force = false) => {
@@ -303,23 +306,6 @@ export default function AudioTranscriptWorkspace({
     }
   }, [meeting.id, message])
 
-  const handleRename = useCallback(
-    async (displayName: string, color: string) => {
-      if (!renaming) return
-      try {
-        await renameSpeaker(meeting.id, renaming.speakerKey, { displayName, color })
-        message.success('发言人已更新')
-        setRenaming(null)
-        void onRefresh().catch(() => {
-          // 刷新失败由面板的 Alert 呈现，不影响这次重命名成功的提示
-        })
-      } catch (e) {
-        message.error(e instanceof ApiError ? e.message : '更新失败')
-      }
-    },
-    [meeting.id, message, onRefresh, renaming],
-  )
-
   const retryTranscript = useCallback(() => {
     void loadTranscript()
   }, [loadTranscript])
@@ -327,7 +313,7 @@ export default function AudioTranscriptWorkspace({
   const handleReimport = useCallback(() => {
     modal.confirm({
       title: '重新导入会议纪要？',
-      content: '将覆盖当前音频、语音转写与发言人，并重置 AI 纪要与会议洞察。',
+      content: '将重新上传会议录音，清空当前转写、发言人与 AI 纪要，并重新识别。',
       okText: '继续导入',
       cancelText: '取消',
       onOk: () => setReimportOpen(true),
@@ -341,8 +327,10 @@ export default function AudioTranscriptWorkspace({
     try {
       const tasks: Promise<unknown>[] = [
         Promise.resolve().then(() => onRefresh()),
-        loadTranscript(),
       ]
+      if (minutes.asrStatus === 30 || minutes.asrStatus === 0) {
+        tasks.push(loadTranscript())
+      }
       if (hasAudio && (!audioUrlRef.current || audioErrorRef.current !== null)) {
         capturePendingSeek(true)
         tasks.push(loadAudioUrl(true))
@@ -351,7 +339,7 @@ export default function AudioTranscriptWorkspace({
     } finally {
       setRefreshing(false)
     }
-  }, [capturePendingSeek, hasAudio, loadAudioUrl, loadTranscript, onRefresh])
+  }, [capturePendingSeek, hasAudio, loadAudioUrl, loadTranscript, minutes.asrStatus, onRefresh])
 
   const transcriptErrorInfo = transcriptError
     ? describeMinutesError(transcriptError, '语音转写加载失败')
@@ -378,12 +366,17 @@ export default function AudioTranscriptWorkspace({
           >
             刷新
           </Button>
-          <Button icon={<Download size={15} />} loading={exporting} onClick={handleExport}>
+          <Button
+            icon={<Download size={15} />}
+            loading={exporting}
+            disabled={asrPending || asrFailed}
+            onClick={handleExport}
+          >
             导出 Word
           </Button>
           {canManage && (
             <Button icon={<Upload size={15} />} onClick={handleReimport}>
-              重新导入
+              重新上传
             </Button>
           )}
         </Space>
@@ -431,6 +424,31 @@ export default function AudioTranscriptWorkspace({
           ) : null}
         </>
       )}
+      {asrPending ? (
+        <Alert
+          className="mt-4"
+          type="info"
+          showIcon
+          message="正在识别会议录音"
+          description={minutes.asrError ?? '腾讯云 ASR 正在转写，通常需要几分钟，请稍候…'}
+          action={<Spin />}
+        />
+      ) : asrFailed ? (
+        <Alert
+          className="mt-4"
+          type="error"
+          showIcon
+          message="会议录音识别失败"
+          description={minutes.asrError ?? '请重新上传录音后重试'}
+          action={
+            canManage ? (
+              <Button size="small" onClick={handleReimport}>
+                重新上传
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : (
       <Tabs
         className="mt-4"
         items={[
@@ -462,9 +480,7 @@ export default function AudioTranscriptWorkspace({
                         speakers={minutes.speakers}
                         activeId={activeId}
                         activeSentenceIndex={activeSentenceIndex}
-                        canManage={canManage}
                         onSelect={seek}
-                        onRename={setRenaming}
                       />
                     )}
                   </>
@@ -478,9 +494,7 @@ export default function AudioTranscriptWorkspace({
                     speakers={minutes.speakers}
                     activeId={activeId}
                     activeSentenceIndex={activeSentenceIndex}
-                    canManage={canManage}
                     onSelect={seek}
-                    onRename={setRenaming}
                   />
                 )}
                 <Typography.Text type="secondary" className="mt-2 block text-xs">
@@ -513,14 +527,9 @@ export default function AudioTranscriptWorkspace({
           },
         ]}
       />
-      <SpeakerRenameModal
-        open={renaming !== null}
-        speaker={renaming}
-        onClose={() => setRenaming(null)}
-        onSubmit={handleRename}
-      />
+      )}
       <Modal
-        title="重新导入会议纪要"
+        title="重新上传会议录音"
         open={reimportOpen}
         footer={null}
         width={720}
@@ -531,9 +540,8 @@ export default function AudioTranscriptWorkspace({
           meetingId={meeting.id}
           onImported={() => {
             setReimportOpen(false)
-            // 重导入会替换 segments/speakers；父级刷新只更新 minutes 概要，
-            // 转写列表必须显式重取，否则工作台仍显示旧分段。
-            void loadTranscript()
+            // ASR 任务已提交：父级刷新拿到 asrStatus=10，工作台展示识别进度；
+            // 转写成功（asrStatus=30）后上面的 effect 会自动拉取 segments。
             void onRefresh().catch(() => {
               // 刷新失败由面板的错误态呈现
             })

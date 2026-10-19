@@ -6,6 +6,7 @@ import com.smt.common.exception.BusinessException;
 import com.smt.common.exception.GlobalExceptionHandler;
 import com.smt.common.result.ErrorCode;
 import com.smt.meeting.service.MinutesAiService;
+import com.smt.meeting.service.MinutesAsrService;
 import com.smt.meeting.service.MinutesExportService;
 import com.smt.meeting.service.MinutesService;
 import org.junit.jupiter.api.AfterEach;
@@ -52,7 +53,8 @@ class MinutesControllerExportTest {
         minutesService = mock(MinutesService.class);
         minutesExportService = mock(MinutesExportService.class);
         MinutesController controller = new MinutesController(
-                minutesService, mock(MinutesAiService.class), minutesExportService);
+                minutesService, mock(MinutesAiService.class),
+                mock(MinutesAsrService.class), minutesExportService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();

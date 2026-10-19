@@ -65,6 +65,9 @@ export interface MinutesDetail {
     durationMs: number
   } | null
   transcriptSource: string
+  /** ASR 状态：0 未转写 / 10 待识别 / 20 识别中 / 30 成功 / 40 失败 */
+  asrStatus: number
+  asrError: string | null
   aiStatus: number
   aiError: string | null
   /** 当前 AI 供应商：deepseek / mock */
@@ -76,13 +79,6 @@ export interface MinutesDetail {
   permissions: { canManage: boolean; canView: boolean }
   createdAt: string
   updatedAt: string
-}
-
-export interface MinutesImportInput {
-  fileId: number
-  transcriptText: string
-  durationMs?: number
-  source?: 'TENCENT_ASR'
 }
 
 export function getMinutes(meetingId: number): Promise<MinutesDetail | null> {
@@ -99,23 +95,15 @@ export function getAudioUrl(meetingId: number): Promise<{ url: string; expiresAt
   )
 }
 
-export function importMinutes(
+/** 音频上传完成后发起腾讯 ASR 转写；异步状态通过纪要详情的 asrStatus 轮询 */
+export function startTranscription(
   meetingId: number,
-  input: MinutesImportInput,
+  fileId: number,
 ): Promise<MinutesDetail> {
-  return http.post<MinutesDetail>(`/meetings/${meetingId}/minutes/import`, input, {
-    timeout: 60_000,
-  })
-}
-
-export function renameSpeaker(
-  meetingId: number,
-  speakerKey: string,
-  input: { displayName: string; color: string },
-): Promise<MinutesSpeaker> {
-  return http.put<MinutesSpeaker>(
-    `/meetings/${meetingId}/minutes/speakers/${encodeURIComponent(speakerKey)}`,
-    input,
+  return http.post<MinutesDetail>(
+    `/meetings/${meetingId}/minutes/transcribe`,
+    { fileId },
+    { timeout: 30_000 },
   )
 }
 

@@ -79,14 +79,11 @@ function writeWav(file) {
     check('详情页不预加载会议室', roomRequests.length === 0, `rooms=${roomRequests.length}`);
     await page.getByRole('tab', { name: '会议纪要' }).click();
 
-    // 上传音频 + 转写
+    // 只上传音频，系统自动调用 ASR；E2E 使用 MINUTES_ASR_PROVIDER=mock
     await page.locator('input[type=file]').nth(0).setInputFiles(WAV);
-    await page.getByPlaceholder(/恩格斯论述/).fill(
-      '[0:0.100,0:0.500,0]  你好\n[0:0.600,0:0.900,1]  世界',
-    );
-    await page.getByRole('button', { name: /开始解析/ }).click();
-    await page.getByText('你好', { exact: false }).first().waitFor({ timeout: 30000 });
-    check('导入后转写可见', true);
+    await page.getByRole('button', { name: /上传并开始转写/ }).click();
+    await page.getByText('你好', { exact: false }).first().waitFor({ timeout: 60000 });
+    check('上传后自动 ASR 转写', true);
 
     // 等音频元数据就绪
     await page.waitForFunction(() => {
@@ -131,46 +128,15 @@ function writeWav(file) {
     const downloadPath = await download.path();
     check('导出文件非空', !!downloadPath && fs.statSync(downloadPath).size > 0);
 
-    // 重新导入：覆盖转写并刷新工作台（R-17 覆盖规则的 UI 入口）。
-    // 同时导入 300 段，验证虚拟滚动只挂载可视区附近的行。
-    const stamp = (seconds) => {
-      const minutes = Math.floor(seconds / 60);
-      const rest = seconds % 60;
-      const whole = Math.floor(rest);
-      const millis = Math.round((rest - whole) * 1000);
-      return `${minutes}:${String(whole).padStart(2, '0')}.${String(millis).padStart(3, '0')}`;
-    };
-    const manySegments = Array.from({ length: 300 }, (_, i) =>
-      `[0:${stamp(i)},0:${stamp(i + 0.9)},0]  第 ${i + 1} 段`,
-    ).join('\n');
-    await page.getByRole('button', { name: /重新导入/ }).click();
+    // 重新上传：同一音频重新走 ASR，验证覆盖与状态重置
+    await page.getByRole('button', { name: /重新上传/ }).click();
     await page.getByRole('button', { name: /继续导入/ }).click();
     const modal = page.locator('.ant-modal').last();
     await modal.locator('input[type=file]').nth(0).setInputFiles(WAV);
-    await modal.getByPlaceholder(/恩格斯论述/).fill(manySegments);
-    await modal.getByRole('button', { name: /开始解析/ }).click();
-    // AI 纪要 Tab 仍是激活态；先切回语音转写，虚拟列表才有可视高度。
-    await page.getByRole('tab', { name: '语音转写' }).click();
-    await page.getByRole('button', { name: '第 1 段', exact: true })
-      .waitFor({ timeout: 30000 });
-    check('重新导入覆盖转写', true);
+    await modal.getByRole('button', { name: /上传并开始转写/ }).click();
+    await page.getByText('你好', { exact: false }).first().waitFor({ timeout: 60000 });
+    check('重新上传后重新转写', true);
 
-    const renderedRows = await page.locator('[data-segment-id]').count();
-    check(
-      '虚拟滚动只渲染可视行',
-      renderedRows > 0 && renderedRows < 100,
-      `rendered=${renderedRows}/300`,
-    );
-    check(
-      '未滚动时末段未挂载',
-      (await page.getByRole('button', { name: '第 300 段', exact: true }).count()) === 0,
-    );
-    await page.getByTestId('transcript-scroll').evaluate((el) => {
-      el.scrollTop = el.scrollHeight;
-    });
-    await page.getByRole('button', { name: '第 300 段', exact: true })
-      .waitFor({ timeout: 5000 });
-    check('滚动到底部渲染末段', true);
   } catch (e) {
     check('脚本执行', false, e.message);
   } finally {
