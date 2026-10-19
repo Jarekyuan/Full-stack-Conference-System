@@ -191,7 +191,7 @@
   真实 DeepSeek 生成需 `DEEPSEEK_API_KEY` + `MINUTES_AI_PROVIDER=deepseek`。
 - 真实 DeepSeek（`deepseek-chat`）已验证：3 段产品排期转写生成摘要/决策/待办/风险，
   `aiModel=deepseek-chat`；密钥只从环境变量读取，不落库、不写日志、不写仓库。
-- 验证：后端 meeting-service **300 例**（1 skipped；全量 356 例，排除需 auth 停机的用例）、
+- 验证：后端 meeting-service **259 例**（1 skipped；全量 315 例，排除需 auth 停机的用例）、
   `npm run check` **157 例**、`verify-minutes` **23/23**、`verify-minutes-ai` **8/8**、
   `e2e-meeting-minutes` **11/11**、`verify-cos-upload` **1/1**（真实 COS 2 分片），
   其余脚本/e2e 全绿。集成验证时 `admin` 曾被 R7 用例停用：
