@@ -86,7 +86,14 @@ const TranscriptRow = memo(function TranscriptRow({
   )
 })
 
-export default function TranscriptList({
+/** speakers 的内容签名：轮询每次返回新数组，用签名判断是否真的变化 */
+function speakerListSignature(speakers: MinutesSpeaker[]): string {
+  return speakers
+    .map((speaker) => `${speaker.speakerKey}\u0000${speaker.displayName}\u0000${speaker.color}`)
+    .join('\u0001')
+}
+
+function TranscriptList({
   segments,
   speakers,
   activeId,
@@ -97,9 +104,7 @@ export default function TranscriptList({
   const containerRef = useRef<HTMLDivElement>(null)
   // 轮询每 3s 返回全新的 speakers 数组；按内容签名缓存 Map，
   // 才能让 memo 行在轮询期间保持 props 引用稳定（播放高亮时只重渲染两行）。
-  const speakerSignature = speakers
-    .map((speaker) => `${speaker.speakerKey}\u0000${speaker.displayName}\u0000${speaker.color}`)
-    .join('\u0001')
+  const speakerSignature = speakerListSignature(speakers)
   const speakerMap = useMemo(
     () => new Map(speakers.map((speaker) => [speaker.speakerKey, speaker])),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 按内容签名而不是数组引用缓存
@@ -139,3 +144,18 @@ export default function TranscriptList({
     </div>
   )
 }
+
+/**
+ * 列表级 memo：minutes 轮询会带着全新的 speakers 数组重渲染父组件，
+ * 但 segments/回调/高亮都没变时没必要重新 map 整个转写列表。
+ */
+export default memo(
+  TranscriptList,
+  (prev, next) =>
+    prev.segments === next.segments &&
+    prev.activeId === next.activeId &&
+    prev.canManage === next.canManage &&
+    prev.onSelect === next.onSelect &&
+    prev.onRename === next.onRename &&
+    speakerListSignature(prev.speakers) === speakerListSignature(next.speakers),
+)

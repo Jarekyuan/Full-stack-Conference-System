@@ -12,7 +12,6 @@ import { compactList, minutesActionItemKey } from './minutesUi'
 interface Props {
   summary: Summary | null
   aiStatus: number
-  aiError: string | null
 }
 
 const PRIORITY_COLOR: Record<string, string> = {
@@ -25,12 +24,13 @@ function EmptyText() {
   return <Typography.Text type="secondary">无</Typography.Text>
 }
 
-export default function MinutesSummary({ summary, aiStatus, aiError }: Props) {
+export default function MinutesSummary({ summary, aiStatus }: Props) {
   if (!summary) {
     if (aiStatus === 10) return <Empty description="排队等待生成…" />
     if (aiStatus === 20) return <Empty description="生成中…" />
     if (aiStatus === 40) {
-      return <Empty description={aiError ?? 'AI 纪要生成失败'} />
+      // 详细错误由 MinutesAiBar 的 Alert 展示，这里只给通用空态，避免重复报错
+      return <Empty description="纪要生成失败，请查看上方错误信息" />
     }
     return <Empty description="尚未生成 AI 纪要" />
   }

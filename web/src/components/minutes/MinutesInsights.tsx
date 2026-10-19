@@ -22,9 +22,11 @@ echarts.use([BarChart, GridComponent, TooltipComponent, CanvasRenderer])
 function Chart({
   option,
   height = 320,
+  label,
 }: {
   option: EChartsCoreOption
   height?: number
+  label: string
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const instance = useRef<echarts.ECharts | null>(null)
@@ -43,7 +45,7 @@ function Chart({
   useEffect(() => {
     instance.current?.setOption(option, true)
   }, [option])
-  return <div ref={ref} style={{ width: '100%', height }} />
+  return <div ref={ref} role="img" aria-label={label} style={{ width: '100%', height }} />
 }
 
 export default function MinutesInsights({ insights }: { insights: Insights }) {
@@ -141,7 +143,11 @@ export default function MinutesInsights({ insights }: { insights: Insights }) {
         </Col>
       </Row>
       <Card size="small" title="各发言人时长">
-        <Chart option={option} height={Math.max(320, sorted.length * 36)} />
+        <Chart
+          option={option}
+          height={Math.min(800, Math.max(320, sorted.length * 36))}
+          label="各发言人发言时长柱状图"
+        />
       </Card>
       <Row gutter={[12, 12]}>
         {sorted.map((speaker) => (

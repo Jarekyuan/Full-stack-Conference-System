@@ -53,15 +53,18 @@ export default function AudioTranscriptWorkspace({
   const [transcriptError, setTranscriptError] = useState<unknown>(null)
   const transcriptRequestRef = useRef(0)
 
-  // 音频：url/loading/error + 一次自动重签标记 + 重签后的待恢复播放位置
+  // 音频：url/loading/error + 自动重签计数 + 待恢复的播放位置/播放状态
   const hasAudio = minutes.audio != null
+  const audioFileId = minutes.audio?.fileId ?? null
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const audioUrlRef = useRef<string | null>(null)
   const [audioLoading, setAudioLoading] = useState(false)
   const [audioError, setAudioError] = useState<string | null>(null)
-  const audioResignedRef = useRef(false)
+  const audioErrorRef = useRef<string | null>(null)
+  /** 当前源已自动重签的次数：0 可用，>=1 表示已用完自动重签机会 */
+  const audioResignedRef = useRef(0)
   const audioRequestRef = useRef(0)
-  const pendingSeekRef = useRef<number | null>(null)
+  const pendingSeekRef = useRef<{ position: number; wasPlaying: boolean } | null>(null)
 
   const [activeId, setActiveId] = useState<number | null>(null)
   const [renaming, setRenaming] = useState<MinutesSpeaker | null>(null)
@@ -101,32 +104,39 @@ export default function AudioTranscriptWorkspace({
   }, [loadTranscript])
 
   const loadAudioUrl = useCallback(
-    async (resetResign = true) => {
-      const token = ++audioRequestRef.current
+    async (force = false) => {
       if (!hasAudio) {
         audioUrlRef.current = null
+        audioErrorRef.current = null
         setAudioUrl(null)
         setAudioError(null)
         setAudioLoading(false)
         return
       }
+      // 健康源且未强制刷新时不重取：换 src 会把播放进度重置到 0
+      if (!force && audioUrlRef.current && audioErrorRef.current === null) return
+      const token = ++audioRequestRef.current
       setAudioLoading(true)
-      setAudioError(null)
+      // 不在请求开始时清错误：重试按钮需要保持 loading，旧源在途抛出的错误也由成功回调统一清理
       try {
         const result = await getAudioUrl(meeting.id)
         if (audioRequestRef.current !== token) return
-        // 手动刷新/首次加载重置“已自动重签”标记；自动重签调用时保留，防止错误循环
-        if (resetResign) audioResignedRef.current = false
         const same = audioUrlRef.current === result.url
-        // 只有处于错误态的媒体元素才需要手动 load()（同 URL 不会自动重载）；
-        // 健康播放中的例行刷新不应调用 load()，否则会从 0 重新播放。
-        const mediaErrored = audioRef.current?.error != null
         audioUrlRef.current = result.url
         setAudioUrl(result.url)
-        if (same && (mediaErrored || !resetResign)) audioRef.current?.load()
+        if (same) {
+          // 同 URL 不会自动重载；错误提示保留到 loadedmetadata 再清
+          audioRef.current?.load()
+        } else {
+          // 新 src 会随渲染加载；同时清掉在途请求期间旧源抛出的错误
+          audioErrorRef.current = null
+          setAudioError(null)
+        }
       } catch (e) {
         if (audioRequestRef.current !== token) return
-        setAudioError(e instanceof ApiError ? e.message : '音频加载失败，请稍后重试')
+        const msg = e instanceof ApiError ? e.message : '音频加载失败，请稍后重试'
+        audioErrorRef.current = msg
+        setAudioError(msg)
       } finally {
         if (audioRequestRef.current === token) setAudioLoading(false)
       }
@@ -134,43 +144,74 @@ export default function AudioTranscriptWorkspace({
     [hasAudio, meeting.id],
   )
 
-  // 切换会议/音频可用性变化：重置音频状态并重新取 URL；卸载时作废在途请求
+  // 切换会议/音频文件变化：重置音频状态并重新取 URL；卸载时作废在途请求
   useEffect(() => {
-    audioResignedRef.current = false
+    audioResignedRef.current = 0
     pendingSeekRef.current = null
     audioUrlRef.current = null
+    audioErrorRef.current = null
     setAudioUrl(null)
     setAudioError(null)
-    void loadAudioUrl()
+    void loadAudioUrl(true)
     return () => {
       audioRequestRef.current += 1
       pendingSeekRef.current = null
     }
-  }, [loadAudioUrl])
+  }, [audioFileId, loadAudioUrl])
+
+  /** 记录播放位置；allowResume=true 时按媒体播放状态决定恢复后是否继续播放 */
+  const capturePendingSeek = useCallback((allowResume: boolean) => {
+    const audio = audioRef.current
+    const current = audio?.currentTime
+    const fallback = pendingSeekRef.current?.position ?? 0
+    pendingSeekRef.current = {
+      position: typeof current === 'number' && Number.isFinite(current) ? current : fallback,
+      wasPlaying: allowResume && audio != null ? !audio.paused && !audio.ended : false,
+    }
+  }, [])
 
   const retryAudio = useCallback(() => {
-    void loadAudioUrl()
-  }, [loadAudioUrl])
+    capturePendingSeek(false)
+    // 手动重试重新武装自动重签：下一次换源后仍允许一次自动重签
+    audioResignedRef.current = 0
+    void loadAudioUrl(true)
+  }, [capturePendingSeek, loadAudioUrl])
 
   const handleAudioError = useCallback(() => {
     if (!hasAudio) return
-    if (audioResignedRef.current) {
+    if (audioResignedRef.current >= 1) {
+      // 自动重签后仍失败：停在错误态，位置留给手动重试
+      capturePendingSeek(false)
+      audioErrorRef.current = '音频地址已过期，请点击重试'
       setAudioError('音频地址已过期，请点击重试')
       return
     }
     // 每个源只自动重签一次；再失败就停下来等用户操作，避免无限请求 audio-url
-    audioResignedRef.current = true
-    pendingSeekRef.current = audioRef.current?.currentTime ?? 0
-    void loadAudioUrl(false)
-  }, [hasAudio, loadAudioUrl])
+    audioResignedRef.current += 1
+    capturePendingSeek(true)
+    void loadAudioUrl(true)
+  }, [capturePendingSeek, hasAudio, loadAudioUrl])
 
   const handleAudioLoadedMetadata = useCallback((audio: HTMLAudioElement) => {
+    // 源可正常解码：清除旧源错误，并重新武装下一次自动重签
+    audioResignedRef.current = 0
+    if (audioErrorRef.current !== null) {
+      audioErrorRef.current = null
+      setAudioError(null)
+    }
     const pending = pendingSeekRef.current
-    if (pending == null) return
+    if (!pending) return
     pendingSeekRef.current = null
     const duration = audio.duration
     audio.currentTime =
-      Number.isFinite(duration) && duration > 0 ? Math.min(pending, duration) : pending
+      Number.isFinite(duration) && duration > 0
+        ? Math.min(pending.position, duration)
+        : pending.position
+    if (pending.wasPlaying) {
+      void audio.play().catch(() => {
+        // 浏览器拦截自动播放时保持暂停，用户可手动继续
+      })
+    }
   }, [])
 
   // 引用稳定：TranscriptRow 是 memo 的，播放推进时不应因回调换引用而全列表重渲染
@@ -191,11 +232,12 @@ export default function AudioTranscriptWorkspace({
       sawPendingAiRef.current = true
       return
     }
-    const terminal = minutes.aiStatus === 30 || minutes.aiStatus === 40
+    // 10/20 之外都算已落定（0/30/40/未知状态），但必须确认数据是提交后刷新到的
+    const settled = minutes.aiStatus !== 10 && minutes.aiStatus !== 20
     const fresh =
       generateBaselineRef.current === null ||
       minutes.updatedAt !== generateBaselineRef.current
-    if (terminal && (fresh || sawPendingAiRef.current)) {
+    if (settled && (fresh || sawPendingAiRef.current)) {
       setPendingAiStatus(null)
       sawPendingAiRef.current = false
       generateBaselineRef.current = null
@@ -268,19 +310,24 @@ export default function AudioTranscriptWorkspace({
     void loadTranscript()
   }, [loadTranscript])
 
-  // 头部刷新：纪要 + 转写 + 音频 URL 一起刷新（生成后也靠它把新状态带回来）
+  // 头部刷新：纪要 + 转写必刷；音频只在没有地址或处于错误态时重取，
+  // 健康播放中的源保持 src 不动，避免进度被重置到 0。
   const handleRefresh = useCallback(async () => {
     setRefreshing(true)
     try {
-      await Promise.allSettled([
+      const tasks: Promise<unknown>[] = [
         Promise.resolve().then(() => onRefresh()),
         loadTranscript(),
-        loadAudioUrl(),
-      ])
+      ]
+      if (hasAudio && (!audioUrlRef.current || audioErrorRef.current !== null)) {
+        capturePendingSeek(true)
+        tasks.push(loadAudioUrl(true))
+      }
+      await Promise.allSettled(tasks)
     } finally {
       setRefreshing(false)
     }
-  }, [loadAudioUrl, loadTranscript, onRefresh])
+  }, [capturePendingSeek, hasAudio, loadAudioUrl, loadTranscript, onRefresh])
 
   const transcriptErrorInfo = transcriptError
     ? describeMinutesError(transcriptError, '转写加载失败')
@@ -296,7 +343,7 @@ export default function AudioTranscriptWorkspace({
         </Space>
       }
       extra={
-        <Space>
+        <Space wrap>
           <Button
             icon={<RefreshCw size={15} />}
             loading={refreshing}
@@ -314,33 +361,41 @@ export default function AudioTranscriptWorkspace({
     >
       {!hasAudio ? (
         <Alert type="warning" showIcon message="音频暂不可用，转写与 AI 纪要仍可查看" />
-      ) : audioError ? (
-        <Alert
-          type="error"
-          showIcon
-          message={audioError}
-          action={
-            <Button size="small" onClick={retryAudio} aria-label="重试加载音频">
-              重试
-            </Button>
-          }
-        />
-      ) : audioLoading && !audioUrl ? (
-        <div className="flex justify-center py-6">
-          <Spin />
-        </div>
-      ) : audioUrl ? (
-        <AudioPlayer
-          url={audioUrl}
-          audioRef={audioRef}
-          onTimeUpdate={(ms) => setActiveId(findActiveSegment(segments, ms))}
-          onError={handleAudioError}
-          onLoadedMetadata={handleAudioLoadedMetadata}
-        />
       ) : (
-        <div className="flex justify-center py-6">
-          <Spin />
-        </div>
+        <>
+          {audioError && (
+            <Alert
+              className="mb-3"
+              type="error"
+              showIcon
+              message={audioError}
+              action={
+                <Button
+                  size="small"
+                  loading={audioLoading}
+                  disabled={audioLoading}
+                  onClick={retryAudio}
+                  aria-label="重试加载音频"
+                >
+                  重试
+                </Button>
+              }
+            />
+          )}
+          {audioUrl ? (
+            <AudioPlayer
+              url={audioUrl}
+              audioRef={audioRef}
+              onTimeUpdate={(ms) => setActiveId(findActiveSegment(segments, ms))}
+              onError={handleAudioError}
+              onLoadedMetadata={handleAudioLoadedMetadata}
+            />
+          ) : audioLoading ? (
+            <div className="flex justify-center py-6">
+              <Spin />
+            </div>
+          ) : null}
+        </>
       )}
       <Tabs
         className="mt-4"
@@ -410,11 +465,7 @@ export default function AudioTranscriptWorkspace({
                   loading={generating}
                   onGenerate={handleGenerate}
                 />
-                <MinutesSummary
-                  summary={minutes.summary}
-                  aiStatus={effectiveAiStatus}
-                  aiError={minutes.aiError}
-                />
+                <MinutesSummary summary={minutes.summary} aiStatus={effectiveAiStatus} />
               </Space>
             ),
           },
