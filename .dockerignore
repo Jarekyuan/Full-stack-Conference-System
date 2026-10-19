@@ -1,0 +1,18 @@
+# 前端镜像构建上下文（仓库根目录）需要排除的内容
+.git
+.gitignore
+.idea
+.vscode
+.DS_Store
+**/node_modules
+**/dist
+**/target
+**/*.log
+server/logs
+docs
+scripts
+db
+web/e2e
+*.local.md
+.env
+.env.*

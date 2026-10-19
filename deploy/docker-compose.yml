@@ -1,0 +1,267 @@
+# ============================================================================
+# 会议室预约系统 · 全量编排（T5.5 / T5.6）
+#
+# 用法：
+#   cd deploy
+#   docker compose up -d --build
+#   docker compose ps
+#   docker compose logs -f gateway
+#
+# 说明：
+#   - 基础设施与 docker-compose.infra.yml 使用同一个 project name（smt-infra）
+#     和同一组命名卷，已有数据不会因为切换文件而丢失。
+#   - 只有 gateway 和 web 映射宿主端口；4 个 Java 服务只在 smt-net 内可达。
+#   - 默认 local 存储 + mock ASR/AI，无需任何云密钥即可冷启动。
+#     真实 COS / 腾讯 ASR / DeepSeek 通过 deploy/.env 覆盖（见 .env.example）。
+#   - 若要与本机 docker-compose.infra.yml 并行做隔离验证，可覆盖
+#     *_CONTAINER_NAME / SMT_NETWORK / *_PORT 后加 `-p <项目名>`。
+#     ⚠️ 此时 down 必须传**同一组变量**，否则 SMT_NETWORK 会回落到默认 smt-net。
+# ============================================================================
+name: smt-infra
+
+x-app-env: &app-env
+  TZ: Asia/Shanghai
+  # 容器内必须监听 0.0.0.0；application.yml 默认的 127.0.0.1 只适合本机开发
+  SERVER_ADDRESS: 0.0.0.0
+  SPRING_CLOUD_NACOS_DISCOVERY_SERVER_ADDR: nacos:8848
+  SPRING_CLOUD_NACOS_CONFIG_SERVER_ADDR: nacos:8848
+  # 空值触发 Spring Cloud Alibaba 自动探测容器 IP；
+  # application.yml 里的 127.0.0.1 只在本地开发时使用
+  SPRING_CLOUD_NACOS_DISCOVERY_IP: ""
+
+services:
+  # --------------------------------------------------------------------------
+  # 基础设施（与 docker-compose.infra.yml 保持一致，端口只绑回环）
+  # --------------------------------------------------------------------------
+  mysql:
+    image: mysql:8.0
+    container_name: ${MYSQL_CONTAINER_NAME:-smt-mysql}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
+      TZ: Asia/Shanghai
+    command: >-
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_0900_ai_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # 只放全新建库脚本；增量迁移在 db/migrations/，不会被 initdb 自动执行
+      - ../db/01-schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ../db/02-seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    healthcheck:
+      # 不能只 ping：initdb 的临时实例也会响应 socket，可能让服务在 seed 完成前启动。
+      # 查到种子用户才认为数据库真正可用。
+      test: ["CMD-SHELL", "mysql -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD -N -e 'SELECT COUNT(*) FROM smt_meeting.sys_user' 2>/dev/null | grep -qE '^[1-9][0-9]*$'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [smt-net]
+
+  redis:
+    image: redis:7-alpine
+    container_name: ${REDIS_CONTAINER_NAME:-smt-redis}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis123}
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [smt-net]
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: ${RABBITMQ_CONTAINER_NAME:-smt-rabbitmq}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${RABBITMQ_PORT:-5672}:5672"
+      - "127.0.0.1:${RABBITMQ_MGMT_PORT:-15672}:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+      TZ: Asia/Shanghai
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [smt-net]
+
+  nacos:
+    image: nacos/nacos-server:v2.4.2
+    container_name: ${NACOS_CONTAINER_NAME:-smt-nacos}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${NACOS_PORT:-8848}:8848"
+      - "127.0.0.1:${NACOS_GRPC_PORT:-9848}:9848"
+    environment:
+      MODE: standalone
+      TZ: Asia/Shanghai
+    volumes:
+      - nacos-data:/home/nacos/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8848/nacos/v1/console/health/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    networks: [smt-net]
+
+  # --------------------------------------------------------------------------
+  # 业务服务（只在 smt-net 内可达，不映射宿主端口）
+  # --------------------------------------------------------------------------
+  auth-service:
+    image: smt/auth-service:latest
+    build:
+      context: ../server
+      dockerfile: auth-service/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/smt_meeting?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
+      JWT_SECRET: ${JWT_SECRET:-smt-dev-secret-0123456789-abcdefghijklmnopqrstuv}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nacos:
+        condition: service_healthy
+    networks: [smt-net]
+
+  meeting-service:
+    image: smt/meeting-service:latest
+    build:
+      context: ../server
+      dockerfile: meeting-service/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/smt_meeting?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+      # 会议纪要：默认零依赖的本地存储 + mock；真实云服务见 .env.example
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-local}
+      MINUTES_LOCAL_DIR: /app/data/minutes
+      # 浏览器同源访问：Nginx 把 /files/local/ 反代到本服务
+      MINUTES_LOCAL_BASE_URL: ${MINUTES_LOCAL_BASE_URL:-http://localhost:8000}
+      MINUTES_ASR_PROVIDER: ${MINUTES_ASR_PROVIDER:-mock}
+      MINUTES_AI_PROVIDER: ${MINUTES_AI_PROVIDER:-mock}
+      COS_SECRET_ID: ${COS_SECRET_ID:-}
+      COS_SECRET_KEY: ${COS_SECRET_KEY:-}
+      COS_REGION: ${COS_REGION:-}
+      COS_BUCKET: ${COS_BUCKET:-}
+      TENCENT_ASR_SECRET_ID: ${TENCENT_ASR_SECRET_ID:-}
+      TENCENT_ASR_SECRET_KEY: ${TENCENT_ASR_SECRET_KEY:-}
+      TENCENT_ASR_REGION: ${TENCENT_ASR_REGION:-ap-chengdu}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      nacos:
+        condition: service_healthy
+    volumes:
+      # STORAGE_PROVIDER=local 时的录音对象；容器重建不丢
+      - minutes-data:/app/data/minutes
+      # 审计日志（logback AUDIT appender）持久化，便于回溯
+      - meeting-logs:/app/logs
+    networks: [smt-net]
+
+  notification-service:
+    image: smt/notification-service:latest
+    build:
+      context: ../server
+      dockerfile: notification-service/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/smt_meeting?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      nacos:
+        condition: service_healthy
+    networks: [smt-net]
+
+  gateway:
+    image: smt/gateway:latest
+    build:
+      context: ../server
+      dockerfile: gateway/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    environment:
+      <<: *app-env
+      JWT_SECRET: ${JWT_SECRET:-smt-dev-secret-0123456789-abcdefghijklmnopqrstuv}
+    depends_on:
+      nacos:
+        condition: service_healthy
+    networks: [smt-net]
+
+  web:
+    image: smt/web:latest
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8000}:80"
+    depends_on:
+      - gateway
+      - meeting-service
+    networks: [smt-net]
+
+volumes:
+  mysql-data:
+  redis-data:
+  rabbitmq-data:
+  nacos-data:
+  minutes-data:
+  meeting-logs:
+
+networks:
+  smt-net:
+    name: ${SMT_NETWORK:-smt-net}

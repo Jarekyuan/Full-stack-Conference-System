@@ -1,0 +1,6 @@
+# 构建上下文只保留源码与 POM；target/logs 由镜像内 Maven 重新生成
+**/target
+**/logs
+*.log
+.idea
+.DS_Store

@@ -10,6 +10,7 @@
 server/**/src/main/resources/application-local.yml
 *.env
 .env.*
+!deploy/.env.example
 
 # ---- Java / Maven ----
 target/

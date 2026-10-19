@@ -31,6 +31,7 @@
 
 | 文档 | 内容 | 何时读 |
 |------|------|--------|
+| `docs/当前状态.md` | **运行态快照**：分支/服务/端口/env 类别/真实测试数据/下一步（不含密钥） | 新会话、compact 后、开工前 |
 | `docs/00-项目初心与目标.md` | **为什么做这个项目 + 三重目标 + 验收标尺**（防走偏） | 开工前 / 每个里程碑结束对照 |
 | `docs/01-需求文档.md` | 需求 + 规则编号 R-1~R-17 + **v1.3 数据模型**（RBAC 五表/部门树/参会人简化） | 改业务规则前 |
 | `docs/02-技术架构方案.md` | 技术选型 + 8 项决策 + 关键设计（双 token/分布式锁/索引/Feign） | 动架构前 |
@@ -53,11 +54,13 @@
 | M2 前端 | ✅ **3/3** | ✅ T2.F1 日历页（时间轴定位 + memo 行级组件化）｜✅ T2.F2 预约表单 Drawer（防抖冲突提示 + 幂等提交）｜✅ T2.F3 我的会议列表 + 详情（筛选分页 + 状态时间线 + 取消） |
 | M3 审批+生命周期 | ✅ **8/8** | ✅ T3.1 待办/已办列表｜✅ T3.2 审批通过（复检+行锁）｜✅ T3.3 拒绝｜✅ T3.4 延长 + 提前结束｜✅ T3.5 定时流转｜✅ T3.6 对账补偿｜✅ T3.F1 审批中心（前端）｜✅ T3.F2 详情页延长/结束（前端） |
 | M4 通知+MQ+打磨 | ✅ **12/12**（评审见 `docs/review-M4.md`） | ✅ T4.1 事件发布（`meeting.events` topic + 事务提交后投递）｜✅ T4.2 notification-service 骨架（:8083）｜✅ T4.3 消费落库站内信（幂等 + 手动 ACK + 死信）｜✅ T4.4 通知 REST（列表/未读/已读，契约补登 docs/04 3.3）｜✅ T4.5 会议提醒（扫描 + 幂等 key）｜✅ T4.6 WebSocket 推送（网关 `?token=` + 提交后推）｜✅ T4.7 Redis 缓存（会议室注解式 + 日历手写式）｜✅ T4.8 预约限流（ZSET+Lua + Nacos 动态阈值）｜✅ T4.9 traceId 服务侧（MDC + 网关访问日志）｜✅ T4.10 测试盘点（单测 52→80 例）｜✅ T4.11 审计切面（@Log + 独立 audit.log）｜✅ T4.F1 通知中心（铃铛角标 + 列表 + WS 实时更新） |
-| M5 进阶+部署 | 🟡 **4/7** | ✅ T5.1 周期创建｜✅ T5.2 系列取消｜✅ T5.3 统计接口｜✅ T5.4 前端看板+周期入口；⏸ **T5.5~T5.7 容器化/部署按用户要求暂缓** |
+| M5 进阶+部署 | ✅ **7/7** | ✅ T5.1 周期创建｜✅ T5.2 系列取消｜✅ T5.3 统计接口｜✅ T5.4 前端看板+周期入口｜✅ T5.5 Dockerfile×4 + 全量 compose｜✅ T5.6 Nginx 前端｜✅ T5.7 部署验收 + README |
 | M6 会议纪要 | ✅ **7/7** | ✅ 5 张表 + ObjectStorage/COS 分片｜✅ 腾讯 ASR 自动转写/详情/洞察｜✅ 逐句语音文本联动｜✅ DeepSeek 异步纪要｜✅ Word 导出｜✅ 脚本/E2E/文档收口 |
 
-**M4 已全部完成（2026-10-16，12/12）**；**M5 做到 4/7**（周期会议 + 统计 + 看板），
-**剩下的 T5.5~T5.7（Dockerfile×4 + compose + Nginx）按用户要求暂缓**——用户要先自行验证一些东西。
+**M4 已全部完成（2026-10-16，12/12）**；**M5 已全部完成（2026-10-19，7/7）**：
+T5.5~T5.7 已落地为 4 个 Dockerfile + `deploy/docker-compose.yml` + `web/Dockerfile` /
+`deploy/nginx.conf`，默认 local + mock 零依赖冷启动；隔离栈验收 9 容器、
+`scripts/verify-deploy.sh` 13/13、compose 纪要 E2E 11/11。真实云服务在 `deploy/.env` 切换。
 
 **T1.20 组织与用户（2026-10-17，v1.3 遗留项补齐）**：`/admin/users` 从 Placeholder 换成
 「组织与用户」单页（左部门树 + 右成员表）。后端补了 `PUT /users/{id}`（改姓名/邮箱/部门/角色）、
@@ -284,6 +287,7 @@ user1 端**铃铛角标秒级 +1**（WS）→ 打开通知中心看到"审批通
 8. **锁必须包住事务**：预约用 `TransactionTemplate`（锁外开、事务锁内提），别用 `@Transactional` 包住锁（会留"锁释放→事务提交"空窗）
 9. **凡是改变"某时段是否被占用"的写路径，都必须走同一把房间锁 + 会议室行锁**：创建（T2.4）、改期（T2.10）、审批通过（T3.2）。漏掉任何一条，那条路径就是双重预订的口子——T2.10 未加锁时实测 **10 轮里 7 轮双重预订**（乐观锁只管"同一行"，管不住跨行竞态）
 10. **数据库锁序固定「先会议室行 → 后会议行」**：审批要同时锁两把（防双人同审 + 防时段被抢），顺序反了会与改期交叉持锁死锁
+11. **每段工作收尾四步**：跑测试/verify → 提交 → 追加 `.workbuddy/memory/YYYY-MM-DD.md` → 覆盖更新 `docs/当前状态.md`。状态文档只写运行态与下一步，**禁止写密钥/Token/密码**
 
 ---
 
@@ -480,6 +484,17 @@ user1 端**铃铛角标秒级 +1**（WS）→ 打开通知中心看到"审批通
 
 ## 7. 怎么跑起来
 
+### 方式 A：一键全栈（Docker Compose，9 容器）
+
+```bash
+cd deploy && cp .env.example .env      # 可选；默认 local + mock，零云密钥
+docker compose up -d --build
+open http://localhost:8000             # admin / admin123
+docker compose ps                      # infra 4 + 服务 4 + web 1
+```
+
+### 方式 B：本地开发（IDE 调试用）
+
 ```bash
 # 1. 基础设施（MySQL/Redis/RabbitMQ/Nacos）
 docker compose -f deploy/docker-compose.infra.yml up -d
@@ -493,6 +508,9 @@ cd server && env -u SERVER__PORT java -jar notification-service/target/notificat
 
 # 3. 前端
 cd web && npm run dev    # http://localhost:5173
+
+# 4. CI 本地预检（需 infra 已启动；等价于 .github/workflows/ci.yml）
+bash scripts/ci.sh
 ```
 
 **验证与测试**（都要求上面三个服务已启动；退出码非 0 = 断言失败，可直接接 CI）：
