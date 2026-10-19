@@ -56,8 +56,7 @@ server/
 
 ## 四、关键全局约定（跨模块契约）
 
-- **统一响应** `{code, msg, data}`：code=0 成功；业务错误用错误码（段位：1xxxx 通用 / 2xxxx 认证 / 3xxxx 会议室 / 4xxxx 预约 / 5xxxx 审批 / 6xxxx 通知
-7xxxx 会议纪要与文件，全表见 04 文档第二章）
+- **统一响应** `{code, msg, data}`：code=0 成功；业务错误用错误码（段位：1xxxx 通用 / 2xxxx 认证 / 3xxxx 会议室 / 4xxxx 预约 / 5xxxx 审批 / 6xxxx 通知 / 7xxxx 会议纪要与文件，全表见 04 文档第二章）
 - **错误码必须登记在 `ErrorCode` 枚举**，不许散落魔法数字；新增码同步登记 04 文档表
 - **会议状态值**：10 待审批 / 20 已预约 / 30 进行中 / 40 已结束 / 50 已取消 / 60 已拒绝
 - **状态变更必须走状态机**（`MeetingStateMachine.transition`：校验迁移 + 写 `meeting_status_log`），禁止裸 UPDATE 改状态
