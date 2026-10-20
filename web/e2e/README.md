@@ -25,14 +25,13 @@ node e2e/e2e-multi-tab-auth.cjs # 同一浏览器两个 tab 登录不同用户�
 node e2e/e2e-meeting-minutes.cjs # M6：上传音频 → ASR 转写 → 联动 seek → 洞察 → AI → Word 下载 → 重新上传
 ```
 
-> ⚠️ `e2e-meeting-minutes.cjs` 要求 meeting-service 已启动：CI 可用
-> `STORAGE_PROVIDER=local MINUTES_LOCAL_DIR=/tmp/smt-minutes-test`，真实桶用
-> `STORAGE_PROVIDER=cos` + `COS_*`（桶需允许前端 origin 的 PUT/GET/HEAD 并暴露 ETag）。
+> ⚠️ `e2e-meeting-minutes.cjs` 要求 meeting-service 已启动，并配置 `COS_*`
+> （桶需允许前端 origin 的 PUT/GET/HEAD 并暴露 ETag）。
 > **ASR 必须用 `MINUTES_ASR_PROVIDER=mock`**（真实 ASR 会等待数分钟且计费）。
 > 音频需为浏览器支持的编码（AAC/M4A、MP3、WAV）；ALAC 会报 `MEDIA_ERR_SRC_NOT_SUPPORTED`。
 > AI 可用 `MINUTES_AI_PROVIDER=mock`（断言摘要来自转写）或 `deepseek`（断言行文非空）；
 > `verify-minutes-ai.sh` 的失败注入仍要求 mock。
-> COS 模式下脚本只清理 MySQL/本地目录，不会删除桶里的测试对象，需按 `minutes/{meetingId}/` 手工清理。
+> 脚本只清理 MySQL，不会删除桶里的测试对象，需按 `minutes/{meetingId}/` 手工清理。
 >
 > ⚠️ `e2e-approval.cjs` 比前三个慢（约 4 分钟）：它的后半段要等一场会议**真的到点**，
 > 由定时任务推进到"进行中"，才能验证延长/提前结束——所以跑它时**定时任务必须开着**

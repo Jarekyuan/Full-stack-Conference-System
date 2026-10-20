@@ -6,17 +6,20 @@ import com.qcloud.cos.auth.BasicCOSCredentials;
 import com.qcloud.cos.auth.COSCredentials;
 import com.qcloud.cos.region.Region;
 import com.smt.meeting.service.CosObjectStorage;
-import com.smt.meeting.service.LocalObjectStorage;
 import com.smt.meeting.service.ObjectStorage;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+/**
+ * 对象存储配置：只保留腾讯云 COS 一条路径。
+ *
+ * <p>业务层依赖 {@link ObjectStorage} 接口；需要换存储实现时新增实现类即可，
+ * 不在配置里保留多套 provider 分支。</p>
+ */
 @Configuration
 public class StorageConfig {
 
     @Bean(destroyMethod = "shutdown")
-    @ConditionalOnProperty(name = "storage.provider", havingValue = "cos", matchIfMissing = true)
     public COSClient cosClient(CosProperties properties) {
         COSCredentials credentials = new BasicCOSCredentials(
                 properties.getSecretId(), properties.getSecretKey());
@@ -25,14 +28,7 @@ public class StorageConfig {
     }
 
     @Bean
-    @ConditionalOnProperty(name = "storage.provider", havingValue = "cos", matchIfMissing = true)
-    public ObjectStorage cosObjectStorage(COSClient client, CosProperties properties) {
+    public ObjectStorage objectStorage(COSClient client, CosProperties properties) {
         return new CosObjectStorage(client, properties);
-    }
-
-    @Bean
-    @ConditionalOnProperty(name = "storage.provider", havingValue = "local")
-    public LocalObjectStorage localObjectStorage(StorageProperties properties) {
-        return new LocalObjectStorage(properties);
     }
 }

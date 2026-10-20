@@ -1,5 +1,10 @@
 # 会议纪要 + 语音文本联动 + COS 大文件上传 Implementation Plan
 
+> ⚠️ **2026-10-20 更新**：local storage provider 已移除，当前只保留 COS。
+> 本文中的 `LocalObjectStorage` / `LocalFileController` / `STORAGE_PROVIDER=local`
+> 等仅为历史记录，不再适用于当前代码。
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 在会议详情页交付“会议纪要”工作台：组织人上传 m4a 录音与腾讯 ASR 转写，支持语音文本联动、会议洞察、DeepSeek 结构化纪要与 Word 导出；音频走 COS 分片上传 + 断点续传。

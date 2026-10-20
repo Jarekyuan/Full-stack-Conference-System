@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
 # T5.7 部署验收：只通过 Nginx 入口验证全栈，不直连内部服务。
-# 覆盖：SPA 首页/深层路由、登录、会议室/会议 API、Nacos 四服务注册、
-#       /files/local 反代、WebSocket 握手。
+# 覆盖：SPA 首页/深层路由、登录、会议室/会议 API、Nacos 四服务注册、WebSocket 握手。
 #
 # 用法：
 #   bash scripts/verify-deploy.sh
 #   BASE=http://localhost:18000 NACOS=http://localhost:18848 bash scripts/verify-deploy.sh
-#   CHECK_LOCAL_FILES=0 ...   # STORAGE_PROVIDER=cos 时跳过本地文件路由检查
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 BASE="${BASE:-http://localhost:8000}"
 NACOS="${NACOS:-http://localhost:8848}"
-CHECK_LOCAL_FILES="${CHECK_LOCAL_FILES:-1}"
 CURL=(curl -sS --connect-timeout 3 --max-time 10)
 PASS=0
 FAIL=0
@@ -80,16 +77,7 @@ for svc in gateway auth-service meeting-service notification-service; do
     || check "Nacos 已注册 $svc" 0 1
 done
 
-# 7) 本地文件反代：无效签名应返回 403；落到 SPA fallback 时会是 200
-if [ "$CHECK_LOCAL_FILES" = "1" ]; then
-  LOCAL_CODE=$("${CURL[@]}" -o /dev/null -w '%{http_code}' \
-    "$BASE/files/local/objects/x?expires=0&sig=x" || true)
-  check "/files/local 路由存在（无效签名 403）" "$LOCAL_CODE" "403"
-else
-  echo "… 跳过 /files/local 检查（CHECK_LOCAL_FILES=0）"
-fi
-
-# 8) WebSocket 握手（Nginx Upgrade -> gateway -> notification-service）
+# 7) WebSocket 握手（Nginx Upgrade -> gateway -> notification-service）
 WS_CODE=$(curl -sS --connect-timeout 3 --max-time 5 --http1.1 \
   -o /dev/null -w '%{http_code}' \
   -H 'Connection: Upgrade' \

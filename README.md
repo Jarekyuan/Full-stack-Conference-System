@@ -25,8 +25,8 @@ docker compose ps             # 期望 9 个常驻容器 Up + mysql-init 一次�
 > `BIND_ADDR=0.0.0.0`，**同时**换掉 `JWT_SECRET`（`openssl rand -base64 32`）
 > 并修改种子 `admin` 密码；不要把默认口令暴露到公网。
 
-- 默认 `STORAGE_PROVIDER=local` + `MINUTES_ASR_PROVIDER=mock` + `MINUTES_AI_PROVIDER=mock`：
-  不配置任何云密钥即可完整体验预约、审批、通知、会议纪要上传与 AI 生成。
+- 预约/审批/通知默认零配置可用；**会议纪要的音频只走 COS**，需在 `deploy/.env` 填 `COS_*`。
+- `MINUTES_ASR_PROVIDER=mock` + `MINUTES_AI_PROVIDER=mock` 可离线生成，但音频仍会先上传 COS。
 - 首次构建要下载 Maven / npm 依赖，通常 5~15 分钟；之后改代码重建会命中缓存。
 - 真实 COS + 腾讯 ASR + DeepSeek：编辑 `deploy/.env`（参考 `.env.example` 注释）。
   **腾讯 ASR 需要公网可访问的音频 URL，因此真实 ASR 必须同时启用 COS。**
@@ -41,8 +41,7 @@ docker compose ps             # 期望 9 个常驻容器 Up + mysql-init 一次�
    ├── /api/**        ──> gateway:8080 ──> auth-service:8081
    │                                     ├─> meeting-service:8082
    │                                     └─> notification-service:8083
-   ├── /ws/**         ──> gateway:8080（WebSocket Upgrade）
-   └── /files/local/** ──> meeting-service:8082（本地存储预签名上传/下载）
+   └── /ws/**         ──> gateway:8080（WebSocket Upgrade）
 
 4 个 Java 服务 + web 均在 smt-net 内；仅 gateway(8080) 与 web(8000) 映射宿主。
 所有服务向 Nacos:8848 注册/发现；MySQL/Redis/RabbitMQ 只在 Docker 网络与回环端口可达。
@@ -131,7 +130,7 @@ new-meeting-systems/
 | 07 | [项目理解指南](docs/07-项目理解指南.md) | 架构全景 + 链路走读 + 难点与踩坑 |
 | 08 | [面试演示与高频追问](docs/08-面试演示与高频追问.md) | 15 分钟演示脚本 + 高频追问 + 踩坑故事 |
 | 09 | [全栈学习计划](docs/09-全栈学习计划.md) | 5 天 × 6h 学习计划、掌握矩阵、检查点、笔记索引 |
-| 10 | [前后端文件地图](docs/10-前后端文件地图.md) | 222 个后端 + 66 个前端文件的中文职责与掌握级别 |
+| 10 | [前后端文件地图](docs/10-前后端文件地图.md) | 219 个后端 + 66 个前端文件的中文职责与掌握级别 |
 
 ---
 
@@ -139,16 +138,15 @@ new-meeting-systems/
 
 ```bash
 # 后端单测
-cd server && mvn -pl meeting-service test          # 262 例（1 skipped）
-cd server && mvn test                             # 全量 318 例
+cd server && mvn -pl meeting-service test -Dtest='!AuthFeignClientTest' -Dsurefire.failIfNoSpecifiedTests=false  # 225 例
+cd server && mvn test -Dtest='!AuthFeignClientTest' -Dsurefire.failIfNoSpecifiedTests=false  # 281 例
 
 # 前端单测 / 类型检查 / 构建
 cd web && npm run check                           # 157 例
 cd web && npm run build
 
 # 部署验收（需要 Nginx 入口；纯本地 8080/5173 模式请把 BASE 指向实际入口）
-BASE=http://localhost:8000 NACOS=http://localhost:8848 bash scripts/verify-deploy.sh   # 15/15
-# COS 存储时跳过 /files/local 检查：CHECK_LOCAL_FILES=0 ...
+BASE=http://localhost:8000 NACOS=http://localhost:8848 bash scripts/verify-deploy.sh   # 14/14
 
 # 纪要链路（需服务已启动）
 bash scripts/verify-minutes.sh                    # 23/23
@@ -168,7 +166,7 @@ node web/e2e/e2e-multi-tab-auth.cjs               # 3/3
   - `compose-config`：`docker compose config --quiet`
   - `docker-build`：构建全部镜像 + `nginx -t` + 校验 jar 内无 `application-local.yml`
   - `compose-smoke`（手动触发）：起全栈 + `scripts/verify-deploy.sh`
-- 本地等价门禁：`bash scripts/ci.sh`（需本地 infra 已启动；已跑通：后端 317、前端 157、build、compose config、Nginx `-t`）
+- 本地等价门禁：`bash scripts/ci.sh`（需本地 infra 已启动；已跑通：后端 281、前端 157、build、compose config、Nginx `-t`）
 
 > `AuthFeignClientTest` 的“auth 在线/离线”两个断言互斥，默认套件排除；
 > 需要时按 `docs/05` 的命令单独执行。
@@ -200,13 +198,12 @@ bash scripts/concurrent-modify.sh 10
 | Nacos 反复重启 | Docker Desktop 内存调到 ≥ 6GB |
 | 页面能开但接口 502 | 网关或后端还没注册到 Nacos；`docker compose logs -f gateway meeting-service` |
 | 想清空演示数据 | `docker compose down -v` 后重新 `up`（会重跑 01+02） |
-| 会议纪要上传/播放失败 | 默认 local 存储请从 :8000 访问；真实 ASR 必须配 COS，不能只用 local |
-| 用 compose 打开已有真实会议，音频提示不存在 | 默认 local 与已有 COS 对象不匹配；在 `deploy/.env` 设 `STORAGE_PROVIDER=cos` 并填 `COS_*` |
+| 会议纪要上传/播放失败 | 检查 `COS_*`、桶 CORS、音频编码（AAC/M4A/MP3/WAV）；ALAC 浏览器不支持 |
+| 会议纪要提示音频不存在 | 确认 `COS_BUCKET`/`COS_REGION` 与历史对象一致；旧的本地文件需重新上传 |
 | 改了 `MYSQL_ROOT_PASSWORD` 后 MySQL 一直 unhealthy | 该变量只在首次初始化数据卷时生效；已有卷需 `ALTER USER` 或 `down -v`（清数据） |
 | 改了 `RABBITMQ_USER/PASSWORD` 后应用连不上 MQ | 同上，broker 用户只在首次初始化卷时创建；已有卷用 `rabbitmqctl` 改 |
 | 本地开发时服务注册到错误 IP | 本地 profile 用 `127.0.0.1`；compose 内通过 `SPRING_CLOUD_NACOS_DISCOVERY_IP=""` 自动探测容器 IP |
 | 用 `-p` 做隔离验证后 `down` 找错网络 | `down` 必须传与 `up` 相同的 `SMT_NETWORK` / `*_CONTAINER_NAME` 变量 |
-| `verify-deploy.sh` 的 `/files/local` 检查失败 | 该检查只适用于 `STORAGE_PROVIDER=local`；COS 部署用 `CHECK_LOCAL_FILES=0` |
 
 ---
 

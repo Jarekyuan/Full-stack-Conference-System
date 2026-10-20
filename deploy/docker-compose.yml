@@ -202,16 +202,13 @@ services:
       SPRING_RABBITMQ_PORT: 5672
       RABBITMQ_USER: ${RABBITMQ_USER:-guest}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
-      # 会议纪要：默认零依赖的本地存储 + mock；真实云服务见 .env.example
-      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-local}
-      MINUTES_LOCAL_DIR: /app/data/minutes
-      # 浏览器同源访问：Nginx 把 /files/local/ 反代到本服务
-      MINUTES_LOCAL_BASE_URL: ${MINUTES_LOCAL_BASE_URL:-http://localhost:8000}
+      # 会议纪要音频只走 COS；ASR/AI 默认 mock，但上传仍需要 COS_* 密钥。
+      # 预约/审批/通知不依赖 COS，没有密钥也能正常演示。
       MINUTES_ASR_PROVIDER: ${MINUTES_ASR_PROVIDER:-mock}
       MINUTES_AI_PROVIDER: ${MINUTES_AI_PROVIDER:-mock}
       COS_SECRET_ID: ${COS_SECRET_ID:-}
       COS_SECRET_KEY: ${COS_SECRET_KEY:-}
-      COS_REGION: ${COS_REGION:-}
+      COS_REGION: ${COS_REGION:-ap-chengdu}
       COS_BUCKET: ${COS_BUCKET:-}
       TENCENT_ASR_SECRET_ID: ${TENCENT_ASR_SECRET_ID:-}
       TENCENT_ASR_SECRET_KEY: ${TENCENT_ASR_SECRET_KEY:-}
@@ -230,8 +227,6 @@ services:
       nacos:
         condition: service_healthy
     volumes:
-      # STORAGE_PROVIDER=local 时的录音对象；容器重建不丢
-      - minutes-data:/app/data/minutes
       # 审计日志（logback AUDIT appender）持久化，便于回溯
       - meeting-logs:/app/logs
     networks: [smt-net]
@@ -305,7 +300,6 @@ volumes:
   redis-data:
   rabbitmq-data:
   nacos-data:
-  minutes-data:
   meeting-logs:
 
 networks:

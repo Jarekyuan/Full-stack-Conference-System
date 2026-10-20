@@ -18,7 +18,7 @@ public class MinutesProperties {
         private Long maxFileSizeBytes = 2L * 1024 * 1024 * 1024;
         private Integer chunkSizeBytes = 5 * 1024 * 1024;
         private Integer sessionTtlHours = 24;
-        /** 分片预签名 URL 有效期（分钟）。放在 minutes 下而非 cos 下：本地 provider 同样使用。 */
+        /** 分片预签名 URL 有效期（分钟）。 */
         private Integer partUrlTtlMinutes = 60;
     }
 

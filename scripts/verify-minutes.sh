@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # 会议纪要主链路验证：分片上传 → 腾讯 ASR 转写 → 详情/转写/洞察 → AI → 导出 → 权限负例 → 重新转写
-# 前置：services 已启动；CI 建议 meeting-service 使用 MINUTES_ASR_PROVIDER=mock（真实 ASR 会慢且计费）。
-# COS 模式只清理 MySQL/本地目录，不删除桶内 minutes/{meetingId}/ 测试对象。
+# 前置：services 已启动；meeting-service 使用 COS（COS_* 必填）。
+# CI 建议 MINUTES_ASR_PROVIDER=mock（真实 ASR 会慢且计费）。
+# 清理只删 MySQL 记录，不删除 COS 桶内 minutes/{meetingId}/ 测试对象。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 BASE="${BASE:-http://localhost:8080/api}"
 MYSQL="docker exec smt-mysql mysql --default-character-set=utf8mb4 -uroot -proot123 -N -e"
-LOCAL_DIR="${MINUTES_LOCAL_DIR:-/tmp/smt-minutes-test}"
 TS="$(date +%s)"
 TITLE="E2E纪要验证-${TS}"
 PASS=0
@@ -45,7 +45,6 @@ cleanup() {
       DELETE FROM file_upload_session WHERE biz_type='MINUTES_AUDIO' AND biz_id=${MEETING_ID};
       DELETE FROM meeting WHERE id=${MEETING_ID};" >/dev/null 2>&1
   fi
-  [ -n "$UPLOAD_ID" ] && rm -rf "${LOCAL_DIR}/${UPLOAD_ID}"
   rm -f "$TMP_WAV" "$TMP_DOCX"
 }
 trap cleanup EXIT

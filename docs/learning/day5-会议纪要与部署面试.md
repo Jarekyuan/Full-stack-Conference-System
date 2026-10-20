@@ -31,8 +31,8 @@
 
 ### 1.3 前置
 
-- compose 栈可用（`local + mock` 即可）
-- 若演示真实 ASR/AI：`.env` 已切 `cos/tencent/deepseek`，网络可用
+- compose 栈可用，且 `COS_*` 已配置（音频只走 COS）
+- ASR/AI 可先用 `mock`；演示真实链路时再切 `tencent/deepseek`
 - 准备一个可播放的音频（AAC/M4A/MP3；不要 ALAC）
 
 ### 1.4 今天的“一张图”
@@ -293,8 +293,7 @@ POST /minutes/ai（请求入队）
 浏览器 :8000
   → Nginx
      ├── /api/**        → gateway:8080 → auth/meeting/notification
-     ├── /ws/**         → gateway:8080
-     └── /files/local/** → meeting-service:8082
+     └── /ws/**         → gateway:8080
   → 4 个 Java 服务 + web 在 smt-net
   → MySQL/Redis/RabbitMQ/Nacos 只在容器网络与回环
 ```
@@ -374,11 +373,10 @@ public FileCompleteVO complete(String uploadId, MultipartCompleteDTO dto, Long u
 }
 ```
 
-#### 4.1.2 CosObjectStorage / LocalObjectStorage
+#### 4.1.2 CosObjectStorage
 
 文件：
 - `server/meeting-service/src/main/java/com/smt/meeting/service/CosObjectStorage.java`
-- `server/meeting-service/src/main/java/com/smt/meeting/service/LocalObjectStorage.java`
 
 COS：
 
@@ -387,12 +385,6 @@ COS：
 - `completeMultipartUpload`（按 partNumber 排序的 ETag）
 - `generatePresignedUrl`（GET/PUT）
 - 踩坑：COS SDK 对不可变 `Stream.toList()` 原地排序 → `UnsupportedOperationException`；改传 `ArrayList`
-
-Local：
-
-- 本地目录 + HMAC 预签名
-- 支持 Range 下载
-- 用于 CI/无 COS 环境
 
 ### 4.2 后端：ASR
 
@@ -714,7 +706,6 @@ set $meeting meeting-service:8082;
 
 location /api/ { proxy_pass http://$gateway; ... }
 location /ws/ { proxy_pass http://$gateway; Upgrade ... }
-location /files/local/ { proxy_pass http://$meeting; proxy_buffering off; }
 location / { try_files $uri $uri/ /index.html; }
 ```
 
@@ -732,9 +723,9 @@ location / { try_files $uri $uri/ /index.html; }
 - docker-build：构建全部镜像 + `nginx -t` + jar 密钥扫描
 - compose-smoke：手动触发，起全栈 + `verify-deploy.sh`
 
-`verify-deploy.sh` 15 项：
+`verify-deploy.sh` 14 项：
 
-- 首页/深层路由/登录/会议室/会议/Nacos/`/files/local`/WS
+- 首页/深层路由/登录/会议室/会议/Nacos/WS
 
 ### 4.6 边界与异常
 
@@ -1057,8 +1048,8 @@ ASR：10 提交 → 20 轮询 → 30 落库；run token 防旧覆盖
 - [ ] 15 分钟不看稿
 - [ ] 每个模块 1-2 个文件 + 1 个取舍
 - [ ] 能回答 `docs/08` 的 20+ 追问
-- [ ] 演示前 `verify-deploy` 15/15
-- [ ] 备用：网络不稳切 local + mock
+- [ ] 演示前 `verify-deploy` 14/14
+- [ ] 备用：网络不稳时 ASR/AI 切 mock；COS 上传提前验证
 
 ---
 
@@ -1066,7 +1057,6 @@ ASR：10 提交 → 20 轮询 → 30 落库；run token 防旧覆盖
 
 - `server/meeting-service/src/main/java/com/smt/meeting/service/MultipartUploadService.java`
 - `server/meeting-service/src/main/java/com/smt/meeting/service/CosObjectStorage.java`
-- `server/meeting-service/src/main/java/com/smt/meeting/service/LocalObjectStorage.java`
 - `server/meeting-service/src/main/java/com/smt/meeting/service/MinutesAsrService.java`
 - `server/meeting-service/src/main/java/com/smt/meeting/service/TencentAsrClient.java`
 - `server/meeting-service/src/main/java/com/smt/meeting/service/AsrResultParser.java`

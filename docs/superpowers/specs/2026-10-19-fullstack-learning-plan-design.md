@@ -33,7 +33,7 @@
 - 结构：业务纵向（认证 → 预约 → 并发 → 审批/通知 → 纪要/部署）+ 技术专题横向（Redis/锁、MQ、微服务、部署）
 - 前端：不教 React/TS 基础，重点讲组件封装、状态管理、复杂交互和工程取舍
 - 后端：不教 Java/Spring 入门，重点讲请求链路、并发、事务、消息和部署
-- 运行环境：优先使用本地开发模式；Day 5 使用 compose 默认 `local + mock` 做冷启动验收
+- 运行环境：优先使用本地开发模式；Day 5 使用 compose + mock ASR/AI 做冷启动验收（会议纪要音频需 COS）
 - 真实云服务（COS/腾讯 ASR/DeepSeek）作为“实际联调过”的证据，不在学习过程中依赖现场网络
 
 ---
@@ -48,7 +48,7 @@
 | `docs/learning/day3-并发锁幂等与详情状态.md` | Day 3 详细教程 |
 | `docs/learning/day4-审批MQ通知与前端联动.md` | Day 4 详细教程 |
 | `docs/learning/day5-会议纪要与部署面试.md` | Day 5 详细教程 |
-| `docs/10-前后端文件地图.md` | 222 个后端生产 Java 文件 + 66 个前端源文件的中文职责地图 |
+| `docs/10-前后端文件地图.md` | 219 个后端生产 Java 文件 + 66 个前端源文件的中文职责地图 |
 
 
 > 每篇目标约 800-1000 行：在 7 段结构内增加方案对比、核心代码逐段解释、边界与异常、举一反三、归纳/演绎记忆法和变体练习。
@@ -142,9 +142,9 @@
 |--------|----------|------|--------|------|
 | Dockerfile 多阶段 | `server/*/Dockerfile`、`web/Dockerfile` | 🔍 | Day 5 | Maven 缓存、非 root、jar 拷贝 |
 | Docker Compose | `deploy/docker-compose.yml` | 🔍 | Day 5 | 9 常驻 + `mysql-init`、健康检查、容器 IP |
-| Nginx | `deploy/nginx.conf` | 🔍 | Day 5 | SPA fallback、`/api`、`/ws`、`/files/local`、resolver |
+| Nginx | `deploy/nginx.conf` | 🔍 | Day 5 | SPA fallback、`/api`、`/ws`、resolver |
 | GitHub Actions | `.github/workflows/ci.yml` | 🔍 | Day 5 | service containers、docker-build、compose smoke |
-| 部署验收脚本 | `scripts/verify-deploy.sh` | 🔍 | Day 5 | 15 项检查；本地/COS 模式切换 |
+| 部署验收脚本 | `scripts/verify-deploy.sh` | 🔍 | Day 5 | 14 项检查；COS 一条路径 |
 | 安全收口 | `.dockerignore`、`DB_USER=smt_app`、回环绑定 | ⚪/🔍 | Day 5 | 密钥不进镜像、最小权限、日志脱敏 |
 
 ### 4.2 需要纠偏的技术点
@@ -453,7 +453,7 @@
 
 **后端走读**
 
-- `service/MultipartUploadService.java`、`CosObjectStorage.java`、`LocalObjectStorage.java`
+- `service/MultipartUploadService.java`、`CosObjectStorage.java`
 - `service/MinutesAsrService.java`、`TencentAsrClient.java`、`AsrResultParser.java`、`task/MinutesAsrTask.java`
 - `service/DeepSeekLlmClient.java`、`service/MinutesAiService.java`、`task/MinutesAiTask.java`
 - `service/MinutesService.java`、`controller/MinutesController.java`
@@ -477,12 +477,12 @@
 
 - 写 ASR 结果解析的单测；状态迁移能讲清即可
 - 写 `splitSentences` 的边界测试（标点、空段、比例时间）
-- 跑 `bash scripts/verify-deploy.sh`（15/15）
+- 跑 `bash scripts/verify-deploy.sh`（14/14）
 - 15 分钟模拟演示 + 10 题追问
 
 **检查点**
 
-- `verify-deploy` 15/15
+- `verify-deploy` 14/14
 - 能画“音频 → COS → ASR → 转写 → AI → 导出”全链路
 - 15 分钟演示不卡壳
 
@@ -492,7 +492,7 @@
 
 ### 6.1 后端
 
-- 范围：`server/**/src/main/java/**/*.java`，共 222 个生产文件（不含测试）
+- 范围：`server/**/src/main/java/**/*.java`，共 219 个生产文件（不含测试）
 - 分组：`meeting-common`、`gateway`、`auth-service`、`meeting-service`、`notification-service`，再按 package
 - 每行字段：`文件 | 中文职责 | 关键类/方法 | 掌握级别`
 - Controller / Service / Mapper / 核心配置写得详细；DTO/VO/Entity 一行带过
@@ -547,7 +547,7 @@
 | Day 2 结束 | 冲突检测 | 手写函数 + 单测全绿 |
 | Day 3 结束 | 并发/锁/幂等 | `concurrent-reserve.sh` 10 轮通过 |
 | Day 4 结束 | MQ/通知 | 幂等测试通过 + WS 通知可见 |
-| Day 5 结束 | 纪要 + 部署 + 面试 | `verify-deploy` 15/15 + 15 分钟演示 |
+| Day 5 结束 | 纪要 + 部署 + 面试 | `verify-deploy` 14/14 + 15 分钟演示 |
 
 每天 5 道自测；Day 5 额外做 10 题模拟追问。
 
@@ -560,7 +560,7 @@
 | 30 小时不够 | 砍 `CalendarGrid` 几何细节、缓存/限流深挖、ECharts/Word 导出；保护 Day 3 锁和 Day 5 纪要 + 部署 |
 | 某天卡住超过 1 小时 | 先保留“能讲清思路”，跳过实现，Day 5 复盘补 |
 | 前端细节过多 | 只讲组件封装、状态管理、复杂交互；不教 React 基础 |
-| 真实云服务不可用 | 用 `local + mock`；真实联调作为证据讲述，不现场依赖 |
+| 真实云服务不可用 | ASR/AI 用 mock；COS 上传提前验证，真实联调作为证据讲述 |
 | 文件地图工作量大 | 先按目录生成骨架，再补核心文件；DTO/VO 一行带过 |
 
 ---

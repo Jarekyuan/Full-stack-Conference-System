@@ -1,5 +1,10 @@
 # 会议纪要 + 语音文本联动 + COS 大文件上传 设计文档
 
+> ⚠️ **2026-10-20 更新**：local storage provider 已移除，当前只保留 COS。
+> 本文中的 `LocalObjectStorage` / `LocalFileController` / `STORAGE_PROVIDER=local`
+> 等仅为历史记录，不再适用于当前代码。
+
+
 > 状态：已实现（2026-10-19）
 > 日期：2026-10-18
 > 适用项目：`new-meeting-systems`

@@ -31,10 +31,10 @@ WORKDIR /app
 ENV TZ=Asia/Shanghai \
     JAVA_OPTS="-XX:MaxRAMPercentage=75 -Dfile.encoding=UTF-8"
 
-# 非 root 运行；logs/ 留给 logback，data/ 预留给本地存储
+# 非 root 运行；logs/ 留给 logback
 RUN groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --create-home --shell /usr/sbin/nologin app \
-    && mkdir -p /app/logs /app/data/minutes \
+    && mkdir -p /app/logs \
     && chown -R app:app /app
 
 COPY --from=build /workspace/gateway/target/*.jar /app/app.jar

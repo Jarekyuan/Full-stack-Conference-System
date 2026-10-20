@@ -31,7 +31,7 @@ ENV TZ=Asia/Shanghai \
 
 RUN groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --create-home --shell /usr/sbin/nologin app \
-    && mkdir -p /app/logs /app/data/minutes \
+    && mkdir -p /app/logs \
     && chown -R app:app /app
 
 COPY --from=build /workspace/notification-service/target/*.jar /app/app.jar

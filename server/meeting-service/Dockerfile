@@ -29,10 +29,9 @@ WORKDIR /app
 ENV TZ=Asia/Shanghai \
     JAVA_OPTS="-XX:MaxRAMPercentage=75 -Dfile.encoding=UTF-8"
 
-# data/minutes 是 STORAGE_PROVIDER=local 时的对象目录
 RUN groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --create-home --shell /usr/sbin/nologin app \
-    && mkdir -p /app/logs /app/data/minutes \
+    && mkdir -p /app/logs \
     && chown -R app:app /app
 
 COPY --from=build /workspace/meeting-service/target/*.jar /app/app.jar

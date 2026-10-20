@@ -4,7 +4,7 @@
 
 **Goal:** 按 `docs/superpowers/specs/2026-10-19-fullstack-learning-plan-design.md` 写出 5 天 × 6 小时的全栈学习计划、5 篇日教程和前后端文件地图。
 
-**Architecture:** 先写总览 `docs/09` 作为索引和掌握矩阵；再按天写 5 篇教程，每篇固定 7 段结构并引用用户笔记；最后按模块生成 `docs/10` 文件地图（222 个后端生产 Java 文件 + 66 个前端源文件），用脚本核对数量、路径和引用。
+**Architecture:** 先写总览 `docs/09` 作为索引和掌握矩阵；再按天写 5 篇教程，每篇固定 7 段结构并引用用户笔记；最后按模块生成 `docs/10` 文件地图（219 个后端生产 Java 文件 + 66 个前端源文件），用脚本核对数量、路径和引用。
 
 **Tech Stack:** Markdown、Spring Boot 3 / Spring Cloud / MySQL / Redis / RabbitMQ、React 18 / TypeScript / Vite / antd、Docker / Nginx / GitHub Actions。
 
@@ -20,7 +20,7 @@
 | `docs/learning/day3-并发锁幂等与详情状态.md` | Day 3 教程 |
 | `docs/learning/day4-审批MQ通知与前端联动.md` | Day 4 教程 |
 | `docs/learning/day5-会议纪要与部署面试.md` | Day 5 教程 |
-| `docs/10-前后端文件地图.md` | 后端 222 + 前端 66 个文件的中文职责地图 |
+| `docs/10-前后端文件地图.md` | 后端 219 + 前端 66 个文件的中文职责地图 |
 
 > 笔记在项目外：`项目实践/前端笔记/` 4 篇、`项目实践/后端笔记/` 4 篇。
 > 教程用「📘 笔记引用」块引用书名 + 章节，不大段复制原文。
@@ -37,7 +37,7 @@
 包含：
 - 标题、面向 1-3 年全栈岗位、5 天 × 6h = 30h
 - 使用方式：建议开 `study/fullstack-30h` 分支；每天结束做 5 道自测 + 3 句话复盘
-- 运行方式链接：`README.md` 的 compose / 本地开发；默认 `local + mock`
+- 运行方式链接：`README.md` 的 compose / 本地开发；ASR/AI 默认 mock，会议纪要音频走 COS
 - 链接到 spec、`docs/08`、`docs/10`
 
 - [ ] **Step 2: 写 5 天日程表**
@@ -57,7 +57,7 @@
 - Day 2：冲突检测单测通过
 - Day 3：并发 10 轮通过
 - Day 4：MQ 幂等 + WS 通知
-- Day 5：`verify-deploy` 15/15 + 15 分钟演示
+- Day 5：`verify-deploy` 14/14 + 15 分钟演示
 
 - [ ] **Step 4: 写取舍、风险、非目标和成功标准**
 
@@ -587,7 +587,6 @@ git commit -m "docs: 新增 Day4 审批MQ通知与前端联动教程"
 至少覆盖：
 - `server/meeting-service/src/main/java/com/smt/meeting/service/MultipartUploadService.java`
 - `server/meeting-service/src/main/java/com/smt/meeting/service/CosObjectStorage.java`
-- `server/meeting-service/src/main/java/com/smt/meeting/service/LocalObjectStorage.java`
 - `server/meeting-service/src/main/java/com/smt/meeting/service/MinutesAsrService.java`
 - `server/meeting-service/src/main/java/com/smt/meeting/service/TencentAsrClient.java`
 - `server/meeting-service/src/main/java/com/smt/meeting/service/AsrResultParser.java`
@@ -636,7 +635,7 @@ git commit -m "docs: 新增 Day4 审批MQ通知与前端联动教程"
 2. 写 `splitSentences` 边界测试（标点、空段、比例时间）
 3. Run: `bash scripts/verify-deploy.sh`
 4. 做一次 15 分钟演示（按 `docs/08`）
-验收：测试通过；verify-deploy 15/15；演示不卡壳。
+验收：测试通过；verify-deploy 14/14；演示不卡壳。
 
 - [ ] **Step 8: 五道自测 + 复盘卡**
 
@@ -717,11 +716,11 @@ git commit -m "docs: 新增文件地图后端 common/gateway/auth"
 - [ ] **Step 1: 列文件**
 
 ```bash
-find server/meeting-service/src/main/java/com/smt/meeting/controller -name '*.java' | sort  # 9
-find server/meeting-service/src/main/java/com/smt/meeting/service -name '*.java' | sort     # 28
+find server/meeting-service/src/main/java/com/smt/meeting/controller -name '*.java' | sort  # 8
+find server/meeting-service/src/main/java/com/smt/meeting/service -name '*.java' | sort     # 27
 find server/meeting-service/src/main/java/com/smt/meeting/mapper -name '*.java' | sort      # 14
 ```
-共 51 行。
+共 49 行。
 
 - [ ] **Step 2: 写职责 + 掌握级别**
 
@@ -733,8 +732,8 @@ find server/meeting-service/src/main/java/com/smt/meeting/mapper -name '*.java' 
 - [ ] **Step 3: 验证 + Commit**
 
 ```bash
-grep -c '^| `server/meeting-service/src/main/java/com/smt/meeting/controller' docs/10-前后端文件地图.md  # 9
-grep -c '^| `server/meeting-service/src/main/java/com/smt/meeting/service' docs/10-前后端文件地图.md     # 28
+grep -c '^| `server/meeting-service/src/main/java/com/smt/meeting/controller' docs/10-前后端文件地图.md  # 8
+grep -c '^| `server/meeting-service/src/main/java/com/smt/meeting/service' docs/10-前后端文件地图.md     # 27
 grep -c '^| `server/meeting-service/src/main/java/com/smt/meeting/mapper' docs/10-前后端文件地图.md      # 14
 git add docs/10-前后端文件地图.md
 git commit -m "docs: 补充 meeting-service 核心文件地图"
@@ -750,13 +749,13 @@ git commit -m "docs: 补充 meeting-service 核心文件地图"
 - [ ] **Step 1: 列文件**
 
 ```bash
-find server/meeting-service/src/main/java/com/smt/meeting/config -name '*.java' | sort   # 14
+find server/meeting-service/src/main/java/com/smt/meeting/config -name '*.java' | sort   # 13
 find server/meeting-service/src/main/java/com/smt/meeting/entity -name '*.java' | sort   # 13
 find server/meeting-service/src/main/java/com/smt/meeting/dto -name '*.java' | sort      # 14
 find server/meeting-service/src/main/java/com/smt/meeting/vo -name '*.java' | sort       # 34
 find server/meeting-service/src/main/java/com/smt/meeting/enums -name '*.java' | sort    # 7
 ```
-共 82 行。
+共 81 行。
 
 - [ ] **Step 2: 写职责**
 
@@ -771,7 +770,7 @@ find server/meeting-service/src/main/java/com/smt/meeting/enums -name '*.java' |
 python3 - <<'PY'
 import re, pathlib
 text = pathlib.Path('docs/10-前后端文件地图.md').read_text()
-for pkg, n in [('config',14),('entity',13),('dto',14),('vo',34),('enums',7)]:
+for pkg, n in [('config',13),('entity',13),('dto',14),('vo',34),('enums',7)]:
     c = len(re.findall(rf'^\| `server/meeting-service/src/main/java/com/smt/meeting/{pkg}/', text, re.M))
     assert c == n, (pkg, c, n)
 print('OK')
@@ -896,9 +895,9 @@ import re, pathlib, subprocess
 text = pathlib.Path('docs/10-前后端文件地图.md').read_text()
 backend = re.findall(r'^\| `(server/[^`]+\.java)`', text, re.M)
 frontend = re.findall(r'^\| `(web/src/[^`]+)`', text, re.M)
-assert len(backend) == 222, len(backend)
+assert len(backend) == 219, len(backend)
 assert len(frontend) == 66, len(frontend)
-assert len(set(backend)) == 222
+assert len(set(backend)) == 219
 assert len(set(frontend)) == 66
 for p in backend + frontend:
     assert pathlib.Path(p).exists(), p
@@ -968,7 +967,7 @@ git commit -m "docs: 完成 5 天全栈学习教程与文件地图"
 
 - [ ] 5 篇日教程都包含 7 个二级标题
 - [ ] 每篇至少 3 条 `📘 笔记引用`，且至少 1 条 A 类
-- [ ] 文件地图后端 222 行、前端 66 行，路径全部存在
+- [ ] 文件地图后端 219 行、前端 66 行，路径全部存在
 - [ ] 不含测试、`target`、`node_modules`、`dist`
 - [ ] `docs/09` 的 5 个日教程链接全部可跳转
 - [ ] README/CLAUDE 文档地图已加入 09/10

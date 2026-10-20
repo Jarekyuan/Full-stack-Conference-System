@@ -2,8 +2,8 @@
  * 会议纪要 E2E：SQL 造 status=40 会议 → 上传 wav + 转写 → 转写/点击 seek →
  * 会议洞察 → mock AI 摘要 → 导出 Word 下载。
  *
- * 前置：meeting-service 以 STORAGE_PROVIDER=local + MINUTES_AI_PROVIDER=mock
- *       MINUTES_LOCAL_DIR=/tmp/smt-minutes-test 启动；Vite dev server 在 :5173。
+ * 前置：meeting-service 使用 COS（COS_* 必填）+ MINUTES_ASR_PROVIDER=mock
+ *       + MINUTES_AI_PROVIDER=mock；Vite dev server 在 :5173。
  */
 const { chromium } = require('playwright');
 const { execSync } = require('child_process');
@@ -12,7 +12,6 @@ const fs = require('fs');
 const BASE = 'http://localhost:5173';
 const API = 'http://localhost:8080/api';
 const MYSQL = 'docker exec smt-mysql mysql --default-character-set=utf8mb4 -uroot -proot123 -N -e';
-const LOCAL_DIR = process.env.MINUTES_LOCAL_DIR || '/tmp/smt-minutes-test';
 const TS = Date.now();
 const TITLE = `E2E纪要-${TS}`;
 const WAV = `/tmp/smt-minutes-e2e-${TS}.wav`;
@@ -27,7 +26,7 @@ const sql = (q) =>
     .split('\n').filter((l) => l.trim() && !l.includes('PAGER set to stdout') && !l.includes('Using a password'))
     .join('\n').trim();
 
-/** 1 秒 8kHz 单声道 16bit 静音 WAV（local provider 不校验内容） */
+/** 1 秒 8kHz 单声道 16bit 静音 WAV（对象存储不校验内容） */
 function writeWav(file) {
   const sampleRate = 8000;
   const dataSize = sampleRate * 2;
@@ -143,8 +142,6 @@ function writeWav(file) {
     if (browser) await browser.close();
     if (meetingId) {
       try {
-        const uploadIds = sql(`USE smt_meeting; SELECT upload_id FROM file_upload_session
-          WHERE biz_type='MINUTES_AUDIO' AND biz_id=${meetingId};`).split('\n').filter(Boolean);
         sql(`USE smt_meeting;
           DELETE s FROM meeting_transcript_segment s
             JOIN meeting_minutes m ON m.id = s.minutes_id WHERE m.meeting_id = ${meetingId};
@@ -154,9 +151,6 @@ function writeWav(file) {
           DELETE FROM file_object WHERE biz_type = 'MINUTES_AUDIO' AND biz_id = ${meetingId};
           DELETE FROM file_upload_session WHERE biz_type = 'MINUTES_AUDIO' AND biz_id = ${meetingId};
           DELETE FROM meeting WHERE id = ${meetingId};`);
-        for (const id of uploadIds) {
-          fs.rmSync(`${LOCAL_DIR}/${id}`, { recursive: true, force: true });
-        }
       } catch (e) {
         console.error('清理失败（请手工检查）', e.message);
       }

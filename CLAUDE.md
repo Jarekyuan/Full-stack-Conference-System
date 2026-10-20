@@ -41,7 +41,7 @@
 | `docs/07-项目理解指南.md` | M0+M1 理解指南（架构全景 + 4 条链路走读 + 8 个难点 + 10 个坑） | 理解已有代码 |
 | `docs/08-面试演示与高频追问.md` | 15 分钟演示时间轴 + 高频追问 + 踩坑故事 | 面试前彩排 |
 | `docs/09-全栈学习计划.md` | 5 天 × 6h 学习计划、掌握矩阵、检查点、笔记索引 | 系统学习/转型准备 |
-| `docs/10-前后端文件地图.md` | 222 个后端 + 66 个前端文件的中文职责与掌握级别 | 按业务找文件/复习 |
+| `docs/10-前后端文件地图.md` | 219 个后端 + 66 个前端文件的中文职责与掌握级别 | 按业务找文件/复习 |
 | `server/AI-RULES.md` | 后端编码规范（红线） | 写后端代码前 |
 | `web/AGENT.md` | 前端规范 | 写前端代码前 |
 
@@ -62,8 +62,8 @@
 
 **M4 已全部完成（2026-10-16，12/12）**；**M5 已全部完成（2026-10-19，7/7）**：
 T5.5~T5.7 已落地为 4 个 Dockerfile + `deploy/docker-compose.yml` + `web/Dockerfile` /
-`deploy/nginx.conf`，默认 local + mock 零依赖冷启动；隔离栈验收 9 个常驻容器 + `mysql-init`、
-`scripts/verify-deploy.sh` 15/15、compose 纪要 E2E 11/11。真实云服务在 `deploy/.env` 切换。
+`deploy/nginx.conf`，默认 ASR/AI mock、音频只走 COS；隔离栈验收 9 个常驻容器 + `mysql-init`、
+`scripts/verify-deploy.sh` 14/14（纪要 E2E 需配置 COS 后运行）。真实云服务在 `deploy/.env` 切换。
 
 **T1.20 组织与用户（2026-10-17，v1.3 遗留项补齐）**：`/admin/users` 从 Placeholder 换成
 「组织与用户」单页（左部门树 + 右成员表）。后端补了 `PUT /users/{id}`（改姓名/邮箱/部门/角色）、
@@ -181,7 +181,7 @@ T5.5~T5.7 已落地为 4 个 Dockerfile + `deploy/docker-compose.yml` + `web/Doc
 **M6 会议纪要（2026-10-19，记录见 `docs/05` 七·附四 / `docs/review-M5-T6.md`）**：
 - 会议详情新增「会议纪要」Tab：只上传 m4a 音频 → 腾讯 ASR 自动转写 → 逐句高亮/点击子句 seek →
   会议洞察（发言时长/占比/覆盖率）→ DeepSeek 结构化纪要 → Word 导出。
-- COS 分片上传（5MiB/并发 3/断点续传，预签名直传）；本地/CI 用 `LocalObjectStorage`，
+- COS 分片上传（5MiB/并发 3/断点续传，预签名直传）；只保留 COS provider，
   真实 COS 走 `scripts/verify-cos-upload.sh`（缺 env 自动跳过）。
 - 真实 COS 已验证（`jonas-cos-1442883247` / `ap-chengdu`）：2 分片预签名 PUT → complete → head
   → delete；浏览器 CORS 直传与预签名 GET 由 E2E 实测。修复 COS SDK 对不可变分片列表原地排序
@@ -197,7 +197,7 @@ T5.5~T5.7 已落地为 4 个 Dockerfile + `deploy/docker-compose.yml` + `web/Doc
   真实 DeepSeek 生成需 `DEEPSEEK_API_KEY` + `MINUTES_AI_PROVIDER=deepseek`。
 - 真实 DeepSeek（`deepseek-chat`）已验证：3 段产品排期转写生成摘要/决策/待办/风险，
   `aiModel=deepseek-chat`；密钥只从环境变量读取，不落库、不写日志、不写仓库。
-- 验证：后端 meeting-service **262 例**（1 skipped；全量 318 例，排除需 auth 停机的用例）、
+- 验证：后端 meeting-service **225 例**（1 skipped；全量 281 例，排除 `AuthFeignClientTest`）、
   `npm run check` **157 例**、`verify-minutes` **23/23**、`verify-minutes-ai` **8/8**、
   `e2e-meeting-minutes` **11/11**、`verify-cos-upload` **1/1**（真实 COS 2 分片），
   其余脚本/e2e 全绿。集成验证时 `admin` 曾被 R7 用例停用：
@@ -473,12 +473,8 @@ user1 端**铃铛角标秒级 +1**（WS）→ 打开通知中心看到"审批通
     并人工看一遍 `dark:.*dark:` 的行。纯机械替换一定会制造这类“看起来能跑但语义错”的类。
 
 29. **COS 分片上传必须 ExposeHeader: ETag**：浏览器读不到 ETag 时 complete 拿不到分片校验值，
-    表象是“分片都传完了但完成失败”。CORS 规则见 docs/02 5.7；本地 provider 的 controller 已显式
-    `Access-Control-Expose-Headers: ETag`。
-30. **本地 provider 的 PUT 不能用 `curl --data-binary` 验证**：它会带
-    `Content-Type: application/x-www-form-urlencoded`，Spring 的 `OrderedFormContentFilter`
-    会在 controller 前把 body 消费成表单参数，controller 读到空流（ETag 为空、complete 70007）。
-    脚本用 `curl --upload-file`；浏览器 fetch 的 Blob 带音频 MIME，不受影响。
+    表象是“分片都传完了但完成失败”。CORS 规则见 docs/02 5.7。
+30. ~~本地 provider 的 PUT 验证坑~~（2026-10-20 本地 provider 已移除，当前只走 COS）。
 31. **R7 最后管理员用例依赖“admin 是唯一启用管理员”**：用户环境若有第二个 ADMIN（如 admin2），
     停用 admin 会被正确放行，脚本会误报。`verify-state-consequences.sh` 现按前置跳过该场景，
     并在 cleanup 无条件恢复 admin 启用；单测仍覆盖 R7 不变式。
@@ -490,7 +486,7 @@ user1 端**铃铛角标秒级 +1**（WS）→ 打开通知中心看到"审批通
 ### 方式 A：一键全栈（Docker Compose，9 个常驻容器 + mysql-init）
 
 ```bash
-cd deploy && cp .env.example .env      # 可选；默认 local + mock，零云密钥
+cd deploy && cp .env.example .env      # 填 COS_*；ASR/AI 可先用 mock
 docker compose up -d --build
 open http://localhost:8000             # admin / admin123
 docker compose ps                      # infra 4 + 服务 4 + web 1
@@ -544,8 +540,8 @@ bash scripts/verify-m5-stats.sh                    # T5.3：统计（接口 vs �
 bash scripts/verify-minutes.sh                     # M6：分片上传/ASR 转写/联动/洞察/AI/导出（ASR 建议 mock；COS 模式会留下测试对象）
 bash scripts/verify-minutes-ai.sh                  # M6：AI 状态机 10→20→30、MOCK_FAIL→40→重试→30
 bash scripts/verify-cos-upload.sh                  # M6：真实 COS 冒烟（缺 COS_* env 自动跳过）
-#   COS 配置兼容 COS_* 与 STORAGE_* 两套命名；当前开发环境用
-#   STORAGE_PROVIDER=cos + COS_BUCKET/REGION/SECRET_ID/SECRET_KEY（或 STORAGE_*）启动。
+#   meeting-service 只走 COS：COS_BUCKET/REGION/SECRET_ID/SECRET_KEY
+#   （兼容 COS_* 与 STORAGE_* 两套命名）。
 #   ⚠️ **凡是会连续造会的脚本，开头都要装限流开关**（T4.8 之后预约有用户级限流 10 次/分钟）：
 #      `source "$(dirname "$0")/lib/ratelimit.sh"` + `ratelimit_disable_for_script`
 #      （e2e 用 `web/e2e/lib/ratelimit.cjs` 的 `disableRateLimit()`）。
@@ -572,7 +568,7 @@ cd server && mvn -q clean test -Dtest='!AuthFeignClientTest#batchUsersShouldDegr
 cd web && npm run check     # = tsc --noEmit + eslint + vitest（157 例）
 node e2e/e2e-calendar.cjs   # playwright E2E（需先 npm i --no-save playwright + dev server；详见 web/e2e/README.md）
 node e2e/e2e-notify-ws.cjs  # T4.6：真浏览器验 WS 推送（连接/鉴权拒连/隔离/多标签页/秒级推送/会话注销）
-node e2e/e2e-meeting-minutes.cjs # M6：上传/ASR 转写/seek/洞察/AI/Word 导出/重新上传（local 或 COS；ASR 建议 mock）
+node e2e/e2e-meeting-minutes.cjs # M6：上传/ASR 转写/seek/洞察/AI/Word 导出/重新上传（需要 COS；ASR 建议 mock）
 node e2e/e2e-multi-tab-auth.cjs # 同浏览器两个 tab 分别登录 user1/admin，验证 sessionStorage 会话隔离
 ```
 

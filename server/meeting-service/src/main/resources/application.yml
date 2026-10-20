@@ -88,12 +88,6 @@ logging:
     com.smt.meeting.mapper.MinutesSpeakerMapper: info
     com.smt.meeting.mapper.FileObjectMapper: info
 
-storage:
-  provider: ${STORAGE_PROVIDER:cos}   # cos | local
-  local:
-    dir: ${MINUTES_LOCAL_DIR:./data/minutes}
-    base-url: ${MINUTES_LOCAL_BASE_URL:http://127.0.0.1:8082}
-
 cos:
   # 兼容两种命名：项目原有 COS_*，以及部署侧常用的 STORAGE_*（后者作为兜底）
   secret-id: ${COS_SECRET_ID:${STORAGE_SECRET_ID:}}
